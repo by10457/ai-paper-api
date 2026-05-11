@@ -1,0 +1,37 @@
+# Default: ignore everything, then include only files needed by Dockerfile.
+*
+
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!main.py
+!app.py
+!api/
+!api/**
+!core/
+!core/**
+!models/
+!models/**
+!schemas/
+!schemas/**
+!services/
+!services/**
+!tasks/
+!tasks/**
+!utils/
+!utils/**
+!public/
+!public/**
+!sql/
+!sql/**
+
+# Runtime/local files are provided by bind mounts or env files.
+.env
+logs/
+__pycache__/
+.venv/
+.git/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/

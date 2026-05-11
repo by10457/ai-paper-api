@@ -1,0 +1,28 @@
+{
+  // ── Python 解释器 ─────────────────────────────────────────
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+  // ── Pylance IntelliSense ──────────────────────────────────
+  "python.languageServer": "Pylance",
+  "python.analysis.typeCheckingMode": "off",
+  "python.analysis.autoImportCompletions": true,
+  // 明确禁用 Pyrefly，防止和 Pylance 冲突
+  "pyrefly.disableLanguageServices": true,
+  // ── Mypy 类型检查 ─────────────────────────────────────────
+  "mypy-type-checker.runUsingActiveInterpreter": true,
+  // ── Ruff：格式化 + Lint + import 整理 ────────────────────
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "always",
+      "source.organizeImports.ruff": "always"
+    }
+  },
+  // ── 隐藏噪音文件 ──────────────────────────────────────────
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.mypy_cache": true,
+    "**/.ruff_cache": true
+  }
+}
