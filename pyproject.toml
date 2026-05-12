@@ -1,7 +1,7 @@
 [project]
-name = "t-fastapi"
+name = "ai-paper-api"
 version = "0.1.0"
-description = "FastAPI project template"
+description = "AI Paper API backend service"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

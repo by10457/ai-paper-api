@@ -5,7 +5,7 @@ PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$PROJECT_DIR"
 
 APP_ROLE="${APP_ROLE:-auto}"
-IMAGE_NAME="${IMAGE_NAME:-t-fastapi:latest}"
+IMAGE_NAME="${IMAGE_NAME:-ai-paper-api:latest}"
 ENV_FILE="${ENV_FILE:-.env}"
 HOST_PORT="${HOST_PORT:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-}"
@@ -33,14 +33,14 @@ Usage:
   sh start.sh
 
 Optional environment variables:
-  IMAGE_NAME        Docker image tag (default: t-fastapi:latest)
+  IMAGE_NAME        Docker image tag (default: ai-paper-api:latest)
   APP_ROLE          Container role: auto, all, api or scheduler (default: auto)
                     auto: APP_DEBUG=true or SCHEDULER_ENABLED=false starts api only;
                     otherwise starts api+scheduler.
-  CONTAINER_NAME    Docker container name (default: t-fastapi or t-fastapi-scheduler)
+  CONTAINER_NAME    Docker container name (default: ai-paper-api or ai-paper-api-scheduler)
   ENV_FILE          Env file path passed to docker run (default: .env)
-  HOST_PORT         Host port exposed outside Docker (default: APP_PORT in env file, fallback 10457)
-  CONTAINER_PORT    Container listening port (default: APP_PORT in env file, fallback 10457)
+  HOST_PORT         Host port exposed outside Docker (default: APP_PORT in env file, fallback 10462)
+  CONTAINER_PORT    Container listening port (default: APP_PORT in env file, fallback 10462)
   HOST_LOG_DIR      Host log directory to mount (default: ./logs)
   NETWORK_NAME      Existing/new Docker network to attach (optional)
   BUILD_NO_CACHE    true/1 to disable Docker build cache (default: false)
@@ -59,7 +59,7 @@ Middleware connection examples:
 Examples:
   sh start.sh
   ENV_FILE=.env.docker sh start.sh
-  HOST_PORT=18000 CONTAINER_NAME=t-fastapi-prod sh start.sh
+  HOST_PORT=10462 CONTAINER_NAME=ai-paper-api-prod sh start.sh
   APP_ROLE=api ENV_FILE=.env.docker sh start.sh
   APP_ROLE=scheduler ENV_FILE=.env.docker sh start.sh
   NETWORK_NAME=backend sh start.sh
@@ -153,7 +153,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 sanitize_env_file() {
-  SANITIZED_ENV_FILE=$(mktemp "${TMPDIR:-/tmp}/t-fastapi-env.XXXXXX")
+  SANITIZED_ENV_FILE=$(mktemp "${TMPDIR:-/tmp}/ai-paper-api-env.XXXXXX")
   awk '
     /^[[:space:]]*($|#)/ { next }
     /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/ {
@@ -237,8 +237,8 @@ fi
 
 if [ -z "${CONTAINER_NAME:-}" ]; then
   case "$RESOLVED_APP_ROLE" in
-    scheduler) CONTAINER_NAME="t-fastapi-scheduler" ;;
-    *) CONTAINER_NAME="t-fastapi" ;;
+    scheduler) CONTAINER_NAME="ai-paper-api-scheduler" ;;
+    *) CONTAINER_NAME="ai-paper-api" ;;
   esac
 fi
 
@@ -246,7 +246,7 @@ log "Resolved APP_ROLE=$APP_ROLE to $RESOLVED_APP_ROLE"
 
 APP_PORT_FROM_ENV=$(read_env_value APP_PORT)
 if [ -z "$CONTAINER_PORT" ]; then
-  CONTAINER_PORT="${APP_PORT_FROM_ENV:-10457}"
+  CONTAINER_PORT="${APP_PORT_FROM_ENV:-10462}"
 fi
 if [ -z "$HOST_PORT" ]; then
   HOST_PORT="$CONTAINER_PORT"

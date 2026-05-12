@@ -1,6 +1,6 @@
-# FastAPI 项目模板
+# AI Paper API
 
-> 基于 FastAPI + Tortoise-ORM + Redis + APScheduler 的后端服务模板
+> 基于 FastAPI + Tortoise-ORM + Redis + APScheduler 的论文业务后端服务
 
 ## 目录结构
 
@@ -128,8 +128,8 @@ sh start.sh
 常用自定义参数：
 
 ```bash
-# 默认使用 .env 中的 APP_PORT=10457。
-# APP_DEBUG=true 时只启动 API；APP_DEBUG=false 时启动 API + scheduler。
+# 默认使用 .env 中的 APP_PORT=10462。
+# APP_DEBUG=true 或 SCHEDULER_ENABLED=false 时只启动 API。
 sh start.sh
 
 # 生产环境通常使用 .env.docker，一个容器内同时托管 API 和定时任务进程
@@ -142,7 +142,7 @@ HOST_PORT=18000 sh start.sh
 NETWORK_NAME=backend sh start.sh
 
 # 指定镜像名、容器名和日志目录
-IMAGE_NAME=t-fastapi:prod CONTAINER_NAME=t-fastapi-prod HOST_LOG_DIR=/data/t-fastapi/logs sh start.sh
+IMAGE_NAME=ai-paper-api:prod CONTAINER_NAME=ai-paper-api-prod HOST_LOG_DIR=/data/ai-paper-api/logs sh start.sh
 
 # 如需临时只启动 API 或只启动 scheduler，可显式覆盖 APP_ROLE
 APP_ROLE=api ENV_FILE=.env.docker sh start.sh

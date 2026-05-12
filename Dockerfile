@@ -29,7 +29,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_ENV=production \
     APP_DEBUG=false \
     APP_HOST=0.0.0.0 \
-    APP_PORT=10457 \
+    APP_PORT=10462 \
     LOG_FILE=logs/app.log \
     PATH="/app/.venv/bin:$PATH"
 
@@ -52,10 +52,10 @@ COPY --chown=app:app utils ./utils
 COPY --chown=app:app public ./public
 COPY --chown=app:app sql ./sql
 
-EXPOSE 10457
+EXPOSE 10462
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-    CMD python -c "import os, urllib.request; port=os.getenv('APP_PORT', '10457'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/health', timeout=3)" || exit 1
+    CMD python -c "import os, urllib.request; port=os.getenv('APP_PORT', '10462'); urllib.request.urlopen(f'http://127.0.0.1:{port}/api/v1/health', timeout=3)" || exit 1
 
 USER app
 
