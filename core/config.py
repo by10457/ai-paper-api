@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     WEB_CONCURRENCY: int | None = Field(default=None, ge=1)
     SCHEDULER_ENABLED: bool = True
     SECRET_KEY: str = "change-me-in-production"
+    DEFAULT_USER_POINTS: int = 0
+    PAPER_GENERATE_POINTS: int = 200
 
     # ── MySQL ─────────────────────────────────────────────
     MYSQL_HOST: str = "127.0.0.1"
@@ -158,7 +160,7 @@ class Settings(BaseSettings):
             "apps": {
                 "models": {
                     # 把所有 models 模块路径注册在这里
-                    "models": ["models.user", "aerich.models"],
+                    "models": ["models.user", "models.paper", "aerich.models"],
                     "default_connection": "default",
                 }
             },

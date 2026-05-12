@@ -43,6 +43,7 @@ class UserResponse(BaseModel):
     avatar: str | None
     nickname: str | None
     email: str
+    points: int
     created_at: datetime
     updated_at: datetime
 
@@ -52,3 +53,20 @@ class UserResponse(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class ApiTokenLogin(BaseModel):
+    username: str = Field(..., min_length=2, max_length=64, description="用户名")
+    password: str = Field(..., min_length=1, max_length=72, description="密码")
+
+
+class ApiTokenResponse(BaseModel):
+    token: str
+    token_type: str = "bearer"
+    username: str
+    points: int
+
+
+class UserPointsResponse(BaseModel):
+    points: int
+    amount: float

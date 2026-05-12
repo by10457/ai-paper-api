@@ -114,6 +114,102 @@ class TaskStatusResponse(BaseModel):
     docx_path: str = Field(default="")
 
 
+class PaperOutlineCreateRequest(BaseModel):
+    """创建可下单的大纲记录。"""
+
+    title: str = Field(..., min_length=2, max_length=200)
+    form_params: dict[str, Any] = Field(default_factory=dict)
+    about_msg: str = ""
+    three_level: bool = False
+    literatures: list[str] = Field(default_factory=list)
+    gallery_resources: list[str] = Field(default_factory=list)
+
+
+class PaperOrderCreateRequest(BaseModel):
+    """基于大纲记录创建论文订单。"""
+
+    record_id: int
+    outline: list[dict[str, Any]]
+    template_id: int | None = None
+    selftemp: int | None = None
+    service_ids: list[int] = Field(default_factory=list)
+    agent_id: int | None = None
+
+
+class PaperOrderPayRequest(BaseModel):
+    """论文订单积分支付请求。"""
+
+    order_sn: str
+
+
+class PaperPriceResponse(BaseModel):
+    """论文生成价格与用户积分。"""
+
+    points: int
+    amount: float
+    user_points: int
+
+
+class PaperOutlineRecordResponse(BaseModel):
+    """生成大纲并保存记录后的响应。"""
+
+    record_id: int
+    outline: list[OutlineChapter]
+    abstract: str = ""
+    keywords: str = ""
+
+
+class PaperOrderCreateResponse(BaseModel):
+    """创建论文订单后的支付信息。"""
+
+    order_sn: str
+    amount: float
+    points: int
+    is_paid: int = 0
+
+
+class PaperOrderPayResponse(BaseModel):
+    """论文订单积分支付结果。"""
+
+    order_sn: str
+    is_paid: int = 1
+    points: int
+    cost_points: int
+
+
+class PaperOrderStatusResponse(BaseModel):
+    """论文订单状态查询结果。"""
+
+    order_sn: str
+    status: str
+    is_paid: int
+    has_file: int
+    task_id: str | None = None
+    file_key: str | None = None
+    download_url: str | None = None
+    error_msg: str | None = None
+
+
+class PaperOrderDownloadUrlResponse(BaseModel):
+    """论文订单下载链接。"""
+
+    order_sn: str
+    download_url: str
+    file_key: str | None = None
+
+
+class NormalizedPaperOrder(BaseModel):
+    """论文订单归一化后的生成参数。"""
+
+    title: str
+    outline_json: list[OutlineChapter]
+    target_word_count: int
+    codetype: str
+    wxquote: str
+    language: str
+    wxnum: int
+
+
 class MermaidFigure(BaseModel):
     """Mermaid 技术图占位符。"""
 
@@ -247,6 +343,16 @@ __all__ = [
     "OutlineRequest",
     "OutlineResponse",
     "OutlineSection",
+    "NormalizedPaperOrder",
+    "PaperOrderCreateResponse",
+    "PaperOrderCreateRequest",
+    "PaperOrderDownloadUrlResponse",
+    "PaperOrderPayRequest",
+    "PaperOrderPayResponse",
+    "PaperOrderStatusResponse",
+    "PaperOutlineCreateRequest",
+    "PaperOutlineRecordResponse",
+    "PaperPriceResponse",
     "TaskStatusResponse",
     "extract_figure_placeholders",
     "split_by_render_method",

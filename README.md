@@ -106,6 +106,19 @@ uv run pytest tests/ -v
 - `GET /api/v1/thesis/status/{task_id}`：查询任务状态
 - `GET /api/v1/thesis/download/{task_id}`：下载本地生成的 docx
 
+论文订单流程接口：
+
+- `POST /api/v1/users/apiToken`：账号密码换取长期调用 token
+- `GET /api/v1/users/points`：查询当前用户积分
+- `GET /api/v1/thesis/price`：查询论文生成扣费积分
+- `POST /api/v1/thesis/outlines`：带 token 生成论文大纲并保存记录，不扣积分
+- `POST /api/v1/thesis/orders`：基于 `record_id` 和编辑后大纲创建论文订单
+- `POST /api/v1/thesis/orders/pay`：基于 `order_sn` 扣 200 积分并开始生成论文
+- `GET /api/v1/thesis/orders/status?order_sn=...`：查询论文订单状态
+- `GET /api/v1/thesis/orders/download-url?order_sn=...`：获取论文下载链接
+
+调用论文订单流程接口时使用 `Authorization: Bearer <token>`。积分与余额按 1:10 折算，默认论文生成扣费 `PAPER_GENERATE_POINTS=200`。
+
 论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此静态文件路径可通过 `/output/thesis/{task_id}/...` 访问；生产下载入口仍建议由业务系统基于七牛文件 key 签发。
 
 需要在 `.env` / `.env.docker` 中补齐大模型、七牛和业务系统回调配置：
@@ -116,9 +129,11 @@ THESIS_OUTPUT_ROOT=public/output/thesis
 QINIU_ACCESS_KEY=
 QINIU_SECRET_KEY=
 QINIU_BUCKET=
-PAPER_CALLBACK_URL=
+PAPER_CALLBACK_URL=http://localhost:10460/api/internal/paper/callback
 PAPER_CALLBACK_SECRET=
 ```
+
+Docker 模式下如果 Java 中转服务运行在宿主机，回调地址使用 `http://host.docker.internal:10460/api/internal/paper/callback`。
 
 Docker 启动时，`start.sh` 会默认把宿主机 `./public/output/thesis` 挂载到容器内 `/app/public/output/thesis`，保证生成的状态文件、图片和 docx 在容器重建后仍保留。
 

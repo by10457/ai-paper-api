@@ -13,6 +13,8 @@ class User(BaseModel):
     avatar = fields.CharField(max_length=512, null=True, description="头像地址")
     nickname = fields.CharField(max_length=64, null=True, description="昵称")
     email = fields.CharField(max_length=128, unique=True, description="邮箱")
+    points = fields.IntField(default=0, description="积分余额")
+    api_token = fields.CharField(max_length=128, unique=True, null=True, description="长期调用 Token")
 
     class Meta:
         table = "users"

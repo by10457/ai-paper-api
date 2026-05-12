@@ -15,7 +15,10 @@ CREATE TABLE IF NOT EXISTS `users` (
   `avatar` varchar(512) DEFAULT NULL COMMENT '头像地址',
   `nickname` varchar(64) DEFAULT NULL COMMENT '昵称',
   `email` varchar(128) NOT NULL COMMENT '邮箱',
+  `points` int NOT NULL DEFAULT 0 COMMENT '积分余额',
+  `api_token` varchar(128) DEFAULT NULL COMMENT '长期调用 Token',
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`),
-  UNIQUE KEY `email` (`email`)
+  UNIQUE KEY `email` (`email`),
+  UNIQUE KEY `api_token` (`api_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';

@@ -5,13 +5,13 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-import api.v1.thesis as thesis_api
 from app import app
+from services.thesis import generation_task, status_store
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    monkeypatch.setattr(thesis_api, "OUTPUT_ROOT", tmp_path)
+    monkeypatch.setattr(status_store, "OUTPUT_ROOT", tmp_path)
     with TestClient(app) as test_client:
         yield test_client
 
@@ -26,12 +26,12 @@ def test_thesis_routes_are_registered() -> None:
 
 def test_outline_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_generate_outline(
-            title: str,
-            target_word_count: int,
-            codetype: str,
-            language: str,
-            three_level: bool,
-            aboutmsg: str,
+        title: str,
+        target_word_count: int,
+        codetype: str,
+        language: str,
+        three_level: bool,
+        aboutmsg: str,
     ) -> dict:
         return {
             "outline": [
@@ -46,7 +46,7 @@ def test_outline_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) ->
             "keywords": "关键词1,关键词2",
         }
 
-    monkeypatch.setattr(thesis_api, "_load_generate_outline", lambda: fake_generate_outline)
+    monkeypatch.setattr(generation_task, "load_generate_outline", lambda: fake_generate_outline)
 
     response = client.post(
         "/api/v1/thesis/outline",
@@ -66,14 +66,14 @@ def test_outline_title_too_short_returns_422(client: TestClient) -> None:
 
 def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_generate(
-            task_id: str,
-            title: str,
-            outline: str,
-            cover_kwargs: dict | None = None,
-            codetype: str = "否",
-            wxquote: str = "标注",
-            language: str = "否",
-            wxnum: int = 25,
+        task_id: str,
+        title: str,
+        outline: str,
+        cover_kwargs: dict | None = None,
+        codetype: str = "否",
+        wxquote: str = "标注",
+        language: str = "否",
+        wxnum: int = 25,
     ) -> None:
         assert task_id
         assert title
@@ -84,7 +84,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
         assert cover_kwargs["student_id"] == "20260001"
         assert cover_kwargs["student_class"] == "软件工程1班"
 
-    monkeypatch.setattr(thesis_api, "_run_generate", fake_run_generate)
+    monkeypatch.setattr(generation_task, "run_generate_task", fake_run_generate)
 
     response = client.post(
         "/api/v1/thesis/generate",
@@ -111,7 +111,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
     assert pending.status_code == 200
     assert pending.json()["status"] == "pending"
 
-    thesis_api._write_status(
+    status_store.write_status(
         task_id,
         "completed",
         message="论文生成完成",
@@ -155,8 +155,8 @@ def test_generate_invalid_target_word_count_returns_422(client: TestClient) -> N
 
 def test_status_utils_roundtrip(client: TestClient) -> None:
     task_id = uuid4().hex[:12]
-    thesis_api._write_status(task_id, "pending", message="running")
-    stored = thesis_api._read_status(task_id)
+    status_store.write_status(task_id, "pending", message="running")
+    stored = status_store.read_status(task_id)
 
     assert stored is not None
     assert stored["task_id"] == task_id
@@ -166,7 +166,7 @@ def test_status_utils_roundtrip(client: TestClient) -> None:
 
 def test_download_pending_returns_409(client: TestClient) -> None:
     task_id = uuid4().hex[:12]
-    thesis_api._write_status(task_id, "pending", message="正在生成论文...")
+    status_store.write_status(task_id, "pending", message="正在生成论文...")
 
     response = client.get(f"/api/v1/thesis/download/{task_id}")
 
@@ -185,7 +185,7 @@ def test_download_completed_returns_docx(client: TestClient, tmp_path: Path) -> 
     docx_path = output_dir / "论文_测试.docx"
     docx_path.write_bytes(b"fake docx payload")
 
-    thesis_api._write_status(
+    status_store.write_status(
         task_id,
         "completed",
         message="论文生成完成",
