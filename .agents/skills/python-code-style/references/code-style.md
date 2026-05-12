@@ -88,6 +88,9 @@ except TimeoutError as exc:
 - 所有函数参数和返回值都写类型注解。
 - Python 3.13 项目优先使用内置泛型和 `| None`，例如 `list[str]`、`dict[str, Any]`、`User | None`。
 - 返回复杂结构时优先定义 Pydantic Schema、dataclass 或明确的类型别名，不长期依赖裸 `dict`。
+- 外部边界允许短暂使用 `Any`，但必须在边界处收窄：`httpx.Response.json()`、LangChain `ainvoke()`、第三方 SDK 返回值、`model_dump()` 等应通过 `cast`、schema 校验或类型别名转换成明确类型后再进入业务逻辑。
+- 不要把 `dict[str, object]` 作为第三方构造函数的动态 `**kwargs` 传入；优先显式传参，或者定义 `TypedDict`，避免 Mypy 把所有重载都判为不匹配。
+- 第三方库里“工厂函数”和“真实类型”分开时要分别导入，例如 `python-docx` 中 `docx.Document` 是创建函数，类型应使用 `docx.document.Document`。
 - 测试代码可适度宽松，但不要影响业务代码的 Mypy 质量。
 
 ## 禁止事项

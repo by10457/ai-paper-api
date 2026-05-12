@@ -87,6 +87,7 @@ description: T-FastApi 项目的 AI 编码行为准则，用于减少常见 LLM 
 | 修改 ORM 模型 | 同步检查 `core/config.py` 的 `TORTOISE_ORM` 注册和 Aerich 迁移影响 |
 | 修复类型问题 | 优先补准确类型和返回值，不用 `Any` 或 `# type: ignore` 盖住问题 |
 | Ruff/Mypy 报错 | 修复报错本身，不借机批量重排无关文件 |
+| 迁移外部代码 | 迁移完成不等于任务完成；必须对迁移文件运行 Ruff/Mypy，直到没有新增静态检查错误 |
 | 测试失败 | 先定位失败测试覆盖的行为，再决定改实现还是改测试 |
 | 配置调整 | 对照 `pyproject.toml` 现有 Python 3.13、uv、Ruff、Mypy 配置，不套通用模板 |
 | 性能优化 | 先确认问题存在；不做未经验证的推测性优化 |
@@ -95,6 +96,7 @@ description: T-FastApi 项目的 AI 编码行为准则，用于减少常见 LLM 
 
 - 只改文档或 skill：检查 frontmatter、目录结构和内容是否与项目一致。
 - 改单个 Python 文件：优先运行 `uv run ruff check <path>`。
-- 改类型签名、schema、service 或 model：加跑 `uv run mypy .`。
+- 改类型签名、schema、service 或 model：加跑 `uv run mypy <changed-paths>`；如果导入链继续暴露相关错误，顺手修到当前改动闭环通过。
 - 改接口行为、数据库逻辑或定时任务：加跑相关 pytest。
+- 批量迁移或生成代码：先跑 touched files 的 Ruff/Mypy，再根据影响范围跑相关 pytest；最终回复中必须说明检查结果。
 - 无法运行验证时，在最终说明中明确原因和残余风险。

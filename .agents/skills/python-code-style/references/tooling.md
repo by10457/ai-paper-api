@@ -60,8 +60,10 @@ uv run pytest tests/test_user_service.py -v
 - 只改注释或 skill 文档：检查 Markdown/frontmatter 结构即可。
 - 改 Python 文件：至少运行 `uv run ruff check <path>`。
 - 改 import、格式或批量风格：运行 `uv run ruff check .` 和 `uv run ruff format .`。
-- 改公开函数签名、schema、service、model：加跑 `uv run mypy .`。
+- 改公开函数签名、schema、service、model：加跑 `uv run mypy <changed-paths>`；如果 Mypy 跟随导入暴露当前业务链路中的错误，继续修到该链路通过。
 - 改业务流程、路由、数据库行为：加跑相关 pytest；必要时补测试。
+- 迁移外部项目代码或 AI 大段生成代码：先对 touched files 运行 Ruff/Mypy，再跑相关测试；不能只凭 IDE 没有红线判断完成。
+- 最终回复必须列出实际运行过的校验命令和结果；若未运行，明确说明原因和残余风险。
 
 ## 不采用的通用工具建议
 
