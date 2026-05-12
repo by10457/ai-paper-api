@@ -11,6 +11,8 @@ HOST_PORT="${HOST_PORT:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-}"
 HOST_LOG_DIR="${HOST_LOG_DIR:-logs}"
 CONTAINER_LOG_DIR="${CONTAINER_LOG_DIR:-/app/logs}"
+HOST_OUTPUT_DIR="${HOST_OUTPUT_DIR:-public/output/thesis}"
+CONTAINER_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR:-/app/public/output/thesis}"
 NETWORK_NAME="${NETWORK_NAME:-}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
 ADD_HOST_GATEWAY="${ADD_HOST_GATEWAY:-true}"
@@ -42,6 +44,7 @@ Optional environment variables:
   HOST_PORT         Host port exposed outside Docker (default: APP_PORT in env file, fallback 10462)
   CONTAINER_PORT    Container listening port (default: APP_PORT in env file, fallback 10462)
   HOST_LOG_DIR      Host log directory to mount (default: ./logs)
+  HOST_OUTPUT_DIR   Host thesis output directory to mount (default: ./public/output/thesis)
   NETWORK_NAME      Existing/new Docker network to attach (optional)
   BUILD_NO_CACHE    true/1 to disable Docker build cache (default: false)
   ADD_HOST_GATEWAY  true/1 to add host.docker.internal mapping (default: true)
@@ -278,7 +281,13 @@ case "$HOST_LOG_DIR" in
   *) HOST_LOG_PATH="$PROJECT_DIR/$HOST_LOG_DIR" ;;
 esac
 
+case "$HOST_OUTPUT_DIR" in
+  /*) HOST_OUTPUT_PATH="$HOST_OUTPUT_DIR" ;;
+  *) HOST_OUTPUT_PATH="$PROJECT_DIR/$HOST_OUTPUT_DIR" ;;
+esac
+
 mkdir -p "$HOST_LOG_PATH"
+mkdir -p "$HOST_OUTPUT_PATH"
 
 if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
   log "Removing existing container: $CONTAINER_NAME"
@@ -298,6 +307,7 @@ RUN_ARGS="
   --restart unless-stopped
   --env-file $SANITIZED_ENV_FILE
   -v $HOST_LOG_PATH:$CONTAINER_LOG_DIR
+  -v $HOST_OUTPUT_PATH:$CONTAINER_OUTPUT_DIR
 "
 
 if [ "$RESOLVED_APP_ROLE" = "api" ] || [ "$RESOLVED_APP_ROLE" = "all" ]; then
@@ -343,5 +353,6 @@ if [ "$RESOLVED_APP_ROLE" = "api" ] || [ "$RESOLVED_APP_ROLE" = "all" ]; then
   log "Health endpoint: http://localhost:$HOST_PORT/api/v1/health"
 fi
 log "Mounted logs: $HOST_LOG_PATH -> $CONTAINER_LOG_DIR"
+log "Mounted thesis output: $HOST_OUTPUT_PATH -> $CONTAINER_OUTPUT_DIR"
 log "Container health: $HEALTH"
 log "View logs: docker logs -f $CONTAINER_NAME"

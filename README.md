@@ -97,6 +97,31 @@ uv run pytest tests/ -v
 
 模板提供了 `Dockerfile`、`.dockerignore` 和 `start.sh`，用于构建镜像、启动容器、挂载日志目录。
 
+## AI 论文生成
+
+本服务提供 AI 论文生成中转接口，供订单、支付或其他业务系统调用：
+
+- `POST /api/v1/thesis/outline`：根据标题和配置生成论文大纲
+- `POST /api/v1/thesis/generate`：提交论文生成后台任务
+- `GET /api/v1/thesis/status/{task_id}`：查询任务状态
+- `GET /api/v1/thesis/download/{task_id}`：下载本地生成的 docx
+
+论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此静态文件路径可通过 `/output/thesis/{task_id}/...` 访问；生产下载入口仍建议由业务系统基于七牛文件 key 签发。
+
+需要在 `.env` / `.env.docker` 中补齐大模型、七牛和业务系统回调配置：
+
+```env
+DEEPSEEK_API_KEY=
+THESIS_OUTPUT_ROOT=public/output/thesis
+QINIU_ACCESS_KEY=
+QINIU_SECRET_KEY=
+QINIU_BUCKET=
+PAPER_CALLBACK_URL=
+PAPER_CALLBACK_SECRET=
+```
+
+Docker 启动时，`start.sh` 会默认把宿主机 `./public/output/thesis` 挂载到容器内 `/app/public/output/thesis`，保证生成的状态文件、图片和 docx 在容器重建后仍保留。
+
 ### 1. 准备环境变量
 
 ```bash

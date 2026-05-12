@@ -9,10 +9,19 @@ dependencies = [
     "apscheduler==3.10.4",
     "bcrypt==5.0.0",
     "fastapi==0.111.0",
+    "httpx==0.27.0",
+    "langchain>=1.2.12",
+    "langchain-anthropic>=0.1.0",
+    "langchain-openai>=1.0.3",
     "loguru==0.7.2",
+    "matplotlib>=3.10.8",
+    "numpy>=2.0.0",
+    "pillow>=11.0.0",
     "pydantic-settings==2.2.1",
+    "python-docx>=1.1.2",
     "python-dotenv==1.0.1",
     "python-jose[cryptography]==3.3.0",
+    "qiniu>=7.14.0",
     "redis==5.0.4",
     "tortoise-orm[aiomysql]==0.21.3",
     "uvicorn[standard]==0.29.0",
@@ -20,7 +29,6 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "httpx==0.27.0",
     "mypy>=1.20.2",
     "pytest==8.2.0",
     "pytest-asyncio==0.23.6",
@@ -61,7 +69,7 @@ ignore = [
 
 [tool.ruff.lint.isort]
 # 告诉 isort 哪些是自己项目的模块（排序时会归为 first-party 组）
-known-first-party = ["core", "api", "models", "schemas", "services", "tasks", "utils"]
+known-first-party = ["api", "core", "llm", "models", "schemas", "services", "tasks", "utils"]
 
 # ── Mypy：类型检查 ───────────────────────────────────────────
 [tool.mypy]

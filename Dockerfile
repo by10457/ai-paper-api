@@ -16,7 +16,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev --no-install-project \
-    && /app/.venv/bin/python -c "import fastapi, uvicorn, tortoise, redis"
+    && /app/.venv/bin/python -c "import docx, fastapi, langchain_openai, matplotlib, numpy, PIL, qiniu, redis, tortoise, uvicorn"
 
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
@@ -30,15 +30,31 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_DEBUG=false \
     APP_HOST=0.0.0.0 \
     APP_PORT=10462 \
+    HOME=/home/app \
+    XDG_CONFIG_HOME=/home/app/.config \
+    XDG_CACHE_HOME=/home/app/.cache \
+    MPLCONFIGDIR=/home/app/.config/matplotlib \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     LOG_FILE=logs/app.log \
     PATH="/app/.venv/bin:$PATH"
 
 WORKDIR /app
 
-RUN groupadd --gid "${APP_GID}" app \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        fonts-noto-cjk \
+        fonts-wqy-zenhei \
+        nodejs \
+        npm \
+    && npm install -g @mermaid-js/mermaid-cli \
+    && fc-cache -f \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid "${APP_GID}" app \
     && useradd --uid "${APP_UID}" --gid app --create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /app/logs /app/public \
-    && chown -R app:app /app
+    && mkdir -p /app/logs /app/public/output/thesis /home/app/.config/matplotlib /home/app/.cache/dconf \
+    && chown -R app:app /app /home/app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 COPY --chown=app:app main.py app.py ./

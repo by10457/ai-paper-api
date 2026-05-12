@@ -34,6 +34,7 @@ htmlcov/
 
 # 上传的文件（如果 public 下有用户上传内容）
 public/uploads/
+public/output/
 
 # macOS
 .DS_Store

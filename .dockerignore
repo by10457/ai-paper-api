@@ -29,6 +29,7 @@
 # Runtime/local files are provided by bind mounts or env files.
 .env
 logs/
+public/output/
 __pycache__/
 .venv/
 .git/
