@@ -160,7 +160,7 @@ class Settings(BaseSettings):
             "apps": {
                 "models": {
                     # 把所有 models 模块路径注册在这里
-                    "models": ["models.user", "models.paper", "aerich.models"],
+                    "models": ["models.user", "models.paper", "models.admin", "aerich.models"],
                     "default_connection": "default",
                 }
             },

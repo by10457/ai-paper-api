@@ -41,4 +41,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     user = await User.filter(id=user_id).first()
     if user is None:
         raise credentials_exception
+    if user.is_disabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已禁用")
     return user
+
+
+async def get_current_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    """校验当前用户是否为管理员。"""
+
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
+    return current_user

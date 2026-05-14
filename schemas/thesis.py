@@ -198,6 +198,33 @@ class PaperOrderDownloadUrlResponse(BaseModel):
     file_key: str | None = None
 
 
+class PaperOrderListItemResponse(BaseModel):
+    """用户订单列表项。"""
+
+    id: int
+    order_sn: str
+    title: str
+    status: str
+    cost_points: int
+    paid_points: int
+    refunded_points: int
+    has_file: int
+    download_url: str | None = None
+    error_msg: str | None = None
+    created_at: str
+    paid_at: str | None = None
+    completed_at: str | None = None
+
+
+class PaperOrderDetailResponse(PaperOrderListItemResponse):
+    """用户订单详情。"""
+
+    config_form: dict[str, Any] | None = None
+    outline_json: list[dict[str, Any]]
+    task_id: str | None = None
+    file_key: str | None = None
+
+
 class NormalizedPaperOrder(BaseModel):
     """论文订单归一化后的生成参数。"""
 

@@ -9,6 +9,7 @@
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -44,6 +45,8 @@ class UserResponse(BaseModel):
     nickname: str | None
     email: str
     points: int
+    role: str
+    is_disabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -65,8 +68,52 @@ class ApiTokenResponse(BaseModel):
     token_type: str = "bearer"
     username: str
     points: int
+    masked_token: str | None = None
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    call_count: int = 0
 
 
 class UserPointsResponse(BaseModel):
     points: int
     amount: float
+
+
+class ApiTokenInfoResponse(BaseModel):
+    has_token: bool
+    masked_token: str | None = None
+    created_at: datetime | None = None
+    last_used_at: datetime | None = None
+    call_count: int = 0
+
+
+class PointLedgerResponse(BaseModel):
+    id: int
+    change_type: str
+    delta: int
+    balance_after: int
+    reason: str
+    order_id: int | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class RechargeOrderCreateRequest(BaseModel):
+    points: int = Field(..., ge=1, le=1_000_000, description="申请充值积分")
+    pay_channel: Literal["wechat", "alipay", "bank", "manual"] = "manual"
+    remark: str | None = Field(None, max_length=500, description="付款凭证、联系方式或备注")
+
+
+class RechargeOrderResponse(BaseModel):
+    id: int
+    order_sn: str
+    points: int
+    amount: float
+    pay_channel: str
+    status: str
+    status_text: str
+    remark: str | None = None
+    admin_remark: str | None = None
+    created_at: datetime
+    reviewed_at: datetime | None = None

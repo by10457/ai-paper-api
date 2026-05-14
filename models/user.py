@@ -15,6 +15,12 @@ class User(BaseModel):
     email = fields.CharField(max_length=128, unique=True, description="邮箱")
     points = fields.IntField(default=0, description="积分余额")
     api_token = fields.CharField(max_length=128, unique=True, null=True, description="长期调用 Token")
+    api_token_created_at = fields.DatetimeField(null=True, description="调用 Token 创建时间")
+    api_token_last_used_at = fields.DatetimeField(null=True, description="调用 Token 最近使用时间")
+    api_token_call_count = fields.IntField(default=0, description="调用 Token 使用次数")
+    role = fields.CharField(max_length=32, default="user", description="角色：user/admin")
+    is_disabled = fields.BooleanField(default=False, description="是否禁用")
+    last_login_at = fields.DatetimeField(null=True, description="最近登录时间")
 
     class Meta:
         table = "users"

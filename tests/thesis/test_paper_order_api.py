@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
-from api.dependencies.api_token import get_api_token_user
+from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
 from services.thesis import order_workflow
 from services.thesis.order_service import PaperOrderService
@@ -52,7 +52,7 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
         assert outline_data["keywords"] == "AI,论文"
         return SimpleNamespace(id=123)
 
-    app.dependency_overrides[get_api_token_user] = fake_current_user
+    app.dependency_overrides[get_api_token_or_jwt_user] = fake_current_user
     monkeypatch.setattr(order_workflow, "load_generate_outline", lambda: fake_generate_outline)
     monkeypatch.setattr(PaperOrderService, "create_outline_record", fake_create_outline_record)
 

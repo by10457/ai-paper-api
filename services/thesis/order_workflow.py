@@ -7,10 +7,13 @@ from fastapi import BackgroundTasks, HTTPException, status
 from core.config import settings
 from models.paper import PaperOrder
 from models.user import User
+from schemas.common import PageResponse
 from schemas.thesis import (
     PaperOrderCreateRequest,
     PaperOrderCreateResponse,
+    PaperOrderDetailResponse,
     PaperOrderDownloadUrlResponse,
+    PaperOrderListItemResponse,
     PaperOrderPayRequest,
     PaperOrderPayResponse,
     PaperOrderStatusResponse,
@@ -116,6 +119,35 @@ async def get_order_download_url(user: User, order_sn: str) -> PaperOrderDownloa
     )
 
 
+async def list_user_orders(user: User, page: int, page_size: int) -> PageResponse[PaperOrderListItemResponse]:
+    """分页查询当前用户论文订单。"""
+
+    query = PaperOrder.filter(user=user)
+    total = await query.count()
+    orders = await query.order_by("-id").offset((page - 1) * page_size).limit(page_size)
+    return PageResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        items=[_paper_order_list_item(order) for order in orders],
+    )
+
+
+async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailResponse:
+    """查询当前用户论文订单详情。"""
+
+    order = await PaperOrderService.get_order(user, order_sn)
+    order = await _refresh_generating_order(order)
+    item = _paper_order_list_item(order)
+    return PaperOrderDetailResponse(
+        **item.model_dump(),
+        config_form=order.config_form if isinstance(order.config_form, dict) else None,
+        outline_json=order.outline_json if isinstance(order.outline_json, list) else [],
+        task_id=order.task_id,
+        file_key=order.file_key,
+    )
+
+
 async def run_paid_paper_order(order_id: int) -> None:
     """支付成功后的后台生成流程，失败时回写订单状态。"""
 
@@ -168,6 +200,24 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         file_key=order.file_key,
         download_url=order.download_url or _build_order_download_url(order),
         error_msg=order.last_error,
+    )
+
+
+def _paper_order_list_item(order: PaperOrder) -> PaperOrderListItemResponse:
+    return PaperOrderListItemResponse(
+        id=order.id,
+        order_sn=order.order_sn,
+        title=order.title,
+        status=order.status,
+        cost_points=order.cost_points,
+        paid_points=order.paid_points,
+        refunded_points=order.refunded_points,
+        has_file=1 if order.status == "completed" else 0,
+        download_url=order.download_url or _build_order_download_url(order),
+        error_msg=order.last_error,
+        created_at=order.created_at.isoformat(),
+        paid_at=order.paid_at.isoformat() if order.paid_at else None,
+        completed_at=order.completed_at.isoformat() if order.completed_at else None,
     )
 
 

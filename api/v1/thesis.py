@@ -6,9 +6,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi import Path as FastApiPath
 from fastapi.responses import FileResponse
 
-from api.dependencies.api_token import get_api_token_user
+from api.dependencies.api_token import get_api_token_or_jwt_user
 from models.user import User
-from schemas.common import Response
+from schemas.common import PageResponse, Response
 from schemas.thesis import (
     GenerateRequest,
     GenerateSubmitResponse,
@@ -16,7 +16,9 @@ from schemas.thesis import (
     OutlineResponse,
     PaperOrderCreateRequest,
     PaperOrderCreateResponse,
+    PaperOrderDetailResponse,
     PaperOrderDownloadUrlResponse,
+    PaperOrderListItemResponse,
     PaperOrderPayRequest,
     PaperOrderPayResponse,
     PaperOrderStatusResponse,
@@ -77,7 +79,7 @@ async def download_document(
 
 
 @router.get("/price", response_model=Response[PaperPriceResponse], summary="查询论文生成价格")
-async def get_paper_price(current_user: User = Depends(get_api_token_user)) -> Response[PaperPriceResponse]:
+async def get_paper_price(current_user: User = Depends(get_api_token_or_jwt_user)) -> Response[PaperPriceResponse]:
     """查询论文生成价格和用户积分余额。"""
 
     return Response.ok(data=order_workflow.get_price_for_user(current_user))
@@ -86,7 +88,7 @@ async def get_paper_price(current_user: User = Depends(get_api_token_user)) -> R
 @router.post("/outlines", response_model=Response[PaperOutlineRecordResponse], summary="生成论文大纲并保存记录")
 async def create_paper_outline_record(
     req: PaperOutlineCreateRequest,
-    current_user: User = Depends(get_api_token_user),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOutlineRecordResponse]:
     """生成论文大纲并保存为可下单记录。"""
 
@@ -101,7 +103,7 @@ async def create_paper_outline_record(
 @router.post("/orders", response_model=Response[PaperOrderCreateResponse], summary="创建论文订单")
 async def create_paper_order(
     req: PaperOrderCreateRequest,
-    current_user: User = Depends(get_api_token_user),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderCreateResponse]:
     """创建待支付论文订单。"""
 
@@ -112,7 +114,7 @@ async def create_paper_order(
 async def pay_paper_order(
     req: PaperOrderPayRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(get_api_token_user),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderPayResponse]:
     """论文订单积分支付。"""
 
@@ -123,7 +125,7 @@ async def pay_paper_order(
 @router.get("/orders/status", response_model=Response[PaperOrderStatusResponse], summary="查询论文订单状态")
 async def check_paper_order_status(
     order_sn: str,
-    current_user: User = Depends(get_api_token_user),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderStatusResponse]:
     """查询论文订单状态。"""
 
@@ -137,8 +139,35 @@ async def check_paper_order_status(
 )
 async def get_paper_order_download_url(
     order_sn: str,
-    current_user: User = Depends(get_api_token_user),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderDownloadUrlResponse]:
     """获取已完成论文订单的下载链接。"""
 
     return Response.ok(data=await order_workflow.get_order_download_url(current_user, order_sn))
+
+
+@router.get(
+    "/orders", response_model=Response[PageResponse[PaperOrderListItemResponse]], summary="分页查询当前用户论文订单"
+)
+async def list_my_paper_orders(
+    page: int = 1,
+    page_size: int = 10,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> Response[PageResponse[PaperOrderListItemResponse]]:
+    """分页查询当前用户论文订单。"""
+
+    return Response.ok(data=await order_workflow.list_user_orders(current_user, page, page_size))
+
+
+@router.get(
+    "/orders/detail",
+    response_model=Response[PaperOrderDetailResponse],
+    summary="查询当前用户论文订单详情",
+)
+async def get_my_paper_order_detail(
+    order_sn: str,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> Response[PaperOrderDetailResponse]:
+    """查询当前用户论文订单详情。"""
+
+    return Response.ok(data=await order_workflow.get_user_order_detail(current_user, order_sn))

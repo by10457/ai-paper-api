@@ -6,6 +6,7 @@ from fastapi import HTTPException, status
 from tortoise.expressions import F
 
 from core.config import settings
+from models.admin import PointLedger
 from models.paper import PaperOrder, PaperOutlineRecord
 from models.user import User
 from schemas.thesis import (
@@ -74,6 +75,14 @@ class PaperOrderService:
         if order.status not in {"created", "failed"}:
             return False
 
+        if order.status == "failed" and order.paid_points > order.refunded_points:
+            now = datetime.now(UTC)
+            order.status = "paid"
+            order.last_error = ""
+            order.paid_at = order.paid_at or now
+            await order.save(update_fields=["status", "paid_at", "last_error", "updated_at"])
+            return True
+
         updated = await User.filter(id=user.id, points__gte=order.cost_points).update(
             points=F("points") - order.cost_points,
         )
@@ -87,6 +96,14 @@ class PaperOrderService:
         order.last_error = ""
         await order.save(update_fields=["status", "paid_points", "paid_at", "last_error", "updated_at"])
         await user.refresh_from_db()
+        await PointLedger.create(
+            user=user,
+            order=order,
+            change_type="paper_deduct",
+            delta=-order.cost_points,
+            balance_after=user.points,
+            reason=f"论文订单 {order.order_sn} 积分支付",
+        )
         return True
 
     @staticmethod
@@ -135,6 +152,9 @@ class PaperOrderService:
         """把订单快照转换成论文生成服务参数。"""
 
         config = order.config_form if isinstance(order.config_form, dict) else {}
+        form_params = config.get("form_params")
+        if isinstance(form_params, dict):
+            config = form_params
         return NormalizedPaperOrder(
             title=order.title,
             outline_json=PaperOrderService._normalize_outline(order.outline_json),

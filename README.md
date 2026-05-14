@@ -252,11 +252,11 @@ ENV_FILE=.env.docker sh start.sh
 
 ## 关键设计决策
 
-| 问题 | 决策 |
-|------|------|
-| MySQL/Redis 连接对象在哪初始化？| `core/database.py` 和 `core/redis.py` 声明，由 `app.py` lifespan 或 `tasks.runner` 统一 init/close |
-| MySQL/Redis 连接失败怎么办？| 启动阶段只打印 warning 并继续运行；健康检查会返回 degraded，依赖数据库/缓存的接口在调用时再暴露具体错误 |
-| 定时任务写在哪？| `tasks/scheduler.py` 写任务和注册函数；开发环境由 `app.py` 启动，生产环境由 `tasks.runner` 独立进程启动 |
-| 环境变量怎么管理？| `core/config.py` 用 pydantic-settings 读取，全项目只 import `settings` 对象 |
-| 接口统一响应格式？| `schemas/common.py` 的 `Response[T]` 泛型包装 |
-| 数据库迁移？| aerich（Tortoise-ORM 官方迁移工具）|
+| 问题                             | 决策                                                                                                    |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| MySQL/Redis 连接对象在哪初始化？ | `core/database.py` 和 `core/redis.py` 声明，由 `app.py` lifespan 或 `tasks.runner` 统一 init/close      |
+| MySQL/Redis 连接失败怎么办？     | 启动阶段只打印 warning 并继续运行；健康检查会返回 degraded，依赖数据库/缓存的接口在调用时再暴露具体错误 |
+| 定时任务写在哪？                 | `tasks/scheduler.py` 写任务和注册函数；开发环境由 `app.py` 启动，生产环境由 `tasks.runner` 独立进程启动 |
+| 环境变量怎么管理？               | `core/config.py` 用 pydantic-settings 读取，全项目只 import `settings` 对象                             |
+| 接口统一响应格式？               | `schemas/common.py` 的 `Response[T]` 泛型包装                                                           |
+| 数据库迁移？                     | aerich（Tortoise-ORM 官方迁移工具）                                                                     |
