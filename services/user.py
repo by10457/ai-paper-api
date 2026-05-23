@@ -8,8 +8,9 @@
 """
 
 import secrets
-from datetime import UTC, datetime
 from decimal import Decimal
+
+from tortoise import timezone
 
 from core.config import settings
 from core.logger import logger
@@ -60,7 +61,7 @@ class UserService:
         if user.api_token:
             return user.api_token
         user.api_token = secrets.token_urlsafe(32)
-        user.api_token_created_at = datetime.now(UTC)
+        user.api_token_created_at = timezone.now()
         user.api_token_call_count = 0
         await user.save(update_fields=["api_token", "api_token_created_at", "api_token_call_count", "updated_at"])
         return user.api_token
@@ -68,7 +69,7 @@ class UserService:
     @staticmethod
     async def reset_api_token(user: User) -> str:
         user.api_token = secrets.token_urlsafe(32)
-        user.api_token_created_at = datetime.now(UTC)
+        user.api_token_created_at = timezone.now()
         user.api_token_last_used_at = None
         user.api_token_call_count = 0
         await user.save(
@@ -125,5 +126,5 @@ class UserService:
 
     @staticmethod
     def _generate_recharge_sn() -> str:
-        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
         return f"RC{timestamp}{secrets.token_hex(4).upper()}"

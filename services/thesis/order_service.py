@@ -1,8 +1,8 @@
 import secrets
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
+from tortoise import timezone
 from tortoise.expressions import F
 
 from core.config import settings
@@ -76,7 +76,7 @@ class PaperOrderService:
             return False
 
         if order.status == "failed" and order.paid_points > order.refunded_points:
-            now = datetime.now(UTC)
+            now = timezone.now()
             order.status = "paid"
             order.last_error = ""
             order.paid_at = order.paid_at or now
@@ -89,7 +89,7 @@ class PaperOrderService:
         if updated == 0:
             raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="积分余额不足")
 
-        now = datetime.now(UTC)
+        now = timezone.now()
         order.status = "paid"
         order.paid_points = order.cost_points
         order.paid_at = now
@@ -110,7 +110,7 @@ class PaperOrderService:
     async def mark_generating(order: PaperOrder, task_id: str) -> None:
         """记录订单对应的后台生成任务。"""
 
-        now = datetime.now(UTC)
+        now = timezone.now()
         order.status = "generating"
         order.task_id = task_id
         order.started_at = now
@@ -129,7 +129,7 @@ class PaperOrderService:
             order.status = "completed"
             order.file_key = str(data.get("file_key") or "")
             order.download_url = str(data.get("download_url") or "")
-            order.completed_at = datetime.now(UTC)
+            order.completed_at = timezone.now()
             order.last_error = ""
             await order.save(
                 update_fields=[
@@ -195,7 +195,7 @@ class PaperOrderService:
 
     @staticmethod
     def _generate_order_sn() -> str:
-        timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
+        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
         return f"AP{timestamp}{secrets.token_hex(4).upper()}"
 
     @staticmethod

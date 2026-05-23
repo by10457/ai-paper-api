@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     MYSQL_DB: str = "app"
     MYSQL_POOL_MIN: int = 3
     MYSQL_POOL_MAX: int = 10
+    DB_TIMEZONE: str = "Asia/Shanghai"
     DB_GENERATE_SCHEMAS: bool = False
 
     @property
@@ -143,6 +144,8 @@ class Settings(BaseSettings):
     @property
     def TORTOISE_ORM(self) -> dict:
         return {
+            "use_tz": False,
+            "timezone": self.DB_TIMEZONE,
             "connections": {
                 "default": {
                     "engine": "tortoise.backends.mysql",

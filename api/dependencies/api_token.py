@@ -1,8 +1,7 @@
-from datetime import UTC, datetime
-
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
+from tortoise import timezone
 from tortoise.expressions import F
 
 from core.security import decode_access_token
@@ -30,7 +29,7 @@ async def get_api_token_user(credentials: HTTPAuthorizationCredentials | None = 
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已禁用")
     await User.filter(id=user.id).update(
         api_token_call_count=F("api_token_call_count") + 1,
-        api_token_last_used_at=datetime.now(UTC),
+        api_token_last_used_at=timezone.now(),
     )
     await user.refresh_from_db()
     return user
@@ -52,7 +51,7 @@ async def get_api_token_or_jwt_user(credentials: HTTPAuthorizationCredentials | 
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号已禁用")
         await User.filter(id=user.id).update(
             api_token_call_count=F("api_token_call_count") + 1,
-            api_token_last_used_at=datetime.now(UTC),
+            api_token_last_used_at=timezone.now(),
         )
         await user.refresh_from_db()
         return user

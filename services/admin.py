@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
+from tortoise import timezone
 from tortoise.expressions import F, Q
 from tortoise.functions import Sum
 
@@ -72,7 +72,7 @@ class AdminService:
 
     @staticmethod
     async def overview() -> AdminOverviewResponse:
-        now = datetime.now(UTC)
+        now = timezone.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
@@ -290,7 +290,7 @@ class AdminService:
         if order.status != "pending":
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="充值申请已处理")
 
-        now = datetime.now(UTC)
+        now = timezone.now()
         order.status = data.status
         order.admin_remark = data.admin_remark
         order.reviewer_id = operator.id
@@ -372,7 +372,7 @@ class AdminService:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="订单没有可退积分")
         await User.filter(id=order.user_id).update(points=F("points") + refundable)
         user = await User.get(id=order.user_id)
-        now = datetime.now(UTC)
+        now = timezone.now()
         order.refunded_points += refundable
         order.refunded_at = now
         order.status = "refunded"
@@ -432,7 +432,7 @@ class AdminService:
         order.status = "completed"
         order.download_url = download_url
         order.file_key = file_key or order.file_key
-        order.completed_at = datetime.now(UTC)
+        order.completed_at = timezone.now()
         order.last_error = ""
         await order.save(
             update_fields=["status", "download_url", "file_key", "completed_at", "last_error", "updated_at"]
