@@ -17,6 +17,9 @@ class PointLedger(BaseModel):
     user: fields.ForeignKeyRelation[User]
     operator: fields.ForeignKeyNullableRelation[User]
     order: fields.ForeignKeyNullableRelation[PaperOrder]
+    user_id: int
+    operator_id: int | None
+    order_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="point_ledgers", description="积分所属用户")
     operator = fields.ForeignKeyField(
         "models.User",
@@ -41,6 +44,8 @@ class RechargeOrder(BaseModel):
 
     user: fields.ForeignKeyRelation[User]
     reviewer: fields.ForeignKeyNullableRelation[User]
+    user_id: int
+    reviewer_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="recharge_orders", description="申请用户")
     reviewer = fields.ForeignKeyField(
         "models.User",
@@ -88,6 +93,9 @@ class ModelCallLog(BaseModel):
     user: fields.ForeignKeyNullableRelation[User]
     order: fields.ForeignKeyNullableRelation[PaperOrder]
     model_config: fields.ForeignKeyNullableRelation[ModelConfig]
+    user_id: int | None
+    order_id: int | None
+    model_config_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="model_call_logs", null=True, description="用户")
     order = fields.ForeignKeyField("models.PaperOrder", related_name="model_call_logs", null=True, description="订单")
     model_config = fields.ForeignKeyField(
@@ -126,6 +134,7 @@ class AuditLog(BaseModel):
     """管理员关键操作审计日志。"""
 
     operator: fields.ForeignKeyNullableRelation[User]
+    operator_id: int | None
     operator = fields.ForeignKeyField("models.User", related_name="audit_logs", null=True, description="操作人")
     action = fields.CharField(max_length=64, description="操作类型")
     target_type = fields.CharField(max_length=64, description="目标类型")

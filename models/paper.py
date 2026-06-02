@@ -25,6 +25,7 @@ class PaperOutlineRecord(BaseModel):
 class PaperOrder(BaseModel):
     user: fields.ForeignKeyRelation[User]
     outline_record: fields.ForeignKeyRelation[PaperOutlineRecord]
+    user_id: int
     user = fields.ForeignKeyField("models.User", related_name="paper_orders", description="用户")
     outline_record = fields.ForeignKeyField(
         "models.PaperOutlineRecord",

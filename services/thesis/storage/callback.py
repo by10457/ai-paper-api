@@ -32,7 +32,7 @@ async def notify_callback(task_id: str, file_key: str, status: str, error_msg: s
                 logger.info("回调业务系统成功: task_id=%s, status=%s", task_id, status)
                 return
         except Exception as exc:  # noqa: BLE001
-            delay = 2 ** attempt
+            delay = 2**attempt
             logger.warning(
                 "回调业务系统失败: task_id=%s, status=%s, attempt=%d/3, err=%s",
                 task_id,

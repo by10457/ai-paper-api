@@ -6,7 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import app
-from services.thesis import generation_task, status_store
+from services.thesis.generation import status_store
+from services.thesis.generation import task_service as generation_task
 
 
 @pytest.fixture

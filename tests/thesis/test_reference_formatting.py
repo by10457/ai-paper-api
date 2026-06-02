@@ -1,4 +1,4 @@
-from services.thesis import reference_service
+from services.thesis.content import reference_service
 
 
 def test_chinese_authors_use_half_width_commas() -> None:

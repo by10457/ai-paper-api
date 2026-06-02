@@ -4,8 +4,8 @@ import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from services import thesis
-from services.thesis.docx_builder import build_word_document
+from services.thesis.document.docx_builder import build_word_document
+from services.thesis.generation import pipeline as thesis
 
 
 def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch) -> None:

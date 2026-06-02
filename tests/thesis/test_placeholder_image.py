@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from services.thesis.image_renderer import PlaceholderImageGenerator
+from services.thesis.document.image_renderer import PlaceholderImageGenerator
 
 
 def test_placeholder_image_is_blank_white(tmp_path: Path) -> None:

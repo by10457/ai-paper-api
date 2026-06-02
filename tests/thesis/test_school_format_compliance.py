@@ -5,7 +5,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from services.thesis.docx_builder import build_word_document
+from services.thesis.document.docx_builder import build_word_document
 
 NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 

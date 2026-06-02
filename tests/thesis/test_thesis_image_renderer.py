@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import services.thesis.image_renderer as image_renderer
-from services.thesis.image_renderer import (
+import services.thesis.document.image_renderer as image_renderer
+from services.thesis.document.image_renderer import (
     PlaceholderImageGenerator,
     _resolve_chart_font,
     render_all_figures,

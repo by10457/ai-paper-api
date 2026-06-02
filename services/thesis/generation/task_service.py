@@ -17,7 +17,7 @@ from schemas.thesis import (
     OutlineResponse,
     TaskStatusResponse,
 )
-from services.thesis import status_store
+from services.thesis.generation import status_store
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def load_generate_outline() -> GenerateOutlineCallable:
     """延迟加载大纲服务，避免应用启动阶段过早初始化 LLM 链。"""
 
     try:
-        module = import_module("services.thesis.outline_service")
+        module = import_module("services.thesis.content.outline_service")
         return cast(GenerateOutlineCallable, module.generate_outline)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("论文大纲服务未就绪") from exc
@@ -45,7 +45,7 @@ def load_generate_document() -> GenerateDocumentCallable:
     """延迟加载正文生成服务，降低测试和路由导入成本。"""
 
     try:
-        module = import_module("services.thesis")
+        module = import_module("services.thesis.generation.pipeline")
         return cast(GenerateDocumentCallable, module.generate_thesis_document)
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError("论文生成服务未就绪") from exc
@@ -174,8 +174,8 @@ def _cover_kwargs(req: GenerateRequest) -> dict[str, Any]:
 
 
 async def _mark_generation_completed(task_id: str, result: Any) -> None:
-    from services.storage.callback import notify_callback
-    from services.storage.qiniu_uploader import upload_to_qiniu
+    from services.thesis.storage.callback import notify_callback
+    from services.thesis.storage.qiniu_uploader import upload_to_qiniu
 
     docx_path = str(_result_value(result, "docx_path", ""))
     file_key = await upload_to_qiniu(docx_path, task_id)
@@ -201,7 +201,7 @@ async def _mark_generation_failed(task_id: str, exc: Exception) -> None:
     error_msg = str(exc)[:500]
     status_store.write_status(task_id, "failed", message=f"生成失败: {error_msg}")
     try:
-        from services.storage.callback import notify_callback
+        from services.thesis.storage.callback import notify_callback
 
         await notify_callback(task_id, file_key="", status="failed", error_msg=error_msg)
     except Exception:  # noqa: BLE001

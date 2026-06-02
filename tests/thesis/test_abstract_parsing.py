@@ -1,4 +1,4 @@
-from services.thesis.abstract_service import _parse_combined_abstract
+from services.thesis.content.abstract_service import _parse_combined_abstract
 
 
 def test_parse_combined_abstract_accepts_bracket_keywords() -> None:

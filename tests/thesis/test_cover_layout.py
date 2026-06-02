@@ -2,7 +2,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from services.thesis.docx_builder import build_word_document
+from services.thesis.document.docx_builder import build_word_document
 
 
 def test_cover_main_title_does_not_use_body_exact_line_spacing() -> None:

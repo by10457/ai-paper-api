@@ -21,14 +21,14 @@ from schemas.thesis import (
     PaperOutlineRecordResponse,
     PaperPriceResponse,
 )
-from services.thesis import status_store
-from services.thesis.generation_task import (
+from services.thesis.business.order_service import PaperOrderService
+from services.thesis.generation import status_store
+from services.thesis.generation.task_service import (
     create_task_id,
     json_outline_to_markdown,
     load_generate_outline,
     run_generate_task,
 )
-from services.thesis.order_service import PaperOrderService
 
 logger = logging.getLogger(__name__)
 

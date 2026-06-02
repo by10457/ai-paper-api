@@ -27,7 +27,8 @@ from schemas.thesis import (
     PaperPriceResponse,
     TaskStatusResponse,
 )
-from services.thesis import generation_task, order_workflow
+from services.thesis.business import order_workflow
+from services.thesis.generation import task_service as generation_task
 
 logger = logging.getLogger(__name__)
 

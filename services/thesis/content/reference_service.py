@@ -384,7 +384,7 @@ async def generate_references(
     # ── CrossRef 补全卷期页码 ──
     all_filtered = zh_filtered + en_filtered
     try:
-        from services.thesis.crossref_client import enrich_with_crossref
+        from services.thesis.content.crossref_client import enrich_with_crossref
 
         await enrich_with_crossref(all_filtered)
     except Exception as exc:  # noqa: BLE001
@@ -421,7 +421,7 @@ async def generate_references(
         backfill = zh_remaining + en_remaining
         if backfill:
             try:
-                from services.thesis.crossref_client import enrich_with_crossref
+                from services.thesis.content.crossref_client import enrich_with_crossref
 
                 await enrich_with_crossref(backfill)
             except Exception:  # noqa: BLE001

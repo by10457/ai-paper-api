@@ -24,7 +24,7 @@ from schemas.common import PageResponse, Response
 from schemas.thesis import PaperOrderStatusResponse
 from schemas.user import PointLedgerResponse, UserResponse
 from services.admin import AdminService
-from services.thesis.order_workflow import run_paid_paper_order
+from services.thesis.business.order_workflow import run_paid_paper_order
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
 

@@ -1,7 +1,7 @@
 import asyncio
 
 from core.config import get_settings
-from services.thesis import crossref_client
+from services.thesis.content import crossref_client
 
 
 class _FakeResponse:

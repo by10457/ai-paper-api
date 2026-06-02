@@ -5,8 +5,8 @@ from fastapi.testclient import TestClient
 
 from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
-from services.thesis import order_workflow
-from services.thesis.order_service import PaperOrderService
+from services.thesis.business import order_workflow
+from services.thesis.business.order_service import PaperOrderService
 
 
 @pytest.fixture

@@ -12,7 +12,7 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
-from services.thesis.docx_builder import (
+from services.thesis.document.docx_builder import (
     _pre_scan_headings,
     build_word_document,
 )
