@@ -33,7 +33,7 @@ if __name__ == "__main__":
         "app:app",
         host=settings.APP_HOST,
         port=settings.APP_PORT,
-        reload=settings.APP_DEBUG,  # 开发环境热重载
+        reload=settings.APP_RELOAD,
         workers=get_worker_count(),
         log_level=settings.LOG_LEVEL.lower(),
     )

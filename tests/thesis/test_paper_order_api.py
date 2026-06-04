@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -70,6 +71,46 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
     assert payload["data"]["outline"][0]["chapter"] == "绪论"
 
 
+def test_paper_order_create_passes_idempotency_key(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_keys: list[str | None] = []
+
+    async def fake_current_user() -> SimpleNamespace:
+        return SimpleNamespace(id=1, username="demo", points=300)
+
+    async def fake_create_order(
+        user: SimpleNamespace,
+        req: object,
+        idempotency_key: str | None = None,
+    ) -> SimpleNamespace:
+        del req
+        assert user.username == "demo"
+        captured_keys.append(idempotency_key)
+        return SimpleNamespace(order_sn="AP001", cost_points=200)
+
+    app.dependency_overrides[get_api_token_or_jwt_user] = fake_current_user
+    monkeypatch.setattr(PaperOrderService, "create_order", fake_create_order)
+
+    response = client.post(
+        "/api/v1/thesis/orders",
+        headers={"Authorization": "Bearer test-token", "Idempotency-Key": "wxy-paper-order-1"},
+        json={
+            "record_id": 1,
+            "outline": [
+                {
+                    "chapter": "绪论",
+                    "sections": [
+                        {"name": "研究背景", "abstract": "背景"},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["order_sn"] == "AP001"
+    assert captured_keys == ["wxy-paper-order-1"]
+
+
 def test_qiniu_private_download_url_uses_configured_domain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -110,3 +151,61 @@ def test_order_list_item_does_not_expose_download_url() -> None:
 
     assert item.has_file == 1
     assert item.download_url is None
+
+
+def test_run_paid_paper_order_skips_when_order_start_was_claimed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claimed_order_ids: list[int] = []
+
+    async def fake_mark_generating_if_paid(order_id: int, task_id: str) -> None:
+        assert task_id
+        claimed_order_ids.append(order_id)
+        return None
+
+    async def fake_run_generate_task(*args: object, **kwargs: object) -> None:
+        raise AssertionError("重复后台任务不应该再次启动论文生成")
+
+    monkeypatch.setattr(PaperOrderService, "mark_generating_if_paid", fake_mark_generating_if_paid)
+    monkeypatch.setattr(order_workflow, "run_generate_task", fake_run_generate_task)
+
+    asyncio.run(order_workflow.run_paid_paper_order(123))
+
+    assert claimed_order_ids == [123]
+
+
+@pytest.mark.parametrize(
+    ("error_type", "message"),
+    [
+        ("provider_quota", "生成服务暂时不可用，本次扣除积分已退回，请稍后重试或联系管理员"),
+        ("provider_config", "生成服务配置异常，本次扣除积分已退回，请联系管理员处理"),
+    ],
+)
+def test_provider_failure_refunds_order_with_sanitized_message(
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: str,
+    message: str,
+) -> None:
+    refund_calls: list[tuple[int, str]] = []
+    order = SimpleNamespace(id=7)
+
+    async def fake_refund_failed_order_points(order_id: int, reason: str) -> SimpleNamespace:
+        refund_calls.append((order_id, reason))
+        return SimpleNamespace(id=order_id, status="failed", last_error=reason)
+
+    monkeypatch.setattr(PaperOrderService, "refund_failed_order_points", fake_refund_failed_order_points)
+
+    result = asyncio.run(
+        PaperOrderService.mark_from_task_status(
+            order,
+            {
+                "status": "failed",
+                "error_type": error_type,
+                "message": message,
+                "internal_error": "用户额度不足, 剩余额度: ¥-0.499362",
+            },
+        )
+    )
+
+    assert result.last_error == message
+    assert refund_calls == [(7, message)]

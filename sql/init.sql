@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS `paper_orders` (
   `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   `order_sn` VARCHAR(64) NOT NULL COMMENT '论文订单号',
+  `idempotency_key` VARCHAR(128) NULL COMMENT '请求幂等键',
   `title` VARCHAR(200) NOT NULL COMMENT '论文标题',
   `outline_json` JSON NOT NULL COMMENT '用户确认后的大纲',
   `config_form` JSON NULL COMMENT '生成配置快照',
@@ -115,11 +116,36 @@ CREATE TABLE IF NOT EXISTS `paper_orders` (
   `user_id` INT NOT NULL COMMENT '用户',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uid_paper_orders_order_sn` (`order_sn`),
+  UNIQUE KEY `uid_paper_orders_user_id_idempotency_key` (`user_id`, `idempotency_key`),
   KEY `idx_paper_orders_user_id` (`user_id`),
   KEY `idx_paper_orders_outline_record_id` (`outline_record_id`),
   CONSTRAINT `fk_paper_orders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_paper_orders_outline_record_id` FOREIGN KEY (`outline_record_id`) REFERENCES `paper_outline_records` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文订单';
+
+CREATE TABLE IF NOT EXISTS `paper_direct_tasks` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+  `idempotency_key` VARCHAR(128) NULL COMMENT '请求幂等键',
+  `task_id` VARCHAR(64) NOT NULL COMMENT '生成任务 ID',
+  `title` VARCHAR(200) NOT NULL COMMENT '论文标题',
+  `request_payload` JSON NOT NULL COMMENT '生成请求快照',
+  `cost_points` INT NOT NULL DEFAULT 200 COMMENT '应扣积分',
+  `refunded_points` INT NOT NULL DEFAULT 0 COMMENT '已退积分',
+  `status` VARCHAR(32) NOT NULL DEFAULT 'paid' COMMENT '任务状态',
+  `file_key` VARCHAR(512) NULL COMMENT '七牛文件 key',
+  `last_error` VARCHAR(500) NULL COMMENT '最近一次错误',
+  `started_at` DATETIME(6) NULL COMMENT '开始生成时间',
+  `completed_at` DATETIME(6) NULL COMMENT '完成时间',
+  `user_id` INT NOT NULL COMMENT '用户',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uid_paper_direct_tasks_task_id` (`task_id`),
+  UNIQUE KEY `uid_paper_direct_tasks_user_id_idempotency_key` (`user_id`, `idempotency_key`),
+  KEY `idx_paper_direct_tasks_user_id` (`user_id`),
+  KEY `idx_paper_direct_tasks_status` (`status`),
+  CONSTRAINT `fk_paper_direct_tasks_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='兼容式论文生成任务';
 
 CREATE TABLE IF NOT EXISTS `point_ledgers` (
   `id` INT NOT NULL AUTO_INCREMENT,

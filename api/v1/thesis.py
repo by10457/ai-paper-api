@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
 from fastapi import Path as FastApiPath
 from fastapi.responses import FileResponse
 
@@ -33,12 +33,28 @@ from services.thesis.generation import task_service as generation_task
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/thesis", tags=["论文生成"])
+MAX_IDEMPOTENCY_KEY_LENGTH = 128
+
+
+def _normalize_idempotency_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    key = value.strip()
+    if not key:
+        return None
+    if len(key) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        raise HTTPException(status_code=400, detail="Idempotency-Key 不能超过 128 个字符")
+    return key
 
 
 @router.post("/outline", response_model=OutlineResponse)
-async def create_outline(req: OutlineRequest) -> OutlineResponse:
+async def create_outline(
+    req: OutlineRequest,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> OutlineResponse:
     """根据标题生成论文大纲。"""
 
+    del current_user
     try:
         return await generation_task.generate_outline_for_request(req)
     except RuntimeError as exc:
@@ -50,28 +66,37 @@ async def create_outline(req: OutlineRequest) -> OutlineResponse:
 async def generate_document(
     req: GenerateRequest,
     background_tasks: BackgroundTasks,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> GenerateSubmitResponse:
     """提交论文生成任务并立即返回 task_id。"""
 
-    return generation_task.submit_generate_request(req, background_tasks)
+    return await generation_task.submit_generate_request(
+        current_user,
+        req,
+        background_tasks,
+        _normalize_idempotency_key(idempotency_key),
+    )
 
 
 @router.get("/status/{task_id}", response_model=TaskStatusResponse)
 async def get_task_status(
     task_id: str = FastApiPath(..., pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> TaskStatusResponse:
     """查询任务状态。"""
 
-    return generation_task.get_task_status(task_id)
+    return await generation_task.get_task_status_for_user(current_user, task_id)
 
 
 @router.get("/download/{task_id}")
 async def download_document(
     task_id: str = FastApiPath(..., pattern=r"^[a-zA-Z0-9_-]+$"),
+    current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> FileResponse:
     """下载生成的 Word 文档。"""
 
-    path_obj = generation_task.get_download_path(task_id)
+    path_obj = await generation_task.get_download_path_for_user(current_user, task_id)
     return FileResponse(
         path=str(path_obj),
         media_type=("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
@@ -104,11 +129,12 @@ async def create_paper_outline_record(
 @router.post("/orders", response_model=Response[PaperOrderCreateResponse], summary="创建论文订单")
 async def create_paper_order(
     req: PaperOrderCreateRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderCreateResponse]:
     """创建待支付论文订单。"""
 
-    return Response.ok(data=await order_workflow.create_order(current_user, req))
+    return Response.ok(data=await order_workflow.create_order(current_user, req, _normalize_idempotency_key(idempotency_key)))
 
 
 @router.post("/orders/pay", response_model=Response[PaperOrderPayResponse], summary="论文订单积分支付")

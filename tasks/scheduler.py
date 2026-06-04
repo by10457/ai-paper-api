@@ -18,9 +18,20 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from core.logger import logger
+from tasks.paper_recovery import recover_paid_paper_jobs
+
+
+def _create_scheduler() -> AsyncIOScheduler:
+    return AsyncIOScheduler(timezone="Asia/Shanghai")
+
 
 # 全局调度器单例（异步模式，与 FastAPI 的事件循环共享）
-scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
+scheduler = _create_scheduler()
+
+
+def _scheduler_event_loop_closed() -> bool:
+    event_loop = getattr(scheduler, "_eventloop", None)
+    return bool(event_loop and event_loop.is_closed())
 
 
 # ──────────────────────────────────────────────────────────────
@@ -51,6 +62,11 @@ def register_jobs() -> None:
     统一注册所有定时任务。
     在 tasks.runner 的启动阶段调用。
     """
+    global scheduler
+
+    if _scheduler_event_loop_closed():
+        scheduler = _create_scheduler()
+
     # 每 60 秒执行一次（interval 模式）
     scheduler.add_job(
         task_health_log,
@@ -58,6 +74,15 @@ def register_jobs() -> None:
         id="health_log",
         name="心跳日志",
         replace_existing=True,
+    )
+
+    scheduler.add_job(
+        recover_paid_paper_jobs,
+        trigger=IntervalTrigger(seconds=60),
+        id="paper_generation_recovery",
+        name="论文生成补偿",
+        replace_existing=True,
+        max_instances=1,
     )
 
     # 每天凌晨 2:00 执行（cron 模式）

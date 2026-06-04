@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 from abc import ABC, abstractmethod
@@ -14,6 +15,97 @@ import httpx
 from PIL import Image
 
 logger = logging.getLogger(__name__)
+IMAGE_MODEL_TIMEOUT_SECONDS = 45.0
+FIGURE_RENDER_CONCURRENCY = 2
+
+
+def _mermaid_node_id(prefix: str, index: int) -> str:
+    """生成 Mermaid flowchart 安全节点 ID。"""
+
+    return f"{prefix}_{index}"
+
+
+def _flowchart_label(text: str) -> str:
+    """转义 flowchart 节点标签。"""
+
+    return text.replace('"', '\\"')
+
+
+def _normalize_mermaid_code(mermaid_code: str) -> str:
+    """修正当前 Mermaid CLI 不支持的常见图类型。"""
+
+    code = mermaid_code.strip()
+    code = re.sub(r"^```(?:mermaid)?\s*", "", code, flags=re.IGNORECASE)
+    code = re.sub(r"\s*```$", "", code).strip()
+    if code.lower().startswith("usecasediagram"):
+        return _convert_usecase_diagram_to_flowchart(code)
+    return code
+
+
+def _convert_usecase_diagram_to_flowchart(mermaid_code: str) -> str:
+    """把 usecaseDiagram 转为 mmdc 支持更稳定的 flowchart。"""
+
+    lines = [line.strip() for line in mermaid_code.splitlines() if line.strip()]
+    alias_map: dict[str, str] = {}
+    output: list[str] = ["flowchart TD"]
+    actor_index = 0
+    package_index = 0
+
+    for line in lines[1:]:
+        if line == "}":
+            output.append("end")
+            continue
+
+        package_match = re.match(r'package\s+"(.+?)"\s*\{', line)
+        if package_match:
+            package_index += 1
+            package_id = _mermaid_node_id("PKG", package_index)
+            output.append(f'    subgraph {package_id}["{_flowchart_label(package_match.group(1))}"]')
+            continue
+
+        actor_match = re.match(r"actor\s+(.+?)(?:\s+as\s+([A-Za-z0-9_]+))?$", line)
+        if actor_match:
+            actor_index += 1
+            actor_label = actor_match.group(1).strip().strip('"')
+            actor_id = actor_match.group(2) or _mermaid_node_id("ACTOR", actor_index)
+            alias_map[actor_label] = actor_id
+            alias_map[actor_id] = actor_id
+            output.append(f'    {actor_id}["{_flowchart_label(actor_label)}"]')
+            continue
+
+        usecase_match = re.match(r'usecase\s+"(.+?)"\s+as\s+([A-Za-z0-9_]+)', line)
+        if usecase_match:
+            label, alias = usecase_match.groups()
+            alias_map[alias] = alias
+            output.append(f'    {alias}(["{_flowchart_label(label)}"])')
+            continue
+
+        relation_match = re.match(r"(.+?)\s*-->\s*(.+?)(?:\s*:\s*(.+))?$", line)
+        if relation_match:
+            source, target, label = relation_match.groups()
+            source_id = alias_map.get(source.strip().strip('"'), source.strip())
+            target_id = alias_map.get(target.strip().strip('"'), target.strip())
+            if label:
+                output.append(f'    {source_id} -->|"{_flowchart_label(label.strip())}"| {target_id}')
+            else:
+                output.append(f"    {source_id} --> {target_id}")
+
+    return "\n".join(output)
+
+
+def _summarize_render_error(exc: Exception) -> str:
+    """压缩渲染错误，避免日志输出整段浏览器堆栈。"""
+
+    text = str(exc).strip()
+    if not text:
+        text = exc.__class__.__name__
+    return text.splitlines()[0][:500]
+
+
+def _summarize_mermaid_stderr(stderr_text: str) -> str:
+    """压缩 Mermaid CLI 错误输出。"""
+
+    return stderr_text.strip().splitlines()[0][:500] if stderr_text.strip() else "未知错误"
 
 
 def _pick_chart_font_family() -> list[str]:
@@ -132,8 +224,9 @@ async def render_mermaid(mermaid_code: str, output_path: str) -> str:
     if not shutil.which("mmdc"):
         raise RuntimeError("Mermaid CLI 未安装，无法渲染 Mermaid 图，请安装 @mermaid-js/mermaid-cli")
 
+    normalized_code = _normalize_mermaid_code(mermaid_code)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".mmd", delete=False) as temp_file:
-        temp_file.write(mermaid_code)
+        temp_file.write(normalized_code)
         mmd_path = temp_file.name
 
     puppeteer_config: dict[str, object] = {
@@ -166,7 +259,9 @@ async def render_mermaid(mermaid_code: str, output_path: str) -> str:
         )
         _, stderr = await proc.communicate()
         if proc.returncode != 0:
-            raise RuntimeError(f"Mermaid 渲染失败 (exit {proc.returncode}): {stderr.decode().strip()}")
+            raise RuntimeError(
+                f"Mermaid 渲染失败 (exit {proc.returncode}): {_summarize_mermaid_stderr(stderr.decode())}"
+            )
     finally:
         Path(mmd_path).unlink(missing_ok=True)
         Path(pptr_config_path).unlink(missing_ok=True)
@@ -370,14 +465,17 @@ class GenerateContentImageGenerator(ImageGenerator):
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
-                "imageConfig": {"aspectRatio": real_aspect, "imageSize": "4K"},
+                "imageConfig": {"aspectRatio": real_aspect, "imageSize": "1K"},
             },
         }
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(self._build_url(), json=payload)
+        timeout = httpx.Timeout(IMAGE_MODEL_TIMEOUT_SECONDS, connect=10.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             try:
+                resp = await client.post(self._build_url(), json=payload)
                 resp.raise_for_status()
+            except httpx.TimeoutException:
+                raise RuntimeError(f"图片模型调用超时（超过 {int(IMAGE_MODEL_TIMEOUT_SECONDS)} 秒）") from None
             except httpx.HTTPStatusError as exc:
                 raise RuntimeError(self._build_http_error_message(exc.response)) from None
             data = resp.json()
@@ -432,15 +530,15 @@ async def render_all_figures(
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    # 限制并发数量，避免触发 API 限流
-    semaphore = asyncio.Semaphore(3)
+    # 限制并发数量，避免图片模型或 Chromium 同时占用太多资源。
+    semaphore = asyncio.Semaphore(FIGURE_RENDER_CONCURRENCY)
 
     async def _render_one(placeholder: dict) -> tuple[int, str | None]:
         index = placeholder["index"]
         output_path = f"{output_dir}/fig_{index}.png"
         method = placeholder.get("render_method")
 
-        max_retries = 3
+        max_retries = 1 if method in {"ai_image", "mermaid"} else 2
         attempt = 0
         while attempt < max_retries:
             try:
@@ -469,9 +567,9 @@ async def render_all_figures(
             except Exception as exc:
                 if method == "mermaid":
                     # Mermaid 语法错误重试也没用，直接切到 ai_image 兜底
-                    logger.warning("占位符 #%d Mermaid 失败，转 ai_image 兜底: %s", index, exc)
+                    logger.warning("占位符 #%d Mermaid 失败，转 ai_image 兜底: %s", index, _summarize_render_error(exc))
                     method = "ai_image"
-                    # 重置计数器，让 ai_image 拥有完整的重试次数
+                    max_retries = 1
                     attempt = 0
                     continue
                 else:
@@ -482,11 +580,16 @@ async def render_all_figures(
                             index,
                             attempt,
                             max_retries,
-                            exc,
+                            _summarize_render_error(exc),
                         )
                         await asyncio.sleep(2)
                     else:
-                        logger.exception("占位符 #%d 彻底失败 (已重试 %d 次): %s", index, max_retries, exc)
+                        logger.warning(
+                            "占位符 #%d 渲染失败，跳过该图 (已尝试 %d 次): %s",
+                            index,
+                            max_retries,
+                            _summarize_render_error(exc),
+                        )
                         return index, None
         return index, None
 

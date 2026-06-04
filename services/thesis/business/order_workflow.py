@@ -67,10 +67,14 @@ async def create_outline_record(user: User, req: PaperOutlineCreateRequest) -> P
     )
 
 
-async def create_order(user: User, req: PaperOrderCreateRequest) -> PaperOrderCreateResponse:
+async def create_order(
+    user: User,
+    req: PaperOrderCreateRequest,
+    idempotency_key: str | None = None,
+) -> PaperOrderCreateResponse:
     """基于用户确认的大纲创建待支付论文订单。"""
 
-    order = await PaperOrderService.create_order(user, req)
+    order = await PaperOrderService.create_order(user, req, idempotency_key)
     return PaperOrderCreateResponse(
         order_sn=order.order_sn,
         amount=order.cost_points / 10,
@@ -151,7 +155,8 @@ async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailRe
 async def run_paid_paper_order(order_id: int) -> None:
     """支付成功后的后台生成流程，失败时回写订单状态。"""
 
-    order = await PaperOrder.filter(id=order_id).first()
+    task_id = create_task_id()
+    order = await PaperOrderService.mark_generating_if_paid(order_id, task_id)
     if order is None:
         return
 
@@ -160,8 +165,6 @@ async def run_paid_paper_order(order_id: int) -> None:
         if not normalized.outline_json:
             raise RuntimeError("大纲不能为空")
 
-        task_id = create_task_id()
-        await PaperOrderService.mark_generating(order, task_id)
         await run_generate_task(
             task_id,
             normalized.title,

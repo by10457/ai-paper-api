@@ -14,6 +14,7 @@ shutdown（反序）:
   3. 关闭 MySQL
 """
 
+import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -30,10 +31,16 @@ from core.config import settings
 from core.database import close_db, init_db
 from core.logger import logger
 from core.redis import close_redis, init_redis
-from tasks.scheduler import register_jobs, scheduler
+from tasks import scheduler as task_scheduler
 
 PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 _NO_CACHE_EXTS = {".js", ".css", ".html"}
+
+
+def _should_start_scheduler() -> bool:
+    """判断当前进程是否应该启动 APScheduler。"""
+
+    return settings.APP_DEBUG and settings.SCHEDULER_ENABLED and "PYTEST_CURRENT_TEST" not in os.environ
 
 
 def _detect_lan_ip() -> str | None:
@@ -78,9 +85,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_db()
     await init_redis()
 
-    if settings.APP_DEBUG and settings.SCHEDULER_ENABLED:
-        register_jobs()
-        scheduler.start()
+    if _should_start_scheduler():
+        task_scheduler.register_jobs()
+        task_scheduler.scheduler.start()
         logger.info("⏰ 开发环境定时任务调度器已启动")
     elif settings.APP_DEBUG:
         logger.info("⏸️ 开发环境定时任务已通过 SCHEDULER_ENABLED=false 关闭")
@@ -92,8 +99,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── Shutdown ──────────────────────────────────────────
     logger.info("🛑 应用正在关闭...")
 
-    if scheduler.running:
-        scheduler.shutdown(wait=False)
+    if task_scheduler.scheduler.running:
+        task_scheduler.scheduler.shutdown(wait=False)
         logger.info("⏰ 定时任务调度器已停止")
 
     await close_redis()

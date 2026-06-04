@@ -4,6 +4,7 @@
 Gemini generateContent 三类文本调用协议。
 """
 
+import json
 from typing import Any, cast
 
 import httpx
@@ -20,6 +21,38 @@ ANTHROPIC_PROTOCOLS = {"anthropic", "claude", "claude-messages"}
 GEMINI_GENERATE_CONTENT_PROTOCOLS = {"gemini", "gemini-generate-content", "google-generate-content"}
 DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
 GEMINI_HTTP_TIMEOUT_SECONDS = 300.0
+
+
+class LLMProviderQuotaError(RuntimeError):
+    """模型供应商账号额度不足。"""
+
+
+class LLMProviderConfigError(RuntimeError):
+    """模型供应商认证或协议配置错误。"""
+
+
+def is_provider_quota_error(exc: BaseException) -> bool:
+    """判断异常是否来自模型供应商额度不足。"""
+
+    if isinstance(exc, LLMProviderQuotaError):
+        return True
+    text = str(exc).lower()
+    return "insufficient_user_quota" in text or "额度不足" in text
+
+
+def is_provider_config_error(exc: BaseException) -> bool:
+    """判断异常是否来自模型供应商认证或协议配置。"""
+
+    if isinstance(exc, LLMProviderConfigError):
+        return True
+    text = str(exc).lower()
+    return "authentication fails" in text or "unauthorized" in text or "invalid api key" in text
+
+
+def is_provider_platform_error(exc: BaseException) -> bool:
+    """判断异常是否属于平台侧模型服务问题。"""
+
+    return is_provider_quota_error(exc) or is_provider_config_error(exc)
 
 
 def _normalize_protocol(protocol: str) -> str:
@@ -249,7 +282,7 @@ class GeminiGenerateContentChatModel(BaseChatModel):
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise RuntimeError(self._build_http_error_message(exc.response)) from None
+                self._raise_http_error(exc.response)
             data = response.json()
         return cast(dict[str, Any], data)
 
@@ -261,7 +294,7 @@ class GeminiGenerateContentChatModel(BaseChatModel):
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
-                raise RuntimeError(self._build_http_error_message(exc.response)) from None
+                self._raise_http_error(exc.response)
             data = response.json()
         return cast(dict[str, Any], data)
 
@@ -289,6 +322,27 @@ class GeminiGenerateContentChatModel(BaseChatModel):
             f"Gemini generateContent 调用失败: status={response.status_code}, "
             f"url={self._build_safe_url()}, response={response_text}"
         )
+
+    def _raise_http_error(self, response: httpx.Response) -> None:
+        """把 HTTP 错误转换为业务可识别的模型异常。"""
+
+        error_code = ""
+        error_message = ""
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                error = data.get("error")
+                if isinstance(error, dict):
+                    error_code = str(error.get("code") or "")
+                    error_message = str(error.get("message") or "")
+        except json.JSONDecodeError:
+            pass
+
+        if error_code == "insufficient_user_quota" or "额度不足" in error_message:
+            raise LLMProviderQuotaError("模型供应商账号额度不足，请管理员充值或切换可用模型配置") from None
+        if response.status_code == 401 or "authentication fails" in response.text.lower():
+            raise LLMProviderConfigError("模型供应商认证失败，请管理员检查模型协议、Base URL 与 API Key 配置") from None
+        raise RuntimeError(self._build_http_error_message(response)) from None
 
     def _message_text(self, message: BaseMessage) -> str:
         """提取 LangChain 消息中的文本内容。"""

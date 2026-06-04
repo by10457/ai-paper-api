@@ -33,6 +33,7 @@ class PaperOrder(BaseModel):
         description="大纲记录",
     )
     order_sn = fields.CharField(max_length=64, unique=True, description="论文订单号")
+    idempotency_key = fields.CharField(max_length=128, null=True, description="请求幂等键")
     title = fields.CharField(max_length=200, description="论文标题")
     outline_json = fields.JSONField(description="用户确认后的大纲")
     config_form = fields.JSONField(null=True, description="生成配置快照")
@@ -55,3 +56,26 @@ class PaperOrder(BaseModel):
     class Meta:
         table = "paper_orders"
         table_description = "论文订单"
+        unique_together = (("user", "idempotency_key"),)
+
+
+class PaperDirectTask(BaseModel):
+    user: fields.ForeignKeyRelation[User]
+    user_id: int
+    user = fields.ForeignKeyField("models.User", related_name="paper_direct_tasks", description="用户")
+    idempotency_key = fields.CharField(max_length=128, null=True, description="请求幂等键")
+    task_id = fields.CharField(max_length=64, unique=True, description="生成任务 ID")
+    title = fields.CharField(max_length=200, description="论文标题")
+    request_payload = fields.JSONField(description="生成请求快照")
+    cost_points = fields.IntField(default=200, description="应扣积分")
+    refunded_points = fields.IntField(default=0, description="已退积分")
+    status = fields.CharField(max_length=32, default="paid", description="任务状态")
+    file_key = fields.CharField(max_length=512, null=True, description="七牛文件 key")
+    last_error = fields.CharField(max_length=500, null=True, description="最近一次错误")
+    started_at = fields.DatetimeField(null=True, description="开始生成时间")
+    completed_at = fields.DatetimeField(null=True, description="完成时间")
+
+    class Meta:
+        table = "paper_direct_tasks"
+        table_description = "兼容式论文生成任务"
+        unique_together = (("user", "idempotency_key"),)

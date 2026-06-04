@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI Paper API"
     APP_ENV: str = "development"
     APP_DEBUG: bool = True
+    APP_RELOAD: bool = False
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 10462
     WEB_CONCURRENCY: int | None = Field(default=None, ge=1)

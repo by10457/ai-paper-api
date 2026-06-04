@@ -60,6 +60,7 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "<</FIGURE>>\n"
                 "约束：\n"
                 "- Mermaid 图尽量紧凑，优先用 LR、TD 或 TB。\n"
+                "- Mermaid 只使用 graph/flowchart、sequenceDiagram、stateDiagram-v2 等稳定语法，禁止使用 usecaseDiagram。\n"
                 "- 节点数量尽量控制在 4-10 个以内，文字标签保持简洁。\n"
                 "- mermaid_code 中换行用 \\n 表示，引号用 \\\" 转义。\n\n"
                 "### 选择方案 B：标准数据图 → render_method: chart\n"

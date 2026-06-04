@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from fastapi import HTTPException, status
+
 from models.admin import ModelConfig
 from models.user import User
 from schemas.admin import ModelConfigCreateRequest, ModelConfigResponse, ModelConfigUpdateRequest
@@ -11,9 +13,26 @@ from services.admin.audit import write_audit_log
 from services.admin.helpers import get_model_config_or_404
 from services.admin.utils import mask_secret
 
+GEMINI_GENERATE_CONTENT_PROTOCOLS = {"gemini", "gemini-generate-content", "google-generate-content"}
+
 
 class AdminModelConfigService:
     """维护不同用途的大模型供应商、模型名和密钥配置。"""
+
+    @staticmethod
+    def _validate_model_protocol(*, provider: str, model_name: str, api_base_url: str) -> None:
+        """拦截明显不匹配的模型协议配置。"""
+
+        protocol = provider.strip().lower()
+        model = model_name.strip().lower()
+        base_url = api_base_url.strip().lower()
+        if protocol in GEMINI_GENERATE_CONTENT_PROTOCOLS and (
+            model.startswith("deepseek") or "api.deepseek.com" in base_url
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="DeepSeek 模型需要选择 OpenAI 兼容协议，不能选择 Gemini generateContent 协议",
+            )
 
     @staticmethod
     async def list_model_configs() -> list[ModelConfigResponse]:
@@ -30,6 +49,11 @@ class AdminModelConfigService:
     ) -> ModelConfigResponse:
         """创建模型配置；新配置设为默认时会取消同用途旧默认配置。"""
 
+        AdminModelConfigService._validate_model_protocol(
+            provider=data.provider,
+            model_name=data.model_name,
+            api_base_url=data.api_base_url,
+        )
         if data.is_default:
             # 同一 config_type 只允许存在一个默认配置，避免调用侧选择模型时产生歧义。
             await ModelConfig.filter(config_type=data.config_type).update(is_default=False)
@@ -57,6 +81,11 @@ class AdminModelConfigService:
         config = await get_model_config_or_404(config_id)
         before = AdminModelConfigService._model_config_snapshot(config)
         update_data = data.model_dump(exclude_unset=True)
+        AdminModelConfigService._validate_model_protocol(
+            provider=str(update_data.get("provider") or config.provider),
+            model_name=str(update_data.get("model_name") or config.model_name),
+            api_base_url=str(update_data.get("api_base_url") or config.api_base_url),
+        )
         next_type = str(update_data.get("config_type") or config.config_type)
         if update_data.get("is_default"):
             # 允许修改用途时同时设置默认，因此按更新后的 config_type 清理旧默认项。

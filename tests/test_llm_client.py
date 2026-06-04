@@ -1,9 +1,10 @@
 from typing import Any
 
+import httpx
 import pytest
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm.client import GeminiGenerateContentChatModel
+from llm.client import GeminiGenerateContentChatModel, LLMProviderConfigError, LLMProviderQuotaError
 
 
 @pytest.mark.asyncio
@@ -45,3 +46,35 @@ async def test_gemini_generate_content_model_uses_async_request(
         "maxOutputTokens": 128,
         "stopSequences": ["END"],
     }
+
+
+def test_gemini_generate_content_quota_error_is_sanitized() -> None:
+    model = GeminiGenerateContentChatModel(
+        model_name="gemini-test",
+        api_key="test-key",
+        base_url="https://cdn.12ai.org",
+    )
+    response = httpx.Response(
+        status_code=403,
+        json={
+            "error": {
+                "message": "用户额度不足, 剩余额度: ¥-0.499362",
+                "code": "insufficient_user_quota",
+            }
+        },
+    )
+
+    with pytest.raises(LLMProviderQuotaError, match="模型供应商账号额度不足"):
+        model._raise_http_error(response)
+
+
+def test_gemini_generate_content_auth_error_is_sanitized() -> None:
+    model = GeminiGenerateContentChatModel(
+        model_name="deepseek-chat",
+        api_key="test-key",
+        base_url="https://api.deepseek.com",
+    )
+    response = httpx.Response(status_code=401, text="Authentication Fails (governor)")
+
+    with pytest.raises(LLMProviderConfigError, match="模型供应商认证失败"):
+        model._raise_http_error(response)

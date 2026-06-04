@@ -15,7 +15,7 @@ from core.config import settings
 from core.database import close_db, init_db
 from core.logger import logger
 from core.redis import close_redis, init_redis
-from tasks.scheduler import register_jobs, scheduler
+from tasks import scheduler as task_scheduler
 
 
 def _install_signal_handlers(stop_event: asyncio.Event) -> None:
@@ -57,16 +57,16 @@ async def run_scheduler() -> None:
         await init_db()
         await init_redis()
 
-        register_jobs()
-        scheduler.start()
+        task_scheduler.register_jobs()
+        task_scheduler.scheduler.start()
         logger.info("⏰ 定时任务调度器已启动")
 
         await stop_event.wait()
     finally:
         logger.info("🛑 定时任务进程正在关闭...")
 
-        if scheduler.running:
-            scheduler.shutdown(wait=False)
+        if task_scheduler.scheduler.running:
+            task_scheduler.scheduler.shutdown(wait=False)
             logger.info("⏰ 定时任务调度器已停止")
 
         await close_redis()

@@ -1,5 +1,6 @@
 import asyncio
 import warnings
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,9 @@ import services.thesis.document.image_renderer as image_renderer
 from services.thesis.document.image_renderer import (
     GenerateContentImageGenerator,
     PlaceholderImageGenerator,
+    _normalize_mermaid_code,
     _resolve_chart_font,
+    _summarize_render_error,
     render_all_figures,
     render_chart,
     render_mermaid,
@@ -84,6 +87,36 @@ def test_render_mermaid_reports_missing_cli(
         asyncio.run(render_mermaid("graph TD; A-->B;", str(tmp_path / "flow.png")))
 
 
+def test_normalize_mermaid_usecase_diagram_to_flowchart() -> None:
+    code = """
+usecaseDiagram
+    actor 普通用户
+    actor 安全管理员
+    package "安全检测与防御系统" {
+        usecase "流量深度解析" as UC1
+        usecase "恶意请求阻断" as UC2
+    }
+    普通用户 --> UC1
+    UC1 --> UC2 : 触发安全阈值
+    安全管理员 --> UC2
+"""
+
+    normalized = _normalize_mermaid_code(code)
+
+    assert normalized.startswith("flowchart TD")
+    assert 'ACTOR_1["普通用户"]' in normalized
+    assert 'subgraph PKG_1["安全检测与防御系统"]' in normalized
+    assert 'UC1(["流量深度解析"])' in normalized
+    assert 'ACTOR_1 --> UC1' in normalized
+    assert 'UC1 -->|"触发安全阈值"| UC2' in normalized
+
+
+def test_summarize_render_error_keeps_first_line_only() -> None:
+    error = RuntimeError("Mermaid 渲染失败\nstack line 1\nstack line 2")
+
+    assert _summarize_render_error(error) == "Mermaid 渲染失败"
+
+
 def test_generate_content_image_error_url_masks_api_key() -> None:
     generator = GenerateContentImageGenerator(
         api_key="sk-secret",
@@ -98,7 +131,7 @@ def test_generate_content_image_error_url_masks_api_key() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clear_chart_font_cache() -> None:
+def clear_chart_font_cache() -> Generator[None]:
     _resolve_chart_font.cache_clear()
     yield
     _resolve_chart_font.cache_clear()

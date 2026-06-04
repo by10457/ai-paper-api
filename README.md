@@ -101,10 +101,10 @@ uv run pytest tests/ -v
 
 本服务提供 AI 论文生成中转接口，供订单、支付或其他业务系统调用：
 
-- `POST /api/v1/thesis/outline`：根据标题和配置生成论文大纲
-- `POST /api/v1/thesis/generate`：提交论文生成后台任务
-- `GET /api/v1/thesis/status/{task_id}`：查询任务状态
-- `GET /api/v1/thesis/download/{task_id}`：下载本地生成的 docx
+- `POST /api/v1/thesis/outline`：带 token 根据标题和配置生成论文大纲，不扣积分
+- `POST /api/v1/thesis/generate`：带 token 提交论文生成后台任务，并扣减论文生成积分
+- `GET /api/v1/thesis/status/{task_id}`：带 token 查询任务状态
+- `GET /api/v1/thesis/download/{task_id}`：带 token 下载本地生成的 docx
 
 论文订单流程接口：
 
@@ -117,7 +117,8 @@ uv run pytest tests/ -v
 - `GET /api/v1/thesis/orders/status?order_sn=...`：查询论文订单状态
 - `GET /api/v1/thesis/orders/download-url?order_sn=...`：获取论文下载链接
 
-调用论文订单流程接口时使用 `Authorization: Bearer <token>`。积分与余额按 1:10 折算，默认论文生成扣费 `PAPER_GENERATE_POINTS=200`。
+调用论文接口时使用 `Authorization: Bearer <token>`。积分与余额按 1:10 折算，默认论文生成扣费 200 积分。
+服务端业务系统调用 `POST /api/v1/thesis/generate` 或 `POST /api/v1/thesis/orders` 时，建议传入 `Idempotency-Key` 请求头，使用本地业务订单号等稳定值，避免 HTTP 重试导致重复扣费或重复生成。
 
 论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此静态文件路径可通过 `/output/thesis/{task_id}/...` 访问；生产下载入口仍建议由业务系统基于七牛文件 key 签发。
 

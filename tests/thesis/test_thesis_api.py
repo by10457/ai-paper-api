@@ -1,20 +1,28 @@
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import unquote
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
+from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation import status_store
 from services.thesis.generation import task_service as generation_task
 
 
 @pytest.fixture
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    async def fake_current_user() -> SimpleNamespace:
+        return SimpleNamespace(id=1, username="demo", points=1000, is_disabled=False)
+
+    app.dependency_overrides[get_api_token_or_jwt_user] = fake_current_user
     monkeypatch.setattr(status_store, "OUTPUT_ROOT", tmp_path)
     with TestClient(app) as test_client:
         yield test_client
+    app.dependency_overrides.clear()
 
 
 def test_thesis_routes_are_registered() -> None:
@@ -66,29 +74,33 @@ def test_outline_title_too_short_returns_422(client: TestClient) -> None:
 
 
 def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_generate(
+    task_create_calls: list[tuple[int, str]] = []
+
+    async def fake_create_direct_generate_task(
+        user: SimpleNamespace,
+        *,
         task_id: str,
         title: str,
-        outline: str,
-        cover_kwargs: dict | None = None,
-        codetype: str = "否",
-        wxquote: str = "标注",
-        language: str = "否",
-        wxnum: int = 25,
-    ) -> None:
+        request_payload: dict[str, object],
+        idempotency_key: str | None,
+    ) -> tuple[SimpleNamespace, bool]:
+        assert request_payload["title"] == title
+        assert idempotency_key == "wxy-paper-order-1"
+        task_create_calls.append((user.id, title))
         assert task_id
-        assert title
-        assert outline
-        assert cover_kwargs is not None
-        assert isinstance(cover_kwargs, dict)
-        assert cover_kwargs["target_word_count"] == 12000
-        assert cover_kwargs["student_id"] == "20260001"
-        assert cover_kwargs["student_class"] == "软件工程1班"
+        return SimpleNamespace(id=11, task_id=task_id, status="paid"), True
 
-    monkeypatch.setattr(generation_task, "run_generate_task", fake_run_generate)
+    async def fake_run_direct_generate_task(
+        direct_task_id: int,
+    ) -> None:
+        assert direct_task_id == 11
+
+    monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
+    monkeypatch.setattr(generation_task, "run_direct_generate_task", fake_run_direct_generate_task)
 
     response = client.post(
         "/api/v1/thesis/generate",
+        headers={"Idempotency-Key": "wxy-paper-order-1"},
         json={
             "title": "测试论文",
             "outline_json": [
@@ -107,6 +119,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
 
     assert response.status_code == 200
     task_id = response.json()["task_id"]
+    assert task_create_calls == [(1, "测试论文")]
 
     pending = client.get(f"/api/v1/thesis/status/{task_id}")
     assert pending.status_code == 200
@@ -132,6 +145,45 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
     assert payload["mermaid_count"] == 2
     assert payload["chart_count"] == 1
     assert payload["ai_image_count"] == 1
+
+
+def test_generate_reuses_idempotent_direct_task(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_create_direct_generate_task(
+        user: SimpleNamespace,
+        *,
+        task_id: str,
+        title: str,
+        request_payload: dict[str, object],
+        idempotency_key: str | None,
+    ) -> tuple[SimpleNamespace, bool]:
+        del user, task_id, title, request_payload
+        assert idempotency_key == "wxy-paper-order-1"
+        return SimpleNamespace(id=11, task_id="existing-task", status="generating"), False
+
+    async def fake_run_direct_generate_task(direct_task_id: int) -> None:
+        raise AssertionError(f"幂等复用任务不应该重复启动生成: {direct_task_id}")
+
+    monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
+    monkeypatch.setattr(generation_task, "run_direct_generate_task", fake_run_direct_generate_task)
+
+    response = client.post(
+        "/api/v1/thesis/generate",
+        headers={"Idempotency-Key": "wxy-paper-order-1"},
+        json={
+            "title": "测试论文",
+            "outline_json": [
+                {
+                    "chapter": "绪论",
+                    "sections": [
+                        {"name": "研究背景", "abstract": "正文" * 30},
+                    ],
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["task_id"] == "existing-task"
 
 
 def test_generate_invalid_target_word_count_returns_422(client: TestClient) -> None:
