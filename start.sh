@@ -25,11 +25,6 @@ APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.tencent.com/debian-s
 PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tencent.com/pypi/simple/}"
 PYPI_TRUSTED_HOST="${PYPI_TRUSTED_HOST:-mirrors.tencent.com}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
-BUILD_FRONTEND="${BUILD_FRONTEND:-true}"
-FRONTEND_DIR="${FRONTEND_DIR:-../ai-paper-web}"
-FRONTEND_APP_DIR="${FRONTEND_APP_DIR:-apps/web-antdv-next}"
-FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-apps/web-antdv-next/dist}"
-FRONTEND_INSTALL="${FRONTEND_INSTALL:-auto}"
 ADD_HOST_GATEWAY="${ADD_HOST_GATEWAY:-true}"
 RUN_AS_HOST_USER="${RUN_AS_HOST_USER:-true}"
 SANITIZED_ENV_FILE=""
@@ -58,11 +53,6 @@ Optional environment variables:
                     full: rebuild app through all Dockerfile stages.
                     deps: rebuild runtime base image only, then exit.
                     none: skip build and recreate container from IMAGE_NAME.
-  BUILD_FRONTEND    true/1 to build ai-paper-web and sync dist to ./public (default: true)
-  FRONTEND_DIR      Frontend monorepo path (default: ../ai-paper-web)
-  FRONTEND_APP_DIR  Frontend app package dir inside FRONTEND_DIR (default: apps/web-antdv-next)
-  FRONTEND_DIST_DIR Frontend dist dir inside FRONTEND_DIR (default: apps/web-antdv-next/dist)
-  FRONTEND_INSTALL  auto, true or false. auto installs only when node_modules is missing.
   APP_ROLE          Container role: auto, all, api or scheduler (default: auto)
                     auto: APP_DEBUG=true or SCHEDULER_ENABLED=false starts api only;
                     otherwise starts api+scheduler.
@@ -104,7 +94,6 @@ Examples:
   BUILD_MODE=full sh start.sh
   BUILD_MODE=none sh start.sh
   BUILD_MODE=deps sh start.sh
-  BUILD_FRONTEND=false sh start.sh
 EOF
 }
 
@@ -227,61 +216,6 @@ is_loopback_host() {
     localhost|127.0.0.1|0.0.0.0) return 0 ;;
     *) return 1 ;;
   esac
-}
-
-resolve_path() {
-  path="$1"
-  case "$path" in
-    /*) printf '%s\n' "$path" ;;
-    *) printf '%s\n' "$PROJECT_DIR/$path" ;;
-  esac
-}
-
-build_frontend() {
-  if ! is_truthy "$BUILD_FRONTEND"; then
-    log "Skipping frontend build: BUILD_FRONTEND=$BUILD_FRONTEND"
-    return 0
-  fi
-
-  frontend_path=$(resolve_path "$FRONTEND_DIR")
-  frontend_app_path="$frontend_path/$FRONTEND_APP_DIR"
-  frontend_dist_path="$frontend_path/$FRONTEND_DIST_DIR"
-  public_path="$PROJECT_DIR/public"
-
-  [ -f "$frontend_path/package.json" ] || fail "Frontend package.json not found: $frontend_path/package.json"
-  [ -f "$frontend_path/pnpm-lock.yaml" ] || fail "Frontend pnpm-lock.yaml not found: $frontend_path/pnpm-lock.yaml"
-  command -v pnpm >/dev/null 2>&1 || fail "pnpm is not installed or not in PATH."
-
-  case "$FRONTEND_INSTALL" in
-    auto)
-      if [ ! -d "$frontend_path/node_modules" ]; then
-        log "Installing frontend dependencies: $frontend_path"
-        pnpm --dir "$frontend_path" install --frozen-lockfile --registry "$NPM_REGISTRY"
-      else
-        log "Using existing frontend node_modules: $frontend_path/node_modules"
-      fi
-      ;;
-    true|TRUE|True|1|yes|YES|Yes|on|ON|On)
-      log "Installing frontend dependencies: $frontend_path"
-      pnpm --dir "$frontend_path" install --frozen-lockfile --registry "$NPM_REGISTRY"
-      ;;
-    false|FALSE|False|0|no|NO|No|off|OFF|Off)
-      log "Skipping frontend dependency install: FRONTEND_INSTALL=$FRONTEND_INSTALL"
-      ;;
-    *)
-      fail "Unsupported FRONTEND_INSTALL=$FRONTEND_INSTALL. Use auto, true or false."
-      ;;
-  esac
-
-  log "Building frontend app: $frontend_app_path"
-  pnpm --dir "$frontend_app_path" build
-  [ -f "$frontend_dist_path/index.html" ] || fail "Frontend build output not found: $frontend_dist_path/index.html"
-
-  log "Syncing frontend dist to backend public: $frontend_dist_path -> $public_path"
-  mkdir -p "$public_path/output"
-  find "$public_path" -mindepth 1 -maxdepth 1 ! -name output -exec rm -rf {} +
-  cp -R "$frontend_dist_path"/. "$public_path"/
-  mkdir -p "$public_path/output/thesis"
 }
 
 docker_build() {
@@ -477,17 +411,6 @@ esac
 
 mkdir -p "$HOST_LOG_PATH"
 mkdir -p "$HOST_OUTPUT_PATH"
-
-case "$BUILD_MODE" in
-  fast|full)
-    build_frontend
-    ;;
-  none)
-    if is_truthy "$BUILD_FRONTEND"; then
-      log "BUILD_MODE=none skips image build; frontend changes in ./public will not enter the existing image."
-    fi
-    ;;
-esac
 
 build_images
 
