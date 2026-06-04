@@ -7,6 +7,7 @@ from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
 from services.thesis.business import order_workflow
 from services.thesis.business.order_service import PaperOrderService
+from services.thesis.storage.qiniu_uploader import build_qiniu_private_download_url
 
 
 @pytest.fixture
@@ -67,3 +68,45 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
     assert payload["code"] == 200
     assert payload["data"]["record_id"] == 123
     assert payload["data"]["outline"][0]["chapter"] == "绪论"
+
+
+def test_qiniu_private_download_url_uses_configured_domain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.thesis.storage.qiniu_uploader.get_settings",
+        lambda: SimpleNamespace(
+            qiniu_access_key="access",
+            qiniu_secret_key="secret",
+            qiniu_domain="https://cdn-paper.yixun.club",
+            qiniu_download_expires=3600,
+        ),
+    )
+
+    url = build_qiniu_private_download_url("paper/task-id/论文 测试.docx")
+
+    assert url.startswith("https://cdn-paper.yixun.club/paper/task-id/")
+    assert "%E8%AE%BA%E6%96%87%20%E6%B5%8B%E8%AF%95.docx" in url
+    assert "e=" in url
+    assert "token=" in url
+
+
+def test_order_list_item_does_not_expose_download_url() -> None:
+    item = order_workflow._paper_order_list_item(
+        SimpleNamespace(
+            id=1,
+            order_sn="AP001",
+            title="测试论文",
+            status="completed",
+            cost_points=200,
+            paid_points=200,
+            refunded_points=0,
+            last_error="",
+            created_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:45:43+08:00"),
+            paid_at=None,
+            completed_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:49:18+08:00"),
+        )
+    )
+
+    assert item.has_file == 1
+    assert item.download_url is None

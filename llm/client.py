@@ -227,7 +227,10 @@ class GeminiGenerateContentChatModel(BaseChatModel):
 
         with httpx.Client(timeout=GEMINI_HTTP_TIMEOUT_SECONDS) as client:
             response = client.post(self._build_url(), json=payload)
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(self._build_http_error_message(exc.response)) from None
             data = response.json()
         return cast(dict[str, Any], data)
 
@@ -238,6 +241,23 @@ class GeminiGenerateContentChatModel(BaseChatModel):
         if not api_root.endswith("/v1beta"):
             api_root = f"{api_root}/v1beta"
         return f"{api_root}/models/{self.model_name}:generateContent?key={self.api_key}"
+
+    def _build_safe_url(self) -> str:
+        """生成脱敏后的 Gemini generateContent 请求地址，用于错误信息。"""
+
+        api_root = self.base_url.rstrip("/")
+        if not api_root.endswith("/v1beta"):
+            api_root = f"{api_root}/v1beta"
+        return f"{api_root}/models/{self.model_name}:generateContent?key=***"
+
+    def _build_http_error_message(self, response: httpx.Response) -> str:
+        """生成不包含 API Key 的 HTTP 错误信息。"""
+
+        response_text = response.text[:500]
+        return (
+            f"Gemini generateContent 调用失败: status={response.status_code}, "
+            f"url={self._build_safe_url()}, response={response_text}"
+        )
 
     def _message_text(self, message: BaseMessage) -> str:
         """提取 LangChain 消息中的文本内容。"""

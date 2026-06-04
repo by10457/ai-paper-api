@@ -1,13 +1,16 @@
 import asyncio
+import base64
 import json
 import logging
 import os
+import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -33,6 +36,12 @@ def _available_chart_fonts() -> list[tuple[str, str]]:
 
     matplotlib.use("Agg")
     from matplotlib import font_manager
+
+    for font_path in font_manager.findSystemFonts(fontext="ttf"):
+        try:
+            font_manager.fontManager.addfont(font_path)
+        except RuntimeError:
+            logger.debug("字体加载失败，跳过: %s", font_path)
 
     return [
         (str(item.name or "").strip(), str(getattr(item, "fname", "") or "").strip())
@@ -119,6 +128,9 @@ def _auto_crop_whitespace_fast(image_path: str, padding: int = 20) -> str:
 
 async def render_mermaid(mermaid_code: str, output_path: str) -> str:
     """将 Mermaid 代码渲染为 PNG。"""
+
+    if not shutil.which("mmdc"):
+        raise RuntimeError("Mermaid CLI 未安装，无法渲染 Mermaid 图，请安装 @mermaid-js/mermaid-cli")
 
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".mmd", delete=False) as temp_file:
         temp_file.write(mermaid_code)
@@ -314,7 +326,7 @@ class PlaceholderImageGenerator(ImageGenerator):
 class GenerateContentImageGenerator(ImageGenerator):
     """通过 Google generateContent 兼容接口调用文生图能力。"""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.12ai.org"):
+    def __init__(self, api_key: str, model: str, base_url: str = "https://cdn.12ai.org"):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -354,12 +366,6 @@ class GenerateContentImageGenerator(ImageGenerator):
         # generateContent 生图接口通常支持这些常见比例，异常值降级到论文插图常用的 16:9。
         real_aspect = aspect_ratio if aspect_ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"] else "16:9"
 
-        import base64
-
-        import httpx
-
-        api_root = self.base_url if self.base_url.endswith("/v1beta") else f"{self.base_url}/v1beta"
-        url = f"{api_root}/models/{self.model}:generateContent?key={self.api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -369,8 +375,11 @@ class GenerateContentImageGenerator(ImageGenerator):
         }
 
         async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
+            resp = await client.post(self._build_url(), json=payload)
+            try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(self._build_http_error_message(exc.response)) from None
             data = resp.json()
 
             candidates = data.get("candidates", [])
@@ -391,6 +400,27 @@ class GenerateContentImageGenerator(ImageGenerator):
                 f.write(base64.b64decode(base64_data))
 
         return output_path
+
+    def _build_url(self) -> str:
+        """生成 Gemini generateContent 图片请求地址。"""
+
+        api_root = self.base_url if self.base_url.endswith("/v1beta") else f"{self.base_url}/v1beta"
+        return f"{api_root}/models/{self.model}:generateContent?key={self.api_key}"
+
+    def _build_safe_url(self) -> str:
+        """生成脱敏后的 Gemini generateContent 请求地址，用于日志。"""
+
+        api_root = self.base_url if self.base_url.endswith("/v1beta") else f"{self.base_url}/v1beta"
+        return f"{api_root}/models/{self.model}:generateContent?key=***"
+
+    def _build_http_error_message(self, response: httpx.Response) -> str:
+        """生成不包含 API Key 的 HTTP 错误信息。"""
+
+        response_text = response.text[:500]
+        return (
+            f"图片模型 generateContent 调用失败: status={response.status_code}, "
+            f"url={self._build_safe_url()}, response={response_text}"
+        )
 
 
 async def render_all_figures(

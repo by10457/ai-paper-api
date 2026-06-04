@@ -109,7 +109,7 @@ async def get_order_download_url(user: User, order_sn: str) -> PaperOrderDownloa
 
     order = await PaperOrderService.get_order(user, order_sn)
     order = await _refresh_generating_order(order)
-    download_url = order.download_url or _build_order_download_url(order)
+    download_url = _build_order_download_url(order)
     if order.status != "completed" or not download_url:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="论文尚未生成完成")
     return PaperOrderDownloadUrlResponse(
@@ -198,7 +198,7 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         has_file=has_file,
         task_id=order.task_id,
         file_key=order.file_key,
-        download_url=order.download_url or _build_order_download_url(order),
+        download_url=None,
         error_msg=order.last_error,
     )
 
@@ -213,7 +213,7 @@ def _paper_order_list_item(order: PaperOrder) -> PaperOrderListItemResponse:
         paid_points=order.paid_points,
         refunded_points=order.refunded_points,
         has_file=1 if order.status == "completed" else 0,
-        download_url=order.download_url or _build_order_download_url(order),
+        download_url=None,
         error_msg=order.last_error,
         created_at=order.created_at.isoformat(),
         paid_at=order.paid_at.isoformat() if order.paid_at else None,
@@ -222,6 +222,8 @@ def _paper_order_list_item(order: PaperOrder) -> PaperOrderListItemResponse:
 
 
 def _build_order_download_url(order: PaperOrder) -> str | None:
-    if order.status != "completed" or not order.task_id:
+    if order.status != "completed" or not order.file_key:
         return None
-    return f"/api/v1/thesis/download/{order.task_id}"
+    from services.thesis.storage.qiniu_uploader import build_qiniu_private_download_url
+
+    return build_qiniu_private_download_url(order.file_key)

@@ -6,10 +6,12 @@ import pytest
 
 import services.thesis.document.image_renderer as image_renderer
 from services.thesis.document.image_renderer import (
+    GenerateContentImageGenerator,
     PlaceholderImageGenerator,
     _resolve_chart_font,
     render_all_figures,
     render_chart,
+    render_mermaid,
 )
 
 
@@ -70,6 +72,29 @@ def test_render_all_figures_dispatches_chart(tmp_path: Path) -> None:
     assert 0 in result
     assert result[0] is not None
     assert Path(result[0]).exists()
+
+
+def test_render_mermaid_reports_missing_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(image_renderer.shutil, "which", lambda _: None)
+
+    with pytest.raises(RuntimeError, match="Mermaid CLI 未安装"):
+        asyncio.run(render_mermaid("graph TD; A-->B;", str(tmp_path / "flow.png")))
+
+
+def test_generate_content_image_error_url_masks_api_key() -> None:
+    generator = GenerateContentImageGenerator(
+        api_key="sk-secret",
+        model="gemini-3-pro-image-preview",
+        base_url="https://cdn.12ai.org",
+    )
+
+    safe_url = generator._build_safe_url()
+
+    assert "sk-secret" not in safe_url
+    assert "key=***" in safe_url
 
 
 @pytest.fixture(autouse=True)

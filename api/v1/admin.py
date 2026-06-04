@@ -256,21 +256,6 @@ async def delete_model_config(
     return Response.ok()
 
 
-@router.post("/model-configs/{config_id}/test", response_model=Response[dict[str, str]], summary="测试模型配置")
-async def test_model_config(
-    config_id: int,
-    _: User = Depends(get_current_admin_user),
-) -> Response[dict[str, str]]:
-    """检查模型配置是否已保存并启用。"""
-
-    configs = await AdminService.list_model_configs()
-    config = next((item for item in configs if item.id == config_id), None)
-    if config is None:
-        return Response.error(code=404, message="模型配置不存在")
-    status_text = "ok" if config.is_enabled and bool(config.masked_api_key) else "unconfigured"
-    return Response.ok(data={"status": status_text, "message": "配置已保存，真实连通性将在模型调用时验证"})
-
-
 @router.get("/model-call-logs", response_model=Response[PageResponse[dict]], summary="查询模型调用日志")
 async def list_model_call_logs(
     page: int = 1,

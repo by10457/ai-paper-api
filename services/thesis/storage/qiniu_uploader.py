@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
+from urllib.parse import quote
 
 import qiniu
 
@@ -9,6 +10,23 @@ from core.config import get_settings
 logger = logging.getLogger(__name__)
 
 MAX_UPLOAD_RETRIES = 2
+
+
+def build_qiniu_private_download_url(file_key: str) -> str:
+    """根据七牛文件 key 生成私有空间临时下载链接。"""
+
+    settings = get_settings()
+    if not settings.qiniu_access_key or not settings.qiniu_secret_key or not settings.qiniu_domain:
+        raise RuntimeError("七牛云下载配置不完整")
+
+    normalized_key = file_key.strip().lstrip("/")
+    if not normalized_key:
+        raise RuntimeError("七牛云文件 key 为空")
+
+    encoded_key = "/".join(quote(part, safe="") for part in normalized_key.split("/"))
+    public_url = f"{settings.qiniu_domain.rstrip('/')}/{encoded_key}"
+    auth = qiniu.Auth(settings.qiniu_access_key, settings.qiniu_secret_key)
+    return str(auth.private_download_url(public_url, expires=settings.qiniu_download_expires))
 
 
 async def upload_to_qiniu(local_path: str, task_id: str) -> str:

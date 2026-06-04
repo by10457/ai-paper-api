@@ -65,6 +65,7 @@ class Settings(BaseSettings):
 
     # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
+    PUPPETEER_EXECUTABLE_PATH: str = ""
 
     # 参考文献检索配置：SerpApi 用于搜索，Crossref 邮箱用于规范请求来源。
     SERPAPI_KEY: str = ""
@@ -74,6 +75,8 @@ class Settings(BaseSettings):
     QINIU_ACCESS_KEY: str = ""
     QINIU_SECRET_KEY: str = ""
     QINIU_BUCKET: str = ""
+    QINIU_DOMAIN: str = ""
+    QINIU_DOWNLOAD_EXPIRES: int = Field(default=3600, ge=60)
 
     # 业务系统回调配置：生成完成后通知上游业务系统。
     PAPER_CALLBACK_URL: str = ""
@@ -102,6 +105,14 @@ class Settings(BaseSettings):
     @property
     def qiniu_bucket(self) -> str:
         return self.QINIU_BUCKET
+
+    @property
+    def qiniu_domain(self) -> str:
+        return self.QINIU_DOMAIN
+
+    @property
+    def qiniu_download_expires(self) -> int:
+        return self.QINIU_DOWNLOAD_EXPIRES
 
     @property
     def paper_callback_url(self) -> str:
