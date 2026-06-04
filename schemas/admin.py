@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from schemas.thesis import PaperOrderStatusResponse
-from schemas.user import MAX_BCRYPT_PASSWORD_BYTES, PointLedgerResponse, RechargeOrderResponse, UserResponse
+from schemas.user import MAX_BCRYPT_PASSWORD_BYTES, PointLedgerResponse, UserResponse
 
 
 class AdminOverviewResponse(BaseModel):
@@ -46,7 +46,6 @@ class AdminUserUpdateRequest(BaseModel):
     nickname: str | None = Field(None, max_length=64)
     avatar: str | None = Field(None, max_length=512)
     email: EmailStr | None = None
-    role: Literal["user", "admin"] | None = None
     is_disabled: bool | None = None
 
 
@@ -62,19 +61,8 @@ class AdminResetPasswordRequest(BaseModel):
 
 
 class AdminPointAdjustRequest(BaseModel):
-    delta: int = Field(..., description="正数充值，负数扣减")
+    delta: int = Field(..., ge=1, description="增加积分")
     reason: str = Field(..., min_length=1, max_length=255)
-
-
-class AdminRechargeReviewRequest(BaseModel):
-    status: Literal["approved", "rejected"]
-    admin_remark: str = Field(..., min_length=1, max_length=500)
-
-
-class AdminRechargeOrderResponse(RechargeOrderResponse):
-    user_id: int
-    username: str
-    reviewer_id: int | None = None
 
 
 class AdminUserDetailResponse(BaseModel):
@@ -127,9 +115,6 @@ class ModelConfigCreateRequest(BaseModel):
     model_name: str = Field(..., min_length=1, max_length=128)
     api_base_url: str = Field(..., min_length=1, max_length=255)
     api_key: str = Field(..., min_length=1, max_length=1024)
-    temperature: float = Field(default=0.7, ge=0, le=2)
-    max_tokens: int = Field(default=4096, ge=1)
-    timeout_seconds: int = Field(default=120, ge=1)
     is_enabled: bool = True
     is_default: bool = False
     remark: str | None = Field(None, max_length=255)
@@ -141,9 +126,6 @@ class ModelConfigUpdateRequest(BaseModel):
     model_name: str | None = Field(None, min_length=1, max_length=128)
     api_base_url: str | None = Field(None, min_length=1, max_length=255)
     api_key: str | None = Field(None, min_length=1, max_length=1024)
-    temperature: float | None = Field(None, ge=0, le=2)
-    max_tokens: int | None = Field(None, ge=1)
-    timeout_seconds: int | None = Field(None, ge=1)
     is_enabled: bool | None = None
     is_default: bool | None = None
     remark: str | None = Field(None, max_length=255)
@@ -156,9 +138,6 @@ class ModelConfigResponse(BaseModel):
     model_name: str
     api_base_url: str
     masked_api_key: str
-    temperature: float
-    max_tokens: int
-    timeout_seconds: int
     is_enabled: bool
     is_default: bool
     remark: str | None

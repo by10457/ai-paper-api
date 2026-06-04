@@ -8,22 +8,18 @@
 """
 
 import secrets
-from decimal import Decimal
 
 from tortoise import timezone
 
 from core.config import settings
 from core.logger import logger
 from core.security import hash_password
-from models.admin import RechargeOrder
 from models.user import User
-from schemas.common import PageResponse
-from schemas.user import RechargeOrderCreateRequest, RechargeOrderResponse, UserCreate, UserUpdate
-from services.user.constants import RECHARGE_STATUS_TEXT
+from schemas.user import UserCreate, UserUpdate
 
 
 class UserService:
-    """用户侧账号、API Token 和充值申请业务。"""
+    """用户侧账号和 API Token 业务。"""
 
     @staticmethod
     async def get_by_username(username: str) -> User | None:
@@ -95,58 +91,3 @@ class UserService:
             ]
         )
         return token
-
-    @staticmethod
-    async def create_recharge_order(user: User, data: RechargeOrderCreateRequest) -> RechargeOrderResponse:
-        """创建手动充值申请，金额按当前积分折算规则生成。"""
-
-        # 当前后台约定 10 积分折算 1 元，金额保留两位小数便于财务核对。
-        amount = (Decimal(data.points) / Decimal("10")).quantize(Decimal("0.01"))
-        order = await RechargeOrder.create(
-            user=user,
-            order_sn=UserService._generate_recharge_sn(),
-            points=data.points,
-            amount=amount,
-            pay_channel=data.pay_channel,
-            remark=data.remark,
-        )
-        return UserService.recharge_order_response(order)
-
-    @staticmethod
-    async def list_recharge_orders(user: User, page: int, page_size: int) -> PageResponse[RechargeOrderResponse]:
-        """分页查询当前用户自己的充值申请。"""
-
-        query = RechargeOrder.filter(user=user)
-        total = await query.count()
-        orders = await query.order_by("-id").offset((page - 1) * page_size).limit(page_size)
-        return PageResponse(
-            total=total,
-            page=page,
-            page_size=page_size,
-            items=[UserService.recharge_order_response(item) for item in orders],
-        )
-
-    @staticmethod
-    def recharge_order_response(order: RechargeOrder) -> RechargeOrderResponse:
-        """转换为用户侧充值申请响应结构。"""
-
-        return RechargeOrderResponse(
-            id=order.id,
-            order_sn=order.order_sn,
-            points=order.points,
-            amount=float(order.amount),
-            pay_channel=order.pay_channel,
-            status=order.status,
-            status_text=RECHARGE_STATUS_TEXT.get(order.status, order.status),
-            remark=order.remark,
-            admin_remark=order.admin_remark,
-            created_at=order.created_at,
-            reviewed_at=order.reviewed_at,
-        )
-
-    @staticmethod
-    def _generate_recharge_sn() -> str:
-        """生成充值申请单号，时间戳便于排序，随机后缀降低冲突概率。"""
-
-        timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
-        return f"RC{timestamp}{secrets.token_hex(4).upper()}"

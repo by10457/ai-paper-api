@@ -22,7 +22,7 @@ from services.admin.utils import mask_secret
 
 
 class AdminUserService:
-    """处理后台用户查询、创建、资料更新、密码重置和积分调整。"""
+    """处理后台用户查询、创建、资料更新、密码重置和积分增加。"""
 
     @staticmethod
     async def list_users(page: int, page_size: int, keyword: str | None = None) -> PageResponse[UserResponse]:
@@ -105,13 +105,12 @@ class AdminUserService:
         operator: User,
         ip_address: str | None = None,
     ) -> UserResponse:
-        """更新用户资料、角色或禁用状态，并记录变更快照。"""
+        """更新用户资料或禁用状态，并记录变更快照。"""
 
         user = await get_user_or_404(user_id)
         before = {
             "email": user.email,
             "nickname": user.nickname,
-            "role": user.role,
             "is_disabled": user.is_disabled,
         }
         update_data = data.model_dump(exclude_unset=True)
@@ -163,20 +162,16 @@ class AdminUserService:
         operator: User,
         ip_address: str | None = None,
     ) -> PointLedgerResponse:
-        """管理员调整用户积分，禁止产生负余额。"""
+        """管理员为用户增加积分。"""
 
         user = await get_user_or_404(user_id)
-        if data.delta == 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="积分变更不能为 0")
-        if data.delta < 0 and user.points + data.delta < 0:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="扣减后积分不能为负数")
-        # 使用数据库表达式更新积分，避免并发调整时覆盖其他已提交的积分变化。
+        # 使用数据库表达式更新积分，避免并发增加时覆盖其他已提交的积分变化。
         await User.filter(id=user.id).update(points=F("points") + data.delta)
         await user.refresh_from_db()
         ledger = await PointLedger.create(
             user=user,
             operator=operator,
-            change_type="admin_adjust",
+            change_type="admin_grant",
             delta=data.delta,
             balance_after=user.points,
             reason=data.reason,
@@ -186,9 +181,9 @@ class AdminUserService:
             action="adjust_points",
             target_type="user",
             target_id=user.id,
-            summary=f"调整用户 {user.username} 积分 {data.delta}",
+            summary=f"增加用户 {user.username} 积分 {data.delta}",
             before={"points": user.points - data.delta},
-            after={"points": user.points, "reason": data.reason},
+            after={"points": user.points, "delta": data.delta, "reason": data.reason},
             ip_address=ip_address,
         )
         return PointLedgerResponse.model_validate(ledger)

@@ -10,7 +10,7 @@ from tortoise.functions import Sum
 from core import redis as redis_module
 from core.config import settings
 from core.database import db_connected
-from models.admin import ModelCallLog
+from models.admin import ModelCallLog, ModelConfig
 from models.paper import PaperOrder
 from models.user import User
 from schemas.admin import AdminOverviewResponse
@@ -27,11 +27,12 @@ class AdminOverviewService:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
+        has_model_config = await ModelConfig.filter(is_enabled=True).exists()
         health = {
             "mysql": "ok" if db_connected else "degraded",
             "redis": "ok" if redis_module.redis_client is not None else "degraded",
             "storage": "ok" if settings.QINIU_BUCKET else "unconfigured",
-            "model": "ok" if settings.DEEPSEEK_API_KEY else "unconfigured",
+            "model": "ok" if has_model_config else "unconfigured",
         }
 
         return AdminOverviewResponse(

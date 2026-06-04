@@ -39,45 +39,14 @@ class PointLedger(BaseModel):
         table_description = "积分流水"
 
 
-class RechargeOrder(BaseModel):
-    """用户积分充值申请。"""
-
-    user: fields.ForeignKeyRelation[User]
-    reviewer: fields.ForeignKeyNullableRelation[User]
-    user_id: int
-    reviewer_id: int | None
-    user = fields.ForeignKeyField("models.User", related_name="recharge_orders", description="申请用户")
-    reviewer = fields.ForeignKeyField(
-        "models.User",
-        related_name="reviewed_recharge_orders",
-        null=True,
-        description="审核管理员",
-    )
-    order_sn = fields.CharField(max_length=64, unique=True, description="充值申请单号")
-    points = fields.IntField(description="申请充值积分")
-    amount = fields.DecimalField(max_digits=10, decimal_places=2, description="折算金额")
-    pay_channel = fields.CharField(max_length=32, default="manual", description="支付/沟通渠道")
-    status = fields.CharField(max_length=32, default="pending", description="pending/approved/rejected")
-    remark = fields.CharField(max_length=500, null=True, description="用户备注")
-    admin_remark = fields.CharField(max_length=500, null=True, description="管理员备注")
-    reviewed_at = fields.DatetimeField(null=True, description="审核时间")
-
-    class Meta:
-        table = "recharge_orders"
-        table_description = "用户积分充值申请"
-
-
 class ModelConfig(BaseModel):
     """大模型配置。"""
 
     config_type = fields.CharField(max_length=32, description="用途：outline/fulltext/figure/default")
-    provider = fields.CharField(max_length=64, description="模型供应商")
+    provider = fields.CharField(max_length=64, description="调用协议/服务商标识")
     model_name = fields.CharField(max_length=128, description="模型名称")
     api_base_url = fields.CharField(max_length=255, description="API Base URL")
     api_key = fields.CharField(max_length=1024, description="API Key")
-    temperature = fields.FloatField(default=0.7, description="温度")
-    max_tokens = fields.IntField(default=4096, description="最大 token")
-    timeout_seconds = fields.IntField(default=120, description="超时时间")
     is_enabled = fields.BooleanField(default=True, description="是否启用")
     is_default = fields.BooleanField(default=False, description="是否默认")
     remark = fields.CharField(max_length=255, null=True, description="备注")
@@ -105,7 +74,7 @@ class ModelCallLog(BaseModel):
         description="模型配置",
     )
     config_type = fields.CharField(max_length=32, description="调用用途")
-    provider = fields.CharField(max_length=64, description="模型供应商")
+    provider = fields.CharField(max_length=64, description="调用协议/服务商标识")
     model_name = fields.CharField(max_length=128, description="模型名称")
     input_tokens = fields.IntField(default=0, description="输入 token")
     output_tokens = fields.IntField(default=0, description="输出 token")

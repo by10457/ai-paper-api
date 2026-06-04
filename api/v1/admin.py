@@ -1,3 +1,5 @@
+"""管理后台接口路由。"""
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from api.dependencies.auth import get_current_admin_user
@@ -10,8 +12,6 @@ from schemas.admin import (
     AdminOrderManualFileRequest,
     AdminOverviewResponse,
     AdminPointAdjustRequest,
-    AdminRechargeOrderResponse,
-    AdminRechargeReviewRequest,
     AdminResetPasswordRequest,
     AdminUserCreateRequest,
     AdminUserDetailResponse,
@@ -30,6 +30,8 @@ router = APIRouter(prefix="/admin", tags=["管理后台"])
 
 
 def _client_ip(request: Request) -> str | None:
+    """读取客户端 IP，优先信任反向代理透传的首个地址。"""
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
@@ -37,6 +39,8 @@ def _client_ip(request: Request) -> str | None:
 
 
 def _order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
+    """将订单模型转换为管理端可复用的订单状态响应。"""
+
     return PaperOrderStatusResponse(
         order_sn=order.order_sn,
         status=order.status,
@@ -51,6 +55,8 @@ def _order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
 
 @router.get("/overview", response_model=Response[AdminOverviewResponse], summary="管理员工作台总览")
 async def get_overview(_: User = Depends(get_current_admin_user)) -> Response[AdminOverviewResponse]:
+    """查询管理后台首页总览数据。"""
+
     return Response.ok(data=await AdminService.overview())
 
 
@@ -61,6 +67,8 @@ async def list_users(
     keyword: str | None = None,
     _: User = Depends(get_current_admin_user),
 ) -> Response[PageResponse[UserResponse]]:
+    """分页查询用户列表。"""
+
     return Response.ok(data=await AdminService.list_users(page, page_size, keyword))
 
 
@@ -70,6 +78,8 @@ async def create_user(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[UserResponse]:
+    """创建用户账号。"""
+
     return Response.ok(data=await AdminService.create_user(data, current_admin, _client_ip(request)))
 
 
@@ -78,16 +88,20 @@ async def get_user_detail(
     user_id: int,
     _: User = Depends(get_current_admin_user),
 ) -> Response[AdminUserDetailResponse]:
+    """查询指定用户详情。"""
+
     return Response.ok(data=await AdminService.get_user_detail(user_id))
 
 
-@router.patch("/users/{user_id}", response_model=Response[UserResponse], summary="更新用户资料/角色/状态")
+@router.patch("/users/{user_id}", response_model=Response[UserResponse], summary="更新用户资料/状态")
 async def update_user(
     user_id: int,
     data: AdminUserUpdateRequest,
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[UserResponse]:
+    """更新指定用户资料或状态。"""
+
     return Response.ok(data=await AdminService.update_user(user_id, data, current_admin, _client_ip(request)))
 
 
@@ -98,47 +112,22 @@ async def reset_password(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[None]:
+    """重置指定用户密码。"""
+
     await AdminService.reset_password(user_id, data, current_admin, _client_ip(request))
     return Response.ok()
 
 
-@router.post("/users/{user_id}/points", response_model=Response[PointLedgerResponse], summary="调整用户积分")
+@router.post("/users/{user_id}/points", response_model=Response[PointLedgerResponse], summary="增加用户积分")
 async def adjust_points(
     user_id: int,
     data: AdminPointAdjustRequest,
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PointLedgerResponse]:
+    """为指定用户增加积分。"""
+
     return Response.ok(data=await AdminService.adjust_points(user_id, data, current_admin, _client_ip(request)))
-
-
-@router.get(
-    "/recharge-orders",
-    response_model=Response[PageResponse[AdminRechargeOrderResponse]],
-    summary="分页查询积分充值申请",
-)
-async def list_recharge_orders(
-    page: int = 1,
-    page_size: int = 10,
-    status: str | None = None,
-    keyword: str | None = None,
-    _: User = Depends(get_current_admin_user),
-) -> Response[PageResponse[AdminRechargeOrderResponse]]:
-    return Response.ok(data=await AdminService.list_recharge_orders(page, page_size, status, keyword))
-
-
-@router.post(
-    "/recharge-orders/{order_id}/review",
-    response_model=Response[AdminRechargeOrderResponse],
-    summary="审核积分充值申请",
-)
-async def review_recharge_order(
-    order_id: int,
-    data: AdminRechargeReviewRequest,
-    request: Request,
-    current_admin: User = Depends(get_current_admin_user),
-) -> Response[AdminRechargeOrderResponse]:
-    return Response.ok(data=await AdminService.review_recharge_order(order_id, data, current_admin, _client_ip(request)))
 
 
 @router.get("/orders", response_model=Response[PageResponse[AdminOrderListItem]], summary="分页查询全量订单")
@@ -150,6 +139,8 @@ async def list_orders(
     user_id: int | None = None,
     _: User = Depends(get_current_admin_user),
 ) -> Response[PageResponse[AdminOrderListItem]]:
+    """分页查询全量论文订单。"""
+
     return Response.ok(data=await AdminService.list_orders(page, page_size, keyword, status, user_id))
 
 
@@ -158,6 +149,8 @@ async def get_order_detail(
     order_id: int,
     _: User = Depends(get_current_admin_user),
 ) -> Response[AdminOrderDetailResponse]:
+    """查询指定论文订单详情。"""
+
     return Response.ok(data=await AdminService.get_order_detail(order_id))
 
 
@@ -168,6 +161,8 @@ async def retry_order(
     background_tasks: BackgroundTasks,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PaperOrderStatusResponse]:
+    """重试生成指定论文订单。"""
+
     order = await AdminService.retry_order(order_id, current_admin, _client_ip(request))
     background_tasks.add_task(run_paid_paper_order, order.id)
     return Response.ok(data=_order_status_response(order))
@@ -180,6 +175,8 @@ async def refund_order(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PaperOrderStatusResponse]:
+    """退回指定订单已扣积分。"""
+
     order = await AdminService.refund_order_points(order_id, current_admin, data.reason, _client_ip(request))
     return Response.ok(data=_order_status_response(order))
 
@@ -191,6 +188,8 @@ async def mark_order_failed(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PaperOrderStatusResponse]:
+    """标记指定订单生成失败。"""
+
     order = await AdminService.mark_order_failed(order_id, current_admin, data.reason, _client_ip(request))
     return Response.ok(data=_order_status_response(order))
 
@@ -202,6 +201,8 @@ async def attach_order_file(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PaperOrderStatusResponse]:
+    """为指定订单人工补发下载链接。"""
+
     order = await AdminService.attach_order_file(
         order_id,
         current_admin,
@@ -215,6 +216,8 @@ async def attach_order_file(
 
 @router.get("/model-configs", response_model=Response[list[ModelConfigResponse]], summary="查询大模型配置")
 async def list_model_configs(_: User = Depends(get_current_admin_user)) -> Response[list[ModelConfigResponse]]:
+    """查询管理后台维护的大模型配置。"""
+
     return Response.ok(data=await AdminService.list_model_configs())
 
 
@@ -224,6 +227,8 @@ async def create_model_config(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[ModelConfigResponse]:
+    """创建大模型配置。"""
+
     return Response.ok(data=await AdminService.create_model_config(data, current_admin, _client_ip(request)))
 
 
@@ -234,6 +239,8 @@ async def update_model_config(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[ModelConfigResponse]:
+    """更新大模型配置。"""
+
     return Response.ok(data=await AdminService.update_model_config(config_id, data, current_admin, _client_ip(request)))
 
 
@@ -243,6 +250,8 @@ async def delete_model_config(
     request: Request,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[None]:
+    """删除大模型配置。"""
+
     await AdminService.delete_model_config(config_id, current_admin, _client_ip(request))
     return Response.ok()
 
@@ -252,6 +261,8 @@ async def test_model_config(
     config_id: int,
     _: User = Depends(get_current_admin_user),
 ) -> Response[dict[str, str]]:
+    """检查模型配置是否已保存并启用。"""
+
     configs = await AdminService.list_model_configs()
     config = next((item for item in configs if item.id == config_id), None)
     if config is None:
@@ -266,6 +277,8 @@ async def list_model_call_logs(
     page_size: int = 10,
     _: User = Depends(get_current_admin_user),
 ) -> Response[PageResponse[dict]]:
+    """分页查询模型调用日志。"""
+
     return Response.ok(data=await AdminService.list_model_call_logs(page, page_size))
 
 
@@ -275,4 +288,6 @@ async def list_audit_logs(
     page_size: int = 10,
     _: User = Depends(get_current_admin_user),
 ) -> Response[PageResponse[dict]]:
+    """分页查询管理后台审计日志。"""
+
     return Response.ok(data=await AdminService.list_audit_logs(page, page_size))

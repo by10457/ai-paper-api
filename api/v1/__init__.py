@@ -1,8 +1,4 @@
-"""
-v1 版本路由汇总
-
-新增模块时，在这里 include 进来即可。
-"""
+"""v1 版本路由汇总。"""
 
 from fastapi import APIRouter
 
@@ -12,10 +8,15 @@ from api.v1.health import router as health_router
 from api.v1.thesis import router as thesis_router
 from api.v1.user import router as user_router
 
+ROUTE_REGISTRY: tuple[tuple[APIRouter, str, tuple[str, ...]], ...] = (
+    (health_router, "/health", ("健康检查",)),
+    (auth_router, "/auth", ("认证",)),
+    (user_router, "/users", ("用户",)),
+    (thesis_router, "", ()),
+    (admin_router, "", ()),
+)
+
 router = APIRouter()
 
-router.include_router(health_router, prefix="/health", tags=["健康检查"])
-router.include_router(auth_router, prefix="/auth", tags=["认证"])
-router.include_router(user_router, prefix="/users", tags=["用户"])
-router.include_router(thesis_router)
-router.include_router(admin_router)
+for route, prefix, tags in ROUTE_REGISTRY:
+    router.include_router(route, prefix=prefix, tags=list(tags) if tags else None)

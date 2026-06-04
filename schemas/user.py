@@ -9,7 +9,6 @@
 """
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
@@ -98,22 +97,3 @@ class PointLedgerResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
-
-class RechargeOrderCreateRequest(BaseModel):
-    points: int = Field(..., ge=1, le=1_000_000, description="申请充值积分")
-    pay_channel: Literal["wechat", "alipay", "bank", "manual"] = "manual"
-    remark: str | None = Field(None, max_length=500, description="付款凭证、联系方式或备注")
-
-
-class RechargeOrderResponse(BaseModel):
-    id: int
-    order_sn: str
-    points: int
-    amount: float
-    pay_channel: str
-    status: str
-    status_text: str
-    remark: str | None = None
-    admin_remark: str | None = None
-    created_at: datetime
-    reviewed_at: datetime | None = None

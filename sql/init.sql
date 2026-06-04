@@ -1,10 +1,7 @@
--- AI Paper database initialization.
--- If the database does not exist, create/select it first:
+-- AI Paper 数据库初始化脚本。
+-- 如果数据库尚未创建，请先执行：
 -- CREATE DATABASE IF NOT EXISTS your_database CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 -- USE your_database;
---
--- Production schemas are normally managed by aerich migrations. This file is a
--- consolidated manual initialization script for local setup or direct deployment.
 
 SET NAMES utf8mb4;
 
@@ -30,55 +27,6 @@ CREATE TABLE IF NOT EXISTS `users` (
   UNIQUE KEY `email` (`email`),
   UNIQUE KEY `api_token` (`api_token`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
-
-DROP PROCEDURE IF EXISTS add_column_if_not_exists;
-DELIMITER //
-CREATE PROCEDURE add_column_if_not_exists(IN p_table_name VARCHAR(64), IN p_column_name VARCHAR(64), IN p_alter_sql TEXT)
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM information_schema.COLUMNS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = p_table_name
-      AND COLUMN_NAME = p_column_name
-  ) THEN
-    SET @sql = p_alter_sql;
-    PREPARE stmt FROM @sql;
-    EXECUTE stmt;
-    DEALLOCATE PREPARE stmt;
-  END IF;
-END//
-DELIMITER ;
-
-DROP PROCEDURE IF EXISTS add_unique_index_if_not_exists;
-DELIMITER //
-CREATE PROCEDURE add_unique_index_if_not_exists(IN p_table_name VARCHAR(64), IN p_index_name VARCHAR(64), IN p_column_name VARCHAR(64), IN p_alter_sql TEXT)
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1
-    FROM information_schema.STATISTICS
-    WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = p_table_name
-      AND NON_UNIQUE = 0
-      AND (INDEX_NAME = p_index_name OR COLUMN_NAME = p_column_name)
-  ) THEN
-    SET @sql = p_alter_sql;
-    PREPARE stmt FROM @sql;
-    EXECUTE stmt;
-    DEALLOCATE PREPARE stmt;
-  END IF;
-END//
-DELIMITER ;
-
-CALL add_column_if_not_exists('users', 'points', 'ALTER TABLE `users` ADD COLUMN `points` INT NOT NULL DEFAULT 0 COMMENT ''积分余额''');
-CALL add_column_if_not_exists('users', 'api_token', 'ALTER TABLE `users` ADD COLUMN `api_token` VARCHAR(128) NULL COMMENT ''长期调用 Token''');
-CALL add_column_if_not_exists('users', 'api_token_created_at', 'ALTER TABLE `users` ADD COLUMN `api_token_created_at` DATETIME(6) NULL COMMENT ''调用 Token 创建时间''');
-CALL add_column_if_not_exists('users', 'api_token_last_used_at', 'ALTER TABLE `users` ADD COLUMN `api_token_last_used_at` DATETIME(6) NULL COMMENT ''调用 Token 最近使用时间''');
-CALL add_column_if_not_exists('users', 'api_token_call_count', 'ALTER TABLE `users` ADD COLUMN `api_token_call_count` INT NOT NULL DEFAULT 0 COMMENT ''调用 Token 使用次数''');
-CALL add_column_if_not_exists('users', 'role', 'ALTER TABLE `users` ADD COLUMN `role` VARCHAR(32) NOT NULL DEFAULT ''user'' COMMENT ''角色：user/admin''');
-CALL add_column_if_not_exists('users', 'is_disabled', 'ALTER TABLE `users` ADD COLUMN `is_disabled` TINYINT(1) NOT NULL DEFAULT 0 COMMENT ''是否禁用''');
-CALL add_column_if_not_exists('users', 'last_login_at', 'ALTER TABLE `users` ADD COLUMN `last_login_at` DATETIME(6) NULL COMMENT ''最近登录时间''');
-CALL add_unique_index_if_not_exists('users', 'api_token', 'api_token', 'ALTER TABLE `users` ADD UNIQUE KEY `api_token` (`api_token`)');
 
 INSERT INTO `users` (
   `username`,
@@ -173,9 +121,6 @@ CREATE TABLE IF NOT EXISTS `paper_orders` (
   CONSTRAINT `fk_paper_orders_outline_record_id` FOREIGN KEY (`outline_record_id`) REFERENCES `paper_outline_records` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='论文订单';
 
-CALL add_column_if_not_exists('paper_orders', 'refunded_points', 'ALTER TABLE `paper_orders` ADD COLUMN `refunded_points` INT NOT NULL DEFAULT 0 COMMENT ''已退积分''');
-CALL add_column_if_not_exists('paper_orders', 'refunded_at', 'ALTER TABLE `paper_orders` ADD COLUMN `refunded_at` DATETIME(6) NULL COMMENT ''退积分时间''');
-
 CREATE TABLE IF NOT EXISTS `point_ledgers` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
@@ -197,41 +142,15 @@ CREATE TABLE IF NOT EXISTS `point_ledgers` (
   CONSTRAINT `fk_point_ledgers_order_id` FOREIGN KEY (`order_id`) REFERENCES `paper_orders` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='积分流水';
 
-CREATE TABLE IF NOT EXISTS `recharge_orders` (
-  `id` INT NOT NULL AUTO_INCREMENT,
-  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-  `order_sn` VARCHAR(64) NOT NULL COMMENT '充值申请单号',
-  `points` INT NOT NULL COMMENT '申请充值积分',
-  `amount` DECIMAL(10,2) NOT NULL COMMENT '折算金额',
-  `pay_channel` VARCHAR(32) NOT NULL DEFAULT 'manual' COMMENT '支付/沟通渠道',
-  `status` VARCHAR(32) NOT NULL DEFAULT 'pending' COMMENT 'pending/approved/rejected',
-  `remark` VARCHAR(500) NULL COMMENT '用户备注',
-  `admin_remark` VARCHAR(500) NULL COMMENT '管理员备注',
-  `reviewed_at` DATETIME(6) NULL COMMENT '审核时间',
-  `user_id` INT NOT NULL COMMENT '申请用户',
-  `reviewer_id` INT NULL COMMENT '审核管理员',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uid_recharge_orders_order_sn` (`order_sn`),
-  KEY `idx_recharge_orders_user_id` (`user_id`),
-  KEY `idx_recharge_orders_reviewer_id` (`reviewer_id`),
-  KEY `idx_recharge_orders_status` (`status`),
-  CONSTRAINT `fk_recharge_orders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_recharge_orders_reviewer_id` FOREIGN KEY (`reviewer_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='用户积分充值申请';
-
 CREATE TABLE IF NOT EXISTS `model_configs` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   `config_type` VARCHAR(32) NOT NULL COMMENT '用途',
-  `provider` VARCHAR(64) NOT NULL COMMENT '模型供应商',
+  `provider` VARCHAR(64) NOT NULL COMMENT '调用协议/服务商标识',
   `model_name` VARCHAR(128) NOT NULL COMMENT '模型名称',
   `api_base_url` VARCHAR(255) NOT NULL COMMENT 'API Base URL',
   `api_key` VARCHAR(1024) NOT NULL COMMENT 'API Key',
-  `temperature` DOUBLE NOT NULL DEFAULT 0.7 COMMENT '温度',
-  `max_tokens` INT NOT NULL DEFAULT 4096 COMMENT '最大 token',
-  `timeout_seconds` INT NOT NULL DEFAULT 120 COMMENT '超时时间',
   `is_enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
   `is_default` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否默认',
   `remark` VARCHAR(255) NULL COMMENT '备注',
@@ -244,7 +163,7 @@ CREATE TABLE IF NOT EXISTS `model_call_logs` (
   `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
   `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   `config_type` VARCHAR(32) NOT NULL COMMENT '调用用途',
-  `provider` VARCHAR(64) NOT NULL COMMENT '模型供应商',
+  `provider` VARCHAR(64) NOT NULL COMMENT '调用协议/服务商标识',
   `model_name` VARCHAR(128) NOT NULL COMMENT '模型名称',
   `input_tokens` INT NOT NULL DEFAULT 0 COMMENT '输入 token',
   `output_tokens` INT NOT NULL DEFAULT 0 COMMENT '输出 token',
@@ -290,6 +209,3 @@ CREATE TABLE IF NOT EXISTS `audit_logs` (
   KEY `idx_audit_logs_operator_id` (`operator_id`),
   CONSTRAINT `fk_audit_logs_operator_id` FOREIGN KEY (`operator_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审计日志';
-
-DROP PROCEDURE IF EXISTS add_column_if_not_exists;
-DROP PROCEDURE IF EXISTS add_unique_index_if_not_exists;
