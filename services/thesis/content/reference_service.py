@@ -21,7 +21,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.output_parsers import StrOutputParser
 
 from core.config import get_settings
-from llm.client import create_llm
+from llm.client import create_configured_llm
 from llm.prompts.thesis_reference_prompt import (
     REFERENCE_FILTER_PROMPT,
     REFERENCE_KEYWORD_PROMPT,
@@ -305,7 +305,7 @@ async def generate_references(
         logger.info("SERPAPI_KEY 未配置，跳过参考文献生成")
         return ""
 
-    llm = create_llm(model=settings.thesis_outline_model, temperature=0, max_tokens=512)
+    llm = await create_configured_llm("outline", temperature=0, max_tokens=512)
 
     try:
         keyword_chain = REFERENCE_KEYWORD_PROMPT | llm | StrOutputParser()

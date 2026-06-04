@@ -1,19 +1,15 @@
-from functools import lru_cache
 from typing import Any, cast
 
 from langchain_core.output_parsers import StrOutputParser
 
-from core.config import get_settings
-from llm.client import create_llm
+from llm.client import create_configured_llm
 from llm.prompts.thesis_fulltext_prompt import THESIS_FULLTEXT_PROMPT
 
 
-@lru_cache
-def _build_fulltext_chain() -> Any:
-    settings = get_settings()
-    llm = create_llm(
-        model=settings.thesis_fulltext_model,
-        # deepseek-reasoner 不支持 temperature；create_llm 内部会自动过滤。
+async def _build_fulltext_chain() -> Any:
+    llm = await create_configured_llm(
+        "fulltext",
+        # 部分推理模型不支持 temperature，模型客户端内部会自动过滤。
         max_tokens=32768,
     )
     return THESIS_FULLTEXT_PROMPT | llm | StrOutputParser()
@@ -27,7 +23,7 @@ async def generate_fulltext(
 ) -> str:
     """阶段②：根据大纲生成论文正文（含图片占位符）。"""
 
-    chain = _build_fulltext_chain()
+    chain = await _build_fulltext_chain()
 
     # 经验修正：LLM 实际输出字数约为 prompt 中指定字数的 1.7 倍，
     # 因此将传给 prompt 的字数除以 1.7，使最终输出贴近用户期望。

@@ -2,8 +2,7 @@ import logging
 
 from langchain_core.output_parsers import StrOutputParser
 
-from core.config import get_settings
-from llm.client import create_llm
+from llm.client import create_configured_llm
 from llm.prompts.thesis_abstract_prompt import (
     ABSTRACT_COMBINED_PROMPT,
     ACKNOWLEDGMENT_PROMPT,
@@ -59,9 +58,8 @@ def _parse_combined_abstract(raw: str) -> dict[str, str]:
 
 async def generate_abstracts(full_text: str) -> dict[str, str]:
     """单次 LLM 调用同时生成中英文摘要，英文为中文的忠实翻译。"""
-    settings = get_settings()
-    llm = create_llm(
-        model=settings.thesis_outline_model,
+    llm = await create_configured_llm(
+        "outline",
         temperature=0.3,
         max_tokens=2048,
     )
@@ -80,9 +78,8 @@ async def generate_abstracts(full_text: str) -> dict[str, str]:
 
 async def generate_acknowledgment(title: str, advisor: str) -> str:
     """生成致谢正文。"""
-    settings = get_settings()
-    llm = create_llm(
-        model=settings.thesis_outline_model,
+    llm = await create_configured_llm(
+        "outline",
         temperature=0.7,
         max_tokens=1024,
     )

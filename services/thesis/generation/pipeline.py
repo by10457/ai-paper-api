@@ -4,6 +4,7 @@ from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
 
+from llm.client import get_enabled_model_config
 from services.thesis.content.abstract_service import (
     generate_abstracts,
     generate_acknowledgment,
@@ -12,9 +13,9 @@ from services.thesis.content.fulltext_service import generate_fulltext
 from services.thesis.content.reference_service import generate_references
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.document.image_renderer import (
+    GenerateContentImageGenerator,
     ImageGenerator,
     PlaceholderImageGenerator,
-    TwelveAIGenerator,
     render_all_figures,
 )
 from services.thesis.document.placeholder import (
@@ -121,18 +122,24 @@ async def generate_thesis_document(
     placeholders = extract_figure_placeholders(full_text)
     mermaid_list, chart_list, ai_image_list, fallback_list = split_by_render_method(placeholders)
 
-    # if settings.openrouter_api_key:
-    #     image_generator = OpenRouterImageGenerator(
-    #         api_key=settings.openrouter_api_key,
-    #         model=settings.openrouter_image_model,
-    #     )
-    # elif settings.twelveai_api_key:
-    if settings.twelveai_api_key:
-        image_generator: ImageGenerator = TwelveAIGenerator(
-            api_key=settings.twelveai_api_key,
-            model=settings.twelveai_image_model,
+    needs_image_model = bool(ai_image_list or mermaid_list)
+    image_config = None
+    if needs_image_model:
+        try:
+            image_config = await get_enabled_model_config("figure", allow_default=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("读取图片模型配置失败，使用占位图生成器。原因: %s", exc)
+    image_model_protocol = image_config.provider.lower() if image_config else ""
+
+    if image_config and image_model_protocol in {"google-generate-content", "gemini-generate-content"}:
+        image_generator: ImageGenerator = GenerateContentImageGenerator(
+            api_key=image_config.api_key,
+            model=image_config.model_name,
+            base_url=image_config.api_base_url,
         )
     else:
+        if image_config:
+            logger.warning("不支持的图片模型协议 %s，使用占位图生成器", image_model_protocol)
         image_generator = PlaceholderImageGenerator()
 
     image_paths = await render_all_figures(

@@ -63,54 +63,25 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/app.log"
 
-    # ── LLM / 论文生成 ───────────────────────────────────
-    DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
-    DEEPSEEK_MODEL: str = "deepseek-chat"
-    THESIS_OUTLINE_MODEL: str = "deepseek-chat"
-    THESIS_FULLTEXT_MODEL: str = "deepseek-reasoner"
+    # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
-    TWELVEAI_API_KEY: str = ""
-    TWELVEAI_IMAGE_MODEL: str = "gemini-3-pro-image-preview"
+
+    # 参考文献检索配置：SerpApi 用于搜索，Crossref 邮箱用于规范请求来源。
     SERPAPI_KEY: str = ""
     CROSSREF_MAILTO: str = ""
+
+    # 七牛云上传配置：论文生成完成后，可将 docx 上传到对象存储。
     QINIU_ACCESS_KEY: str = ""
     QINIU_SECRET_KEY: str = ""
     QINIU_BUCKET: str = ""
+
+    # 业务系统回调配置：生成完成后通知上游业务系统。
     PAPER_CALLBACK_URL: str = ""
     PAPER_CALLBACK_SECRET: str = ""
 
     @property
-    def deepseek_api_key(self) -> str:
-        return self.DEEPSEEK_API_KEY
-
-    @property
-    def deepseek_base_url(self) -> str:
-        return self.DEEPSEEK_BASE_URL
-
-    @property
-    def deepseek_model(self) -> str:
-        return self.DEEPSEEK_MODEL
-
-    @property
-    def thesis_outline_model(self) -> str:
-        return self.THESIS_OUTLINE_MODEL
-
-    @property
-    def thesis_fulltext_model(self) -> str:
-        return self.THESIS_FULLTEXT_MODEL
-
-    @property
     def thesis_output_root(self) -> str:
         return self.THESIS_OUTPUT_ROOT
-
-    @property
-    def twelveai_api_key(self) -> str:
-        return self.TWELVEAI_API_KEY
-
-    @property
-    def twelveai_image_model(self) -> str:
-        return self.TWELVEAI_IMAGE_MODEL
 
     @property
     def serpapi_key(self) -> str:

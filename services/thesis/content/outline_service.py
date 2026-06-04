@@ -1,21 +1,17 @@
 import json
 import re
-from functools import lru_cache
 from typing import Any, cast
 
 from langchain_core.output_parsers import StrOutputParser
 
-from core.config import get_settings
-from llm.client import create_llm
+from llm.client import create_configured_llm
 from llm.prompts.thesis_outline_prompt import THESIS_OUTLINE_PROMPT
 from schemas.thesis import OutlinePayload
 
 
-@lru_cache
-def _build_outline_chain() -> Any:
-    settings = get_settings()
-    llm = create_llm(
-        model=settings.thesis_outline_model,
+async def _build_outline_chain() -> Any:
+    llm = await create_configured_llm(
+        "outline",
         temperature=0.4,
         max_tokens=2048,
     )
@@ -67,7 +63,7 @@ async def generate_outline(
 ) -> dict[str, Any]:
     """阶段①：根据论文标题生成结构化 JSON 大纲。"""
 
-    chain = _build_outline_chain()
+    chain = await _build_outline_chain()
     result = await chain.ainvoke(
         {
             "title": title,

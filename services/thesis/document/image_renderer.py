@@ -311,12 +311,13 @@ class PlaceholderImageGenerator(ImageGenerator):
         return output_path
 
 
-class TwelveAIGenerator(ImageGenerator):
-    """通过 12AI API (Google Gemini) 调用文生图能力进行渲染。"""
+class GenerateContentImageGenerator(ImageGenerator):
+    """通过 Google generateContent 兼容接口调用文生图能力。"""
 
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, base_url: str = "https://api.12ai.org"):
         self.api_key = api_key
         self.model = model
+        self.base_url = base_url.rstrip("/")
 
     async def generate(
         self,
@@ -350,14 +351,15 @@ class TwelveAIGenerator(ImageGenerator):
             f"- Use soft, professional colors (light blue, light gray, white, pastel tones)."
         )
 
-        # 12AI 明确对 16:9 做了支持，如果遇到特殊或者无法识别的，可以通过 model 参数传入。
+        # generateContent 生图接口通常支持这些常见比例，异常值降级到论文插图常用的 16:9。
         real_aspect = aspect_ratio if aspect_ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"] else "16:9"
 
         import base64
 
         import httpx
 
-        url = f"https://api.12ai.org/v1beta/models/{self.model}:generateContent?key={self.api_key}"
+        api_root = self.base_url if self.base_url.endswith("/v1beta") else f"{self.base_url}/v1beta"
+        url = f"{api_root}/models/{self.model}:generateContent?key={self.api_key}"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
@@ -373,7 +375,7 @@ class TwelveAIGenerator(ImageGenerator):
 
             candidates = data.get("candidates", [])
             if not candidates:
-                raise RuntimeError(f"12AI API returned no candidates. Full response: {data}")
+                raise RuntimeError(f"Image model API returned no candidates. Full response: {data}")
 
             parts = candidates[0].get("content", {}).get("parts", [])
             base64_data = None
@@ -383,7 +385,7 @@ class TwelveAIGenerator(ImageGenerator):
                     break
 
             if not base64_data:
-                raise RuntimeError(f"12AI API returned no image section in parts: {parts}")
+                raise RuntimeError(f"Image model API returned no image section in parts: {parts}")
 
             with open(output_path, "wb") as f:
                 f.write(base64.b64decode(base64_data))
