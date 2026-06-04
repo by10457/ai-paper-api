@@ -121,10 +121,9 @@ uv run pytest tests/ -v
 
 论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此静态文件路径可通过 `/output/thesis/{task_id}/...` 访问；生产下载入口仍建议由业务系统基于七牛文件 key 签发。
 
-需要在 `.env` / `.env.docker` 中补齐大模型、七牛和业务系统回调配置：
+文本生成模型和图片生成模型统一在管理后台“模型配置”中维护，环境变量不再保存模型 API Key、Base URL 或模型名。需要在 `.env` / `.env.docker` 中补齐论文输出目录、七牛和业务系统回调配置：
 
 ```env
-DEEPSEEK_API_KEY=
 THESIS_OUTPUT_ROOT=public/output/thesis
 QINIU_ACCESS_KEY=
 QINIU_SECRET_KEY=
