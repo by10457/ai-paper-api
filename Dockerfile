@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-
 ARG PYTHON_VERSION=3.13
 ARG RUNTIME_BASE_IMAGE=localhost/ai-paper-api:runtime-base
 ARG MERMAID_CLI_VERSION=10.9.1
