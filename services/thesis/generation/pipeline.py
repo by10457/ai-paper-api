@@ -148,7 +148,8 @@ async def generate_thesis_document(
         output_dir=str(output_dir / "images"),
     )
 
-    docx_path = build_word_document(
+    docx_path = await asyncio.to_thread(
+        build_word_document,
         full_text=full_text,
         placeholders=placeholders,
         image_paths=image_paths,

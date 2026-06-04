@@ -3,7 +3,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from tortoise import timezone
-from tortoise.expressions import F
+from tortoise.transactions import in_transaction
 
 from core.config import settings
 from models.admin import PointLedger
@@ -72,38 +72,59 @@ class PaperOrderService:
     async def pay_order(user: User, order: PaperOrder) -> bool:
         """扣减积分并标记订单已支付，返回是否需要启动生成。"""
 
-        if order.status not in {"created", "failed"}:
-            return False
+        async with in_transaction() as conn:
+            locked_order = (
+                await PaperOrder.filter(id=order.id, user_id=user.id)
+                .using_db(conn)
+                .select_for_update()
+                .first()
+            )
+            if locked_order is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="论文订单不存在")
 
-        if order.status == "failed" and order.paid_points > order.refunded_points:
+            if locked_order.status not in {"created", "failed"}:
+                return False
+
+            if locked_order.status == "failed" and locked_order.paid_points > locked_order.refunded_points:
+                now = timezone.now()
+                locked_order.status = "paid"
+                locked_order.last_error = ""
+                locked_order.paid_at = locked_order.paid_at or now
+                await locked_order.save(
+                    using_db=conn,
+                    update_fields=["status", "paid_at", "last_error", "updated_at"],
+                )
+                return True
+
+            locked_user = await User.filter(id=user.id).using_db(conn).select_for_update().first()
+            if locked_user is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+            if locked_user.points < locked_order.cost_points:
+                raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="积分余额不足")
+
             now = timezone.now()
-            order.status = "paid"
-            order.last_error = ""
-            order.paid_at = order.paid_at or now
-            await order.save(update_fields=["status", "paid_at", "last_error", "updated_at"])
-            return True
+            locked_user.points -= locked_order.cost_points
+            await locked_user.save(using_db=conn, update_fields=["points", "updated_at"])
 
-        updated = await User.filter(id=user.id, points__gte=order.cost_points).update(
-            points=F("points") - order.cost_points,
-        )
-        if updated == 0:
-            raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="积分余额不足")
+            locked_order.status = "paid"
+            locked_order.paid_points = locked_order.cost_points
+            locked_order.paid_at = now
+            locked_order.last_error = ""
+            await locked_order.save(
+                using_db=conn,
+                update_fields=["status", "paid_points", "paid_at", "last_error", "updated_at"],
+            )
+            await PointLedger.create(
+                using_db=conn,
+                user=locked_user,
+                order=locked_order,
+                change_type="paper_deduct",
+                delta=-locked_order.cost_points,
+                balance_after=locked_user.points,
+                reason=f"论文订单 {locked_order.order_sn} 积分支付",
+            )
 
-        now = timezone.now()
-        order.status = "paid"
-        order.paid_points = order.cost_points
-        order.paid_at = now
-        order.last_error = ""
-        await order.save(update_fields=["status", "paid_points", "paid_at", "last_error", "updated_at"])
         await user.refresh_from_db()
-        await PointLedger.create(
-            user=user,
-            order=order,
-            change_type="paper_deduct",
-            delta=-order.cost_points,
-            balance_after=user.points,
-            reason=f"论文订单 {order.order_sn} 积分支付",
-        )
         return True
 
     @staticmethod

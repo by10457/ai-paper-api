@@ -1,8 +1,10 @@
 import asyncio
 import tempfile
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.generation import pipeline as thesis
@@ -42,6 +44,10 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
         calls.append("render")
         return {}
 
+    async def fake_to_thread(func: Callable[..., str], /, *args: Any, **kwargs: Any) -> str:
+        calls.append("to_thread")
+        return func(*args, **kwargs)
+
     def fake_build_word_document(**kwargs) -> str:
         calls.append(("build", kwargs["references"]))
         return "/tmp/fake.docx"
@@ -54,6 +60,7 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
     monkeypatch.setattr(thesis, "split_by_render_method", lambda placeholders: ([], [], [], []))
     monkeypatch.setattr(thesis, "render_all_figures", fake_render_all_figures)
     monkeypatch.setattr(thesis, "build_word_document", fake_build_word_document)
+    monkeypatch.setattr(thesis.asyncio, "to_thread", fake_to_thread)
     monkeypatch.setattr(
         "core.config.get_settings",
         lambda: SimpleNamespace(twelveai_api_key="", twelveai_image_model=""),
@@ -70,6 +77,7 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
 
     assert calls[0] == "references"
     assert calls[1] == ("fulltext", references_text, 9000)
+    assert "to_thread" in calls
     assert ("build", references_text) in calls
     assert result.docx_path == "/tmp/fake.docx"
 

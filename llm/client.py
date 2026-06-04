@@ -165,6 +165,25 @@ class GeminiGenerateContentChatModel(BaseChatModel):
         del run_manager, kwargs
         payload = self._build_payload(messages, stop)
         data = self._request_generate_content(payload)
+        return self._build_chat_result(data)
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """异步调用 Gemini generateContent，并转换为 LangChain ChatResult。"""
+
+        del run_manager, kwargs
+        payload = self._build_payload(messages, stop)
+        data = await self._arequest_generate_content(payload)
+        return self._build_chat_result(data)
+
+    def _build_chat_result(self, data: dict[str, Any]) -> ChatResult:
+        """把 Gemini 响应字典转换为 LangChain ChatResult。"""
+
         text = self._extract_text(data)
         return ChatResult(
             generations=[
@@ -227,6 +246,18 @@ class GeminiGenerateContentChatModel(BaseChatModel):
 
         with httpx.Client(timeout=GEMINI_HTTP_TIMEOUT_SECONDS) as client:
             response = client.post(self._build_url(), json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                raise RuntimeError(self._build_http_error_message(exc.response)) from None
+            data = response.json()
+        return cast(dict[str, Any], data)
+
+    async def _arequest_generate_content(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """异步调用 Gemini generateContent 接口并返回 JSON 字典。"""
+
+        async with httpx.AsyncClient(timeout=GEMINI_HTTP_TIMEOUT_SECONDS) as client:
+            response = await client.post(self._build_url(), json=payload)
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as exc:
