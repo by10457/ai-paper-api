@@ -25,6 +25,7 @@ from typing import cast
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # 路由注册（按版本组织）
 from api.v1 import router as v1_router
@@ -36,7 +37,33 @@ from tasks import scheduler as task_scheduler
 from tasks.paper_worker import run_paper_generation_worker
 
 PUBLIC_DIR = Path(__file__).resolve().parent / "public"
-_NO_CACHE_EXTS = {".js", ".css", ".html"}
+_NO_CACHE_STATIC_PATHS = {"/", "/index.html", "/_app.config.js"}
+_IMMUTABLE_STATIC_EXTS = {
+    ".css",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".js",
+    ".mjs",
+    ".png",
+    ".svg",
+    ".webp",
+    ".woff",
+    ".woff2",
+}
+
+
+class SPAStaticFiles(StaticFiles):
+    """支持 Vue Router history 模式的静态文件服务。"""
+
+    async def get_response(self, path: str, scope: dict) -> Response:
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404 and not Path(path).suffix:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def _should_start_scheduler() -> bool:
@@ -141,19 +168,21 @@ app.add_middleware(
 
 
 # ── 静态资源缓存控制中间件 ──────────────────────────────────────
-# StaticFiles 默认不设置 Cache-Control，浏览器会按启发式规则自行缓存，
-# 导致修改 JS/CSS/HTML 后刷新页面仍拿到旧文件。
-# 此中间件对静态入口和 .js/.css/.html 强制加 no-cache，开发阶段始终获取最新版本。
+# Vite 构建产物中的 JS/CSS 文件名带内容 hash，可长缓存；HTML 入口和运行时配置
+# 需要禁缓存，避免发布后仍加载旧入口或旧 API 地址。
 
 
 @app.middleware("http")
 async def no_cache_for_static(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     response = await call_next(request)
     path = request.url.path
-    if path == "/" or any(path.endswith(ext) for ext in _NO_CACHE_EXTS):
+    content_type = response.headers.get("content-type", "")
+    if path in _NO_CACHE_STATIC_PATHS or path.endswith(".html") or content_type.startswith("text/html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
+    elif response.status_code == 200 and any(path.endswith(ext) for ext in _IMMUTABLE_STATIC_EXTS):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 
 
@@ -164,6 +193,6 @@ app.include_router(v1_router, prefix="/api/v1")
 # ── 静态文件（最后挂载，避免拦截 API 请求）──────────────────────
 
 if PUBLIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(PUBLIC_DIR), html=True), name="static")
+    app.mount("/", SPAStaticFiles(directory=str(PUBLIC_DIR), html=True), name="static")
 else:
     logger.warning(f"静态目录不存在：{PUBLIC_DIR}")

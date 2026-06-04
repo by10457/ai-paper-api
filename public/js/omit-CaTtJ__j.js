@@ -1,0 +1,1 @@
+import{t as e}from"./objectSpread2-BHJFn0bq.js";function t(t,n){let r=e({},t);return n.forEach(e=>{delete r[e]}),r}export{t};

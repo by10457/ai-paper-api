@@ -1,0 +1,1 @@
+function e(e){return Number.isSafeInteger(e)&&e>=0}function t(e){return e instanceof Map}function n(t){return t!=null&&typeof t!=`function`&&e(t.length)}function r(e){return t(e)}function i(e){return e==null?[]:n(e)||r(e)?Array.from(e):typeof e==`object`?Object.values(e):[]}export{i as t};

@@ -6,6 +6,7 @@ cd "$PROJECT_DIR"
 
 APP_ROLE="${APP_ROLE:-auto}"
 IMAGE_NAME="${IMAGE_NAME:-ai-paper-api:latest}"
+RUNTIME_BASE_IMAGE="${RUNTIME_BASE_IMAGE:-localhost/ai-paper-api:runtime-base}"
 ENV_FILE="${ENV_FILE:-.env}"
 HOST_PORT="${HOST_PORT:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-}"
@@ -15,6 +16,14 @@ HOST_OUTPUT_DIR="${HOST_OUTPUT_DIR:-public/output/thesis}"
 CONTAINER_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR:-/app/public/output/thesis}"
 NETWORK_NAME="${NETWORK_NAME:-}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
+BUILD_MODE="${BUILD_MODE:-fast}"
+PULL_IMAGE="${PULL_IMAGE:-false}"
+HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"
+BUILD_FRONTEND="${BUILD_FRONTEND:-true}"
+FRONTEND_DIR="${FRONTEND_DIR:-../ai-paper-web}"
+FRONTEND_APP_DIR="${FRONTEND_APP_DIR:-apps/web-antdv-next}"
+FRONTEND_DIST_DIR="${FRONTEND_DIST_DIR:-apps/web-antdv-next/dist}"
+FRONTEND_INSTALL="${FRONTEND_INSTALL:-auto}"
 ADD_HOST_GATEWAY="${ADD_HOST_GATEWAY:-true}"
 RUN_AS_HOST_USER="${RUN_AS_HOST_USER:-true}"
 SANITIZED_ENV_FILE=""
@@ -36,6 +45,18 @@ Usage:
 
 Optional environment variables:
   IMAGE_NAME        Docker image tag (default: ai-paper-api:latest)
+  RUNTIME_BASE_IMAGE Runtime dependency base image for fast deploys
+                    (default: localhost/ai-paper-api:runtime-base)
+  BUILD_MODE        Build mode: fast, full, deps or none (default: fast)
+                    fast: build runtime base only when missing, then copy app code.
+                    full: rebuild app through all Dockerfile stages.
+                    deps: rebuild runtime base image only, then exit.
+                    none: skip build and recreate container from IMAGE_NAME.
+  BUILD_FRONTEND    true/1 to build ai-paper-web and sync dist to ./public (default: true)
+  FRONTEND_DIR      Frontend monorepo path (default: ../ai-paper-web)
+  FRONTEND_APP_DIR  Frontend app package dir inside FRONTEND_DIR (default: apps/web-antdv-next)
+  FRONTEND_DIST_DIR Frontend dist dir inside FRONTEND_DIR (default: apps/web-antdv-next/dist)
+  FRONTEND_INSTALL  auto, true or false. auto installs only when node_modules is missing.
   APP_ROLE          Container role: auto, all, api or scheduler (default: auto)
                     auto: APP_DEBUG=true or SCHEDULER_ENABLED=false starts api only;
                     otherwise starts api+scheduler.
@@ -47,6 +68,8 @@ Optional environment variables:
   HOST_OUTPUT_DIR   Host thesis output directory to mount (default: ./public/output/thesis)
   NETWORK_NAME      Existing/new Docker network to attach (optional)
   BUILD_NO_CACHE    true/1 to disable Docker build cache (default: false)
+  PULL_IMAGE        true/1 to pull base images during build (default: false)
+  HEALTH_TIMEOUT    Seconds to wait for Docker healthcheck (default: 90)
   ADD_HOST_GATEWAY  true/1 to add host.docker.internal mapping (default: true)
   RUN_AS_HOST_USER  true/1 to run container as current host UID:GID for writable bind mounts (default: true)
 
@@ -66,6 +89,10 @@ Examples:
   APP_ROLE=api ENV_FILE=.env.docker sh start.sh
   APP_ROLE=scheduler ENV_FILE=.env.docker sh start.sh
   NETWORK_NAME=backend sh start.sh
+  BUILD_MODE=full sh start.sh
+  BUILD_MODE=none sh start.sh
+  BUILD_MODE=deps sh start.sh
+  BUILD_FRONTEND=false sh start.sh
 EOF
 }
 
@@ -190,6 +217,145 @@ is_loopback_host() {
   esac
 }
 
+resolve_path() {
+  path="$1"
+  case "$path" in
+    /*) printf '%s\n' "$path" ;;
+    *) printf '%s\n' "$PROJECT_DIR/$path" ;;
+  esac
+}
+
+build_frontend() {
+  if ! is_truthy "$BUILD_FRONTEND"; then
+    log "Skipping frontend build: BUILD_FRONTEND=$BUILD_FRONTEND"
+    return 0
+  fi
+
+  frontend_path=$(resolve_path "$FRONTEND_DIR")
+  frontend_app_path="$frontend_path/$FRONTEND_APP_DIR"
+  frontend_dist_path="$frontend_path/$FRONTEND_DIST_DIR"
+  public_path="$PROJECT_DIR/public"
+
+  [ -f "$frontend_path/package.json" ] || fail "Frontend package.json not found: $frontend_path/package.json"
+  [ -f "$frontend_path/pnpm-lock.yaml" ] || fail "Frontend pnpm-lock.yaml not found: $frontend_path/pnpm-lock.yaml"
+  command -v pnpm >/dev/null 2>&1 || fail "pnpm is not installed or not in PATH."
+
+  case "$FRONTEND_INSTALL" in
+    auto)
+      if [ ! -d "$frontend_path/node_modules" ]; then
+        log "Installing frontend dependencies: $frontend_path"
+        pnpm --dir "$frontend_path" install --frozen-lockfile
+      else
+        log "Using existing frontend node_modules: $frontend_path/node_modules"
+      fi
+      ;;
+    true|TRUE|True|1|yes|YES|Yes|on|ON|On)
+      log "Installing frontend dependencies: $frontend_path"
+      pnpm --dir "$frontend_path" install --frozen-lockfile
+      ;;
+    false|FALSE|False|0|no|NO|No|off|OFF|Off)
+      log "Skipping frontend dependency install: FRONTEND_INSTALL=$FRONTEND_INSTALL"
+      ;;
+    *)
+      fail "Unsupported FRONTEND_INSTALL=$FRONTEND_INSTALL. Use auto, true or false."
+      ;;
+  esac
+
+  log "Building frontend app: $frontend_app_path"
+  pnpm --dir "$frontend_app_path" build
+  [ -f "$frontend_dist_path/index.html" ] || fail "Frontend build output not found: $frontend_dist_path/index.html"
+
+  log "Syncing frontend dist to backend public: $frontend_dist_path -> $public_path"
+  mkdir -p "$public_path/output"
+  find "$public_path" -mindepth 1 -maxdepth 1 ! -name output -exec rm -rf {} +
+  cp -R "$frontend_dist_path"/. "$public_path"/
+  mkdir -p "$public_path/output/thesis"
+}
+
+docker_build() {
+  target="$1"
+  tag="$2"
+  shift 2
+
+  build_args="-f Dockerfile --target $target -t $tag"
+  if is_truthy "$PULL_IMAGE"; then
+    build_args="$build_args --pull"
+  fi
+  if is_truthy "$BUILD_NO_CACHE"; then
+    build_args="$build_args --no-cache"
+  fi
+
+  # shellcheck disable=SC2086
+  docker build $build_args "$@" .
+}
+
+build_images() {
+  case "$BUILD_MODE" in
+    fast)
+      if docker image inspect "$RUNTIME_BASE_IMAGE" >/dev/null 2>&1; then
+        log "Using runtime base image: $RUNTIME_BASE_IMAGE"
+      else
+        log "Runtime base image not found, building: $RUNTIME_BASE_IMAGE"
+        docker_build runtime-base "$RUNTIME_BASE_IMAGE"
+      fi
+      log "Building app image from runtime base: $IMAGE_NAME"
+      docker_build app-fast "$IMAGE_NAME" --build-arg "RUNTIME_BASE_IMAGE=$RUNTIME_BASE_IMAGE"
+      ;;
+    full)
+      log "Building full app image: $IMAGE_NAME"
+      docker_build app "$IMAGE_NAME"
+      ;;
+    deps)
+      log "Building runtime base image only: $RUNTIME_BASE_IMAGE"
+      docker_build runtime-base "$RUNTIME_BASE_IMAGE"
+      log "Runtime base image is ready: $RUNTIME_BASE_IMAGE"
+      exit 0
+      ;;
+    none)
+      log "Skipping image build, using existing image: $IMAGE_NAME"
+      docker image inspect "$IMAGE_NAME" >/dev/null 2>&1 || fail "Image not found: $IMAGE_NAME"
+      ;;
+    *)
+      fail "Unsupported BUILD_MODE=$BUILD_MODE. Use fast, full, deps or none."
+      ;;
+  esac
+}
+
+wait_for_container() {
+  container_name="$1"
+  deadline=$((HEALTH_TIMEOUT))
+  elapsed=0
+
+  while [ "$elapsed" -le "$deadline" ]; do
+    running=$(docker inspect --format '{{.State.Running}}' "$container_name" 2>/dev/null || true)
+    health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_name" 2>/dev/null || true)
+
+    if [ "$running" != "true" ]; then
+      docker logs --tail 80 "$container_name" >&2 || true
+      fail "Container exited during startup: $container_name"
+    fi
+
+    case "$health" in
+      healthy)
+        return 0
+        ;;
+      none)
+        return 0
+        ;;
+      unhealthy)
+        docker logs --tail 80 "$container_name" >&2 || true
+        fail "Container healthcheck failed: $container_name"
+        ;;
+    esac
+
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+
+  docker logs --tail 80 "$container_name" >&2 || true
+  fail "Timed out waiting for container health: $container_name"
+}
+
 if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
   usage
   exit 0
@@ -201,6 +367,11 @@ docker info >/dev/null 2>&1 || fail "Docker daemon is not running."
 case "$APP_ROLE" in
   auto|all|api|scheduler) ;;
   *) fail "Unsupported APP_ROLE=$APP_ROLE. Use auto, all, api or scheduler." ;;
+esac
+
+case "$BUILD_MODE" in
+  fast|full|deps|none) ;;
+  *) fail "Unsupported BUILD_MODE=$BUILD_MODE. Use fast, full, deps or none." ;;
 esac
 
 [ -f "$ENV_FILE" ] || fail "Env file not found: $ENV_FILE"
@@ -289,17 +460,18 @@ esac
 mkdir -p "$HOST_LOG_PATH"
 mkdir -p "$HOST_OUTPUT_PATH"
 
-if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
-  log "Removing existing container: $CONTAINER_NAME"
-  docker rm -f "$CONTAINER_NAME" >/dev/null
-fi
+case "$BUILD_MODE" in
+  fast|full)
+    build_frontend
+    ;;
+  none)
+    if is_truthy "$BUILD_FRONTEND"; then
+      log "BUILD_MODE=none skips image build; frontend changes in ./public will not enter the existing image."
+    fi
+    ;;
+esac
 
-log "Building image: $IMAGE_NAME"
-if [ "$BUILD_NO_CACHE" = "true" ] || [ "$BUILD_NO_CACHE" = "1" ]; then
-  docker build --pull --no-cache -t "$IMAGE_NAME" .
-else
-  docker build --pull -t "$IMAGE_NAME" .
-fi
+build_images
 
 RUN_ARGS="
   -d
@@ -328,6 +500,11 @@ if [ "$ADD_HOST_GATEWAY" = "true" ] || [ "$ADD_HOST_GATEWAY" = "1" ]; then
   RUN_ARGS="$RUN_ARGS --add-host host.docker.internal:host-gateway"
 fi
 
+if docker ps -a --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"; then
+  log "Removing existing container: $CONTAINER_NAME"
+  docker rm -f "$CONTAINER_NAME" >/dev/null
+fi
+
 log "Starting $RESOLVED_APP_ROLE container: $CONTAINER_NAME"
 if [ "$RESOLVED_APP_ROLE" = "scheduler" ]; then
   # shellcheck disable=SC2086
@@ -341,9 +518,7 @@ else
   CONTAINER_ID=$(docker run $RUN_ARGS "$IMAGE_NAME")
 fi
 
-sleep 3
-RUNNING=$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true)
-[ "$RUNNING" = "true" ] || fail "Container failed to start. Check logs: docker logs $CONTAINER_NAME"
+wait_for_container "$CONTAINER_NAME"
 
 HEALTH=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$CONTAINER_NAME" 2>/dev/null || true)
 
