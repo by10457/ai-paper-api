@@ -1,0 +1,1 @@
+import{t as e}from"./isFragment-CLMq3Oai.js";function t(n,r={}){let i=[];Array.isArray(n)||(n=[n]);for(let a of n)a==null&&!r.keepEmpty||(Array.isArray(a)?i=i.concat(t(a,r)):e(a)&&a.children?i=i.concat(t(a.children,r)):i.push(a));return i}export{t};

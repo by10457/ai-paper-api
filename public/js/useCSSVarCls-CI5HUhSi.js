@@ -1,0 +1,1 @@
+import{rn as e}from"../jse/index-index-BDny3kg6.js";import{C as t}from"./useMergeSemantic-CQi2CQvX.js";function n(n){let[,,,,r]=t();return e(()=>r!=null&&r.value?`${n.value}-css-var`:``)}var r=n;export{r as t};

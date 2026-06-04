@@ -1,1 +1,0 @@
-import{Mn as e}from"../jse/index-index-BbYoHiE2.js";import"./useMergeSemantic-BZyLhv23.js";function t(){}var n=t,r=Symbol(`WarningContext`);function i(t){e(r,t)}var a=()=>{let e=()=>{};return e.deprecated=t,e},o=n;export{i as n,o as r,a as t};
