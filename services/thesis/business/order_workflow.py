@@ -175,7 +175,7 @@ async def run_paid_paper_order(order_id: int) -> None:
             normalized.language,
             normalized.wxnum,
         )
-        status_data = status_store.read_status(task_id)
+        status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_from_task_status(order, status_data)
     except Exception as exc:  # noqa: BLE001
         logger.exception("论文订单后台生成失败")
@@ -186,7 +186,7 @@ async def run_paid_paper_order(order_id: int) -> None:
 
 async def _refresh_generating_order(order: PaperOrder) -> PaperOrder:
     if order.task_id and order.status == "generating":
-        status_data = status_store.read_status(order.task_id)
+        status_data = await status_store.read_status_async(order.task_id)
         return await PaperOrderService.mark_from_task_status(order, status_data)
     return order
 

@@ -103,8 +103,11 @@ async def submit_generate_request(
         request_payload=req.model_dump(mode="json"),
         idempotency_key=idempotency_key,
     )
-    if status_store.read_status(direct_task.task_id) is None and direct_task.status in {"paid", "generating"}:
-        status_store.write_status(direct_task.task_id, "pending", message="正在生成论文...")
+    if (
+        await status_store.read_status_async(direct_task.task_id) is None
+        and direct_task.status in {"paid", "generating"}
+    ):
+        await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
     if should_start:
         background_tasks.add_task(run_direct_generate_task, direct_task.id)
     return GenerateSubmitResponse(task_id=direct_task.task_id)
@@ -117,8 +120,8 @@ async def run_direct_generate_task(direct_task_id: int) -> None:
     if direct_task is None:
         return
 
-    if status_store.read_status(direct_task.task_id) is None:
-        status_store.write_status(direct_task.task_id, "pending", message="正在生成论文...")
+    if await status_store.read_status_async(direct_task.task_id) is None:
+        await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
 
     req = GenerateRequest(**cast(dict[str, Any], direct_task.request_payload))
     await run_generate_task(
@@ -147,7 +150,7 @@ async def get_task_status_for_user(user: User, task_id: str) -> TaskStatusRespon
     """查询当前用户可访问的兼容式任务状态。"""
 
     direct_task = await _get_visible_direct_task(user, task_id)
-    data = status_store.read_status(task_id)
+    data = await status_store.read_status_async(task_id)
     if data is not None:
         return TaskStatusResponse(**data)
     if direct_task is not None:
@@ -158,7 +161,12 @@ async def get_task_status_for_user(user: User, task_id: str) -> TaskStatusRespon
 def get_download_path(task_id: str) -> Path:
     """返回已完成任务的本地 Word 文件路径。"""
 
-    data = status_store.read_status(task_id)
+    return _download_path_from_status(status_store.read_status(task_id))
+
+
+def _download_path_from_status(data: dict[str, Any] | None) -> Path:
+    """从任务状态中解析可下载的本地 Word 文件路径。"""
+
     if data is None:
         raise HTTPException(status_code=404, detail="任务不存在")
     if data["status"] != "completed":
@@ -177,7 +185,8 @@ async def get_download_path_for_user(user: User, task_id: str) -> Path:
     """返回当前用户可访问的已完成 Word 文件路径。"""
 
     await _get_visible_direct_task(user, task_id)
-    return get_download_path(task_id)
+    data = await status_store.read_status_async(task_id)
+    return _download_path_from_status(data)
 
 
 async def run_generate_task(
@@ -253,7 +262,7 @@ async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: 
     docx_path = str(_result_value(result, "docx_path", ""))
     file_key = await upload_to_qiniu(docx_path, task_id)
     await notify_callback(task_id, file_key, status="completed")
-    status_store.write_status(
+    await status_store.write_status_async(
         task_id,
         "completed",
         message="论文生成完成",
@@ -268,7 +277,7 @@ async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: 
         truncation_warning=_result_value(result, "truncation_warning", False),
     )
     if direct_task_id is not None:
-        status_data = status_store.read_status(task_id)
+        status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
 
 
@@ -283,7 +292,7 @@ async def _mark_generation_failed(task_id: str, exc: Exception, direct_task_id: 
     else:
         error_type = "generation_error"
         error_msg = "生成失败，请稍后重试或联系管理员"
-    status_store.write_status(
+    await status_store.write_status_async(
         task_id,
         "failed",
         message=error_msg,
@@ -291,7 +300,7 @@ async def _mark_generation_failed(task_id: str, exc: Exception, direct_task_id: 
         internal_error=str(exc)[:500],
     )
     if direct_task_id is not None:
-        status_data = status_store.read_status(task_id)
+        status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
     try:
         from services.thesis.storage.callback import notify_callback

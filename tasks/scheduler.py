@@ -20,9 +20,18 @@ from apscheduler.triggers.interval import IntervalTrigger
 from core.logger import logger
 from tasks.paper_recovery import recover_paid_paper_jobs
 
+SCHEDULER_MISFIRE_GRACE_SECONDS = 30
+
 
 def _create_scheduler() -> AsyncIOScheduler:
-    return AsyncIOScheduler(timezone="Asia/Shanghai")
+    return AsyncIOScheduler(
+        timezone="Asia/Shanghai",
+        job_defaults={
+            "coalesce": True,
+            "misfire_grace_time": SCHEDULER_MISFIRE_GRACE_SECONDS,
+            "max_instances": 1,
+        },
+    )
 
 
 # 全局调度器单例（异步模式，与 FastAPI 的事件循环共享）
@@ -82,7 +91,6 @@ def register_jobs() -> None:
         id="paper_generation_recovery",
         name="论文生成补偿",
         replace_existing=True,
-        max_instances=1,
     )
 
     # 每天凌晨 2:00 执行（cron 模式）
