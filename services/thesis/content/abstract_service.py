@@ -7,6 +7,7 @@ from llm.prompts.thesis_abstract_prompt import (
     ABSTRACT_COMBINED_PROMPT,
     ACKNOWLEDGMENT_PROMPT,
 )
+from services.thesis.generation.concurrency import text_short_slot
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +66,8 @@ async def generate_abstracts(full_text: str) -> dict[str, str]:
     )
 
     chain = ABSTRACT_COMBINED_PROMPT | llm | StrOutputParser()
-    raw = await chain.ainvoke({"text_sample": full_text})
+    async with text_short_slot():
+        raw = await chain.ainvoke({"text_sample": full_text})
 
     result = _parse_combined_abstract(raw)
     logger.info(
@@ -84,5 +86,6 @@ async def generate_acknowledgment(title: str, advisor: str) -> str:
         max_tokens=1024,
     )
     chain = ACKNOWLEDGMENT_PROMPT | llm | StrOutputParser()
-    result = await chain.ainvoke({"title": title, "advisor": advisor})
+    async with text_short_slot():
+        result = await chain.ainvoke({"title": title, "advisor": advisor})
     return result.strip()

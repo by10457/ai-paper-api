@@ -112,12 +112,15 @@ CREATE TABLE IF NOT EXISTS `paper_orders` (
   `refunded_at` DATETIME(6) NULL COMMENT '退积分时间',
   `started_at` DATETIME(6) NULL COMMENT '开始生成时间',
   `completed_at` DATETIME(6) NULL COMMENT '完成时间',
+  `retry_count` INT NOT NULL DEFAULT 0 COMMENT '自动重试次数',
+  `next_retry_at` DATETIME(6) NULL COMMENT '下次自动重试时间',
   `outline_record_id` INT NOT NULL COMMENT '大纲记录',
   `user_id` INT NOT NULL COMMENT '用户',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uid_paper_orders_order_sn` (`order_sn`),
   UNIQUE KEY `uid_paper_orders_user_id_idempotency_key` (`user_id`, `idempotency_key`),
   KEY `idx_paper_orders_user_id` (`user_id`),
+  KEY `idx_paper_orders_status_next_retry_at` (`status`, `next_retry_at`),
   KEY `idx_paper_orders_outline_record_id` (`outline_record_id`),
   CONSTRAINT `fk_paper_orders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_paper_orders_outline_record_id` FOREIGN KEY (`outline_record_id`) REFERENCES `paper_outline_records` (`id`) ON DELETE CASCADE
@@ -138,14 +141,17 @@ CREATE TABLE IF NOT EXISTS `paper_direct_tasks` (
   `last_error` VARCHAR(500) NULL COMMENT '最近一次错误',
   `started_at` DATETIME(6) NULL COMMENT '开始生成时间',
   `completed_at` DATETIME(6) NULL COMMENT '完成时间',
+  `retry_count` INT NOT NULL DEFAULT 0 COMMENT '自动重试次数',
+  `next_retry_at` DATETIME(6) NULL COMMENT '下次自动重试时间',
   `user_id` INT NOT NULL COMMENT '用户',
   PRIMARY KEY (`id`),
   UNIQUE KEY `uid_paper_direct_tasks_task_id` (`task_id`),
   UNIQUE KEY `uid_paper_direct_tasks_user_id_idempotency_key` (`user_id`, `idempotency_key`),
   KEY `idx_paper_direct_tasks_user_id` (`user_id`),
   KEY `idx_paper_direct_tasks_status` (`status`),
+  KEY `idx_paper_direct_tasks_status_next_retry_at` (`status`, `next_retry_at`),
   CONSTRAINT `fk_paper_direct_tasks_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='兼容式论文生成任务';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='接口直连论文生成任务';
 
 CREATE TABLE IF NOT EXISTS `point_ledgers` (
   `id` INT NOT NULL AUTO_INCREMENT,

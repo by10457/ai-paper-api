@@ -26,6 +26,7 @@ from llm.prompts.thesis_reference_prompt import (
     REFERENCE_FILTER_PROMPT,
     REFERENCE_KEYWORD_PROMPT,
 )
+from services.thesis.generation.concurrency import serpapi_slot, text_short_slot
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ async def _search_scholar(query: str, num: int = 8) -> list[dict[str, Any]]:
     """调用 SerpAPI Google Scholar，失败返回空列表。"""
     api_key = get_settings().serpapi_key
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with serpapi_slot(), httpx.AsyncClient(timeout=20.0) as client:
             response = await client.get(
                 SERPAPI_BASE,
                 params={
@@ -273,16 +274,17 @@ async def _filter_results(
             ],
             ensure_ascii=False,
         )
-        raw = cast(
-            str,
-            await chain.ainvoke(
-                {
-                    "title": title,
-                    "results_json": results_json,
-                    "keep_count": keep_count,
-                }
-            ),
-        )
+        async with text_short_slot():
+            raw = cast(
+                str,
+                await chain.ainvoke(
+                    {
+                        "title": title,
+                        "results_json": results_json,
+                        "keep_count": keep_count,
+                    }
+                ),
+            )
         keep_indices = json.loads(raw.strip()).get("keep", [])
         return [results[i] for i in keep_indices if isinstance(i, int) and i < len(results)]
     except Exception as exc:  # noqa: BLE001
@@ -309,7 +311,8 @@ async def generate_references(
 
     try:
         keyword_chain = REFERENCE_KEYWORD_PROMPT | llm | StrOutputParser()
-        raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
+        async with text_short_slot():
+            raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
         keyword_data = json.loads(raw_keywords.strip())
         zh_query = keyword_data.get("zh") or title
         en_queries = keyword_data.get("en") or [title]

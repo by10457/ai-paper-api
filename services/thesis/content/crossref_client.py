@@ -16,11 +16,11 @@ from typing import Any, cast
 import httpx
 
 from core.config import get_settings
+from services.thesis.generation.concurrency import crossref_slot
 
 logger = logging.getLogger(__name__)
 
 CROSSREF_API = "https://api.crossref.org/works"
-_SEMAPHORE = asyncio.Semaphore(5)
 _SELECT_FIELDS = "title,author,container-title,published,volume,issue,page,type"
 
 # 匹配用标题相似度阈值
@@ -46,7 +46,7 @@ def _title_similar(a: str, b: str) -> bool:
 
 async def _query_one(client: httpx.AsyncClient, title: str) -> dict[str, Any] | None:
     """查询单条标题，返回 CrossRef 匹配结果或 None。"""
-    async with _SEMAPHORE:
+    async with crossref_slot():
         try:
             resp = await client.get(
                 CROSSREF_API,

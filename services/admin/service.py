@@ -14,4 +14,4 @@ class AdminService(
     AdminModelConfigService,
     AdminLogService,
 ):
-    """兼容原有 AdminService 调用方式，具体业务按模块拆分实现。"""
+    """管理端服务聚合类，对路由层提供统一业务入口。"""

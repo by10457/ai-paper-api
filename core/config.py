@@ -67,6 +67,15 @@ class Settings(BaseSettings):
     # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
     PUPPETEER_EXECUTABLE_PATH: str = ""
+    TEXT_LONG_CONCURRENCY: int = Field(default=16, ge=1)
+    TEXT_SHORT_CONCURRENCY: int = Field(default=32, ge=1)
+    IMAGE_MODEL_CONCURRENCY: int = Field(default=6, ge=1)
+    SERPAPI_CONCURRENCY: int = Field(default=12, ge=1)
+    CROSSREF_CONCURRENCY: int = Field(default=10, ge=1)
+    PAPER_GENERATION_CONCURRENCY: int = Field(default=20, ge=1)
+    PAPER_WORKER_POLL_SECONDS: int = Field(default=2, ge=1)
+    PAPER_GENERATION_MAX_RETRIES: int = Field(default=2, ge=0)
+    PAPER_GENERATION_RETRY_DELAY_SECONDS: int = Field(default=120, ge=1)
 
     # 参考文献检索配置：SerpApi 用于搜索，Crossref 邮箱用于规范请求来源。
     SERPAPI_KEY: str = ""

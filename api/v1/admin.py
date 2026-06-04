@@ -1,6 +1,6 @@
 """管理后台接口路由。"""
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+from fastapi import APIRouter, Depends, Request
 
 from api.dependencies.auth import get_current_admin_user
 from models.paper import PaperOrder
@@ -24,7 +24,7 @@ from schemas.common import PageResponse, Response
 from schemas.thesis import PaperOrderStatusResponse
 from schemas.user import PointLedgerResponse, UserResponse
 from services.admin import AdminService
-from services.thesis.business.order_workflow import run_paid_paper_order
+from services.thesis.generation.paper_queue import enqueue_order_generation
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
 
@@ -158,13 +158,12 @@ async def get_order_detail(
 async def retry_order(
     order_id: int,
     request: Request,
-    background_tasks: BackgroundTasks,
     current_admin: User = Depends(get_current_admin_user),
 ) -> Response[PaperOrderStatusResponse]:
     """重试生成指定论文订单。"""
 
     order = await AdminService.retry_order(order_id, current_admin, _client_ip(request))
-    background_tasks.add_task(run_paid_paper_order, order.id)
+    await enqueue_order_generation(order.id)
     return Response.ok(data=_order_status_response(order))
 
 

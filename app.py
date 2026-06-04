@@ -14,6 +14,7 @@ shutdown（反序）:
   3. 关闭 MySQL
 """
 
+import asyncio
 import os
 import socket
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -32,6 +33,7 @@ from core.database import close_db, init_db
 from core.logger import logger
 from core.redis import close_redis, init_redis
 from tasks import scheduler as task_scheduler
+from tasks.paper_worker import run_paper_generation_worker
 
 PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 _NO_CACHE_EXTS = {".js", ".css", ".html"}
@@ -81,6 +83,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     # ── Startup ───────────────────────────────────────────
     logger.info(f"🚀 {settings.APP_NAME} 启动中 [env={settings.APP_ENV}]")
+    worker_stop_event: asyncio.Event | None = None
+    worker_task: asyncio.Task[None] | None = None
 
     await init_db()
     await init_redis()
@@ -88,6 +92,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if _should_start_scheduler():
         task_scheduler.register_jobs()
         task_scheduler.scheduler.start()
+        worker_stop_event = asyncio.Event()
+        worker_task = asyncio.create_task(run_paper_generation_worker(worker_stop_event))
         logger.info("⏰ 开发环境定时任务调度器已启动")
     elif settings.APP_DEBUG:
         logger.info("⏸️ 开发环境定时任务已通过 SCHEDULER_ENABLED=false 关闭")
@@ -102,6 +108,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if task_scheduler.scheduler.running:
         task_scheduler.scheduler.shutdown(wait=False)
         logger.info("⏰ 定时任务调度器已停止")
+
+    if worker_stop_event is not None and worker_task is not None:
+        worker_stop_event.set()
+        await worker_task
 
     await close_redis()
     await close_db()

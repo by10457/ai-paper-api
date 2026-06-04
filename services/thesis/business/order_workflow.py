@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import BackgroundTasks, HTTPException, status
+from fastapi import HTTPException, status
 
 from core.config import settings
 from models.paper import PaperOrder
@@ -23,6 +23,7 @@ from schemas.thesis import (
 )
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation import status_store
+from services.thesis.generation.paper_queue import enqueue_order_generation
 from services.thesis.generation.task_service import (
     create_task_id,
     json_outline_to_markdown,
@@ -85,14 +86,13 @@ async def create_order(
 async def pay_order(
     user: User,
     req: PaperOrderPayRequest,
-    background_tasks: BackgroundTasks,
 ) -> PaperOrderPayResponse:
-    """完成积分支付，首次支付成功后启动后台论文生成。"""
+    """完成积分支付，支付成功后由独立论文 worker 消费生成。"""
 
     order = await PaperOrderService.get_order(user, req.order_sn)
-    should_start = await PaperOrderService.pay_order(user, order)
-    if should_start:
-        background_tasks.add_task(run_paid_paper_order, order.id)
+    should_enqueue = await PaperOrderService.pay_order(user, order)
+    if should_enqueue:
+        await enqueue_order_generation(order.id)
     return PaperOrderPayResponse(
         order_sn=order.order_sn,
         points=user.points,

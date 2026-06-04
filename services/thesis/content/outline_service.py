@@ -7,6 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from llm.client import create_configured_llm
 from llm.prompts.thesis_outline_prompt import THESIS_OUTLINE_PROMPT
 from schemas.thesis import OutlinePayload
+from services.thesis.generation.concurrency import text_short_slot
 
 
 async def _build_outline_chain() -> Any:
@@ -64,11 +65,12 @@ async def generate_outline(
     """阶段①：根据论文标题生成结构化 JSON 大纲。"""
 
     chain = await _build_outline_chain()
-    result = await chain.ainvoke(
-        {
-            "title": title,
-            "target_word_count": target_word_count,
-            **_build_outline_instructions(codetype, language, three_level, aboutmsg),
-        }
-    )
+    async with text_short_slot():
+        result = await chain.ainvoke(
+            {
+                "title": title,
+                "target_word_count": target_word_count,
+                **_build_outline_instructions(codetype, language, three_level, aboutmsg),
+            }
+        )
     return _parse_and_validate_outline(cast(str, result))

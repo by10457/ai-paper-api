@@ -1,4 +1,4 @@
-"""管理端服务包，对外保持原有 services.admin 导入入口。"""
+"""管理端服务包。"""
 
 from services.admin.audit import write_audit_log
 from services.admin.service import AdminService

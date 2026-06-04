@@ -209,3 +209,31 @@ def test_provider_failure_refunds_order_with_sanitized_message(
 
     assert result.last_error == message
     assert refund_calls == [(7, message)]
+
+
+def test_generation_failure_schedules_retry_before_final_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retry_calls: list[tuple[int, str]] = []
+    order = SimpleNamespace(id=7)
+    retried_order = SimpleNamespace(id=7, status="paid", last_error="生成失败，将自动重试 1/2")
+
+    async def fake_schedule_order_retry_if_possible(order_id: int, data: dict) -> SimpleNamespace:
+        retry_calls.append((order_id, str(data.get("message"))))
+        return retried_order
+
+    monkeypatch.setattr(PaperOrderService, "schedule_order_retry_if_possible", fake_schedule_order_retry_if_possible)
+
+    result = asyncio.run(
+        PaperOrderService.mark_from_task_status(
+            order,
+            {
+                "status": "failed",
+                "error_type": "generation_error",
+                "message": "生成失败，请稍后重试或联系管理员",
+            },
+        )
+    )
+
+    assert result is retried_order
+    assert retry_calls == [(7, "生成失败，请稍后重试或联系管理员")]

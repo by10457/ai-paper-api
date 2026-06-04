@@ -52,6 +52,8 @@ class PaperOrder(BaseModel):
     refunded_at = fields.DatetimeField(null=True, description="退积分时间")
     started_at = fields.DatetimeField(null=True, description="开始生成时间")
     completed_at = fields.DatetimeField(null=True, description="完成时间")
+    retry_count = fields.IntField(default=0, description="自动重试次数")
+    next_retry_at = fields.DatetimeField(null=True, description="下次自动重试时间")
 
     class Meta:
         table = "paper_orders"
@@ -74,8 +76,10 @@ class PaperDirectTask(BaseModel):
     last_error = fields.CharField(max_length=500, null=True, description="最近一次错误")
     started_at = fields.DatetimeField(null=True, description="开始生成时间")
     completed_at = fields.DatetimeField(null=True, description="完成时间")
+    retry_count = fields.IntField(default=0, description="自动重试次数")
+    next_retry_at = fields.DatetimeField(null=True, description="下次自动重试时间")
 
     class Meta:
         table = "paper_direct_tasks"
-        table_description = "兼容式论文生成任务"
+        table_description = "接口直连论文生成任务"
         unique_together = (("user", "idempotency_key"),)

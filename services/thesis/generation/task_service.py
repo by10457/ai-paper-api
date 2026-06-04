@@ -7,7 +7,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from llm.client import is_provider_config_error, is_provider_quota_error
 from models.paper import PaperDirectTask
@@ -22,6 +22,7 @@ from schemas.thesis import (
 )
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation import status_store
+from services.thesis.generation.paper_queue import enqueue_direct_generation
 
 logger = logging.getLogger(__name__)
 
@@ -90,10 +91,9 @@ async def generate_outline_for_request(req: OutlineRequest) -> OutlineResponse:
 async def submit_generate_request(
     user: User,
     req: GenerateRequest,
-    background_tasks: BackgroundTasks,
     idempotency_key: str | None = None,
 ) -> GenerateSubmitResponse:
-    """提交兼容式论文生成任务，扣减积分后写入初始状态。"""
+    """提交接口直连论文生成任务，扣减积分后进入独立 worker 队列。"""
 
     task_id = create_task_id()
     direct_task, should_start = await PaperOrderService.create_direct_generate_task(
@@ -109,19 +109,18 @@ async def submit_generate_request(
     ):
         await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
     if should_start:
-        background_tasks.add_task(run_direct_generate_task, direct_task.id)
+        await enqueue_direct_generation(direct_task.id)
     return GenerateSubmitResponse(task_id=direct_task.task_id)
 
 
 async def run_direct_generate_task(direct_task_id: int) -> None:
-    """后台执行兼容式论文生成任务。"""
+    """后台执行接口直连论文生成任务。"""
 
     direct_task = await PaperOrderService.mark_direct_task_generating_if_paid(direct_task_id)
     if direct_task is None:
         return
 
-    if await status_store.read_status_async(direct_task.task_id) is None:
-        await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
+    await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
 
     req = GenerateRequest(**cast(dict[str, Any], direct_task.request_payload))
     await run_generate_task(
@@ -147,9 +146,11 @@ def get_task_status(task_id: str) -> TaskStatusResponse:
 
 
 async def get_task_status_for_user(user: User, task_id: str) -> TaskStatusResponse:
-    """查询当前用户可访问的兼容式任务状态。"""
+    """查询当前用户可访问的接口直连任务状态。"""
 
     direct_task = await _get_visible_direct_task(user, task_id)
+    if direct_task is not None and direct_task.status in {"paid", "generating"}:
+        return _direct_task_status_response(direct_task)
     data = await status_store.read_status_async(task_id)
     if data is not None:
         return TaskStatusResponse(**data)

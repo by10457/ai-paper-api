@@ -4,6 +4,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 from llm.client import create_configured_llm
 from llm.prompts.thesis_fulltext_prompt import THESIS_FULLTEXT_PROMPT
+from services.thesis.generation.concurrency import text_long_slot
 
 
 async def _build_fulltext_chain() -> Any:
@@ -31,20 +32,21 @@ async def generate_fulltext(
     prompt_word_count = int(target_word_count / correction_factor)
     prompt_word_count_max = int((target_word_count + 1000) / correction_factor)
 
-    result = cast(
-        str,
-        await chain.ainvoke(
-            {
-                "outline": outline,
-                "target_word_count": prompt_word_count,
-                "target_word_count_max": prompt_word_count_max,
-                "references": references,
-                "codetype_instruction": (
-                    f"本论文涉及 {codetype} 代码实现，请在系统设计与实现章节中嵌入核心代码片段"
-                    if codetype and codetype != "否"
-                    else ""
-                ),
-            }
-        ),
-    )
+    async with text_long_slot():
+        result = cast(
+            str,
+            await chain.ainvoke(
+                {
+                    "outline": outline,
+                    "target_word_count": prompt_word_count,
+                    "target_word_count_max": prompt_word_count_max,
+                    "references": references,
+                    "codetype_instruction": (
+                        f"本论文涉及 {codetype} 代码实现，请在系统设计与实现章节中嵌入核心代码片段"
+                        if codetype and codetype != "否"
+                        else ""
+                    ),
+                }
+            ),
+        )
     return result.strip()

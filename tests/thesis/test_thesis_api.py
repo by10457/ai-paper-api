@@ -75,6 +75,7 @@ def test_outline_title_too_short_returns_422(client: TestClient) -> None:
 
 def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     task_create_calls: list[tuple[int, str]] = []
+    enqueue_calls: list[int] = []
 
     async def fake_create_direct_generate_task(
         user: SimpleNamespace,
@@ -90,13 +91,17 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
         assert task_id
         return SimpleNamespace(id=11, task_id=task_id, status="paid"), True
 
-    async def fake_run_direct_generate_task(
+    async def fake_enqueue_direct_generation(
         direct_task_id: int,
-    ) -> None:
+        delay_seconds: int = 0,
+    ) -> bool:
         assert direct_task_id == 11
+        assert delay_seconds == 0
+        enqueue_calls.append(direct_task_id)
+        return True
 
     monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
-    monkeypatch.setattr(generation_task, "run_direct_generate_task", fake_run_direct_generate_task)
+    monkeypatch.setattr(generation_task, "enqueue_direct_generation", fake_enqueue_direct_generation)
 
     response = client.post(
         "/api/v1/thesis/generate",
@@ -120,6 +125,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
     assert response.status_code == 200
     task_id = response.json()["task_id"]
     assert task_create_calls == [(1, "测试论文")]
+    assert enqueue_calls == [11]
 
     pending = client.get(f"/api/v1/thesis/status/{task_id}")
     assert pending.status_code == 200
@@ -160,11 +166,12 @@ def test_generate_reuses_idempotent_direct_task(client: TestClient, monkeypatch:
         assert idempotency_key == "wxy-paper-order-1"
         return SimpleNamespace(id=11, task_id="existing-task", status="generating"), False
 
-    async def fake_run_direct_generate_task(direct_task_id: int) -> None:
+    async def fake_enqueue_direct_generation(direct_task_id: int, delay_seconds: int = 0) -> bool:
+        del delay_seconds
         raise AssertionError(f"幂等复用任务不应该重复启动生成: {direct_task_id}")
 
     monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
-    monkeypatch.setattr(generation_task, "run_direct_generate_task", fake_run_direct_generate_task)
+    monkeypatch.setattr(generation_task, "enqueue_direct_generation", fake_enqueue_direct_generation)
 
     response = client.post(
         "/api/v1/thesis/generate",

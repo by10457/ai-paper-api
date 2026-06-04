@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi import Path as FastApiPath
 from fastapi.responses import FileResponse
 
@@ -65,7 +65,6 @@ async def create_outline(
 @router.post("/generate", response_model=GenerateSubmitResponse)
 async def generate_document(
     req: GenerateRequest,
-    background_tasks: BackgroundTasks,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> GenerateSubmitResponse:
@@ -74,7 +73,6 @@ async def generate_document(
     return await generation_task.submit_generate_request(
         current_user,
         req,
-        background_tasks,
         _normalize_idempotency_key(idempotency_key),
     )
 
@@ -140,12 +138,11 @@ async def create_paper_order(
 @router.post("/orders/pay", response_model=Response[PaperOrderPayResponse], summary="论文订单积分支付")
 async def pay_paper_order(
     req: PaperOrderPayRequest,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_api_token_or_jwt_user),
 ) -> Response[PaperOrderPayResponse]:
     """论文订单积分支付。"""
 
-    data = await order_workflow.pay_order(current_user, req, background_tasks)
+    data = await order_workflow.pay_order(current_user, req)
     return Response.ok(data=data)
 
 

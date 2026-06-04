@@ -14,6 +14,8 @@ from typing import Any, cast
 import httpx
 from PIL import Image
 
+from services.thesis.generation.concurrency import image_model_slot
+
 logger = logging.getLogger(__name__)
 IMAGE_MODEL_TIMEOUT_SECONDS = 45.0
 FIGURE_RENDER_CONCURRENCY = 2
@@ -419,7 +421,7 @@ class PlaceholderImageGenerator(ImageGenerator):
 
 
 class GenerateContentImageGenerator(ImageGenerator):
-    """通过 Google generateContent 兼容接口调用文生图能力。"""
+    """通过 Gemini generateContent 协议调用文生图能力。"""
 
     def __init__(self, api_key: str, model: str, base_url: str = "https://cdn.12ai.org"):
         self.api_key = api_key
@@ -470,7 +472,7 @@ class GenerateContentImageGenerator(ImageGenerator):
         }
 
         timeout = httpx.Timeout(IMAGE_MODEL_TIMEOUT_SECONDS, connect=10.0)
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with image_model_slot(), httpx.AsyncClient(timeout=timeout) as client:
             try:
                 resp = await client.post(self._build_url(), json=payload)
                 resp.raise_for_status()

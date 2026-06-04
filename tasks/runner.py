@@ -16,6 +16,7 @@ from core.database import close_db, init_db
 from core.logger import logger
 from core.redis import close_redis, init_redis
 from tasks import scheduler as task_scheduler
+from tasks.paper_worker import run_paper_generation_worker
 
 
 def _install_signal_handlers(stop_event: asyncio.Event) -> None:
@@ -50,6 +51,7 @@ async def run_scheduler() -> None:
 
     stop_event = asyncio.Event()
     _install_signal_handlers(stop_event)
+    worker_task: asyncio.Task[None] | None = None
 
     logger.info("🚀 定时任务进程启动中")
 
@@ -61,9 +63,13 @@ async def run_scheduler() -> None:
         task_scheduler.scheduler.start()
         logger.info("⏰ 定时任务调度器已启动")
 
+        worker_task = asyncio.create_task(run_paper_generation_worker(stop_event))
         await stop_event.wait()
     finally:
         logger.info("🛑 定时任务进程正在关闭...")
+
+        if worker_task is not None:
+            await worker_task
 
         if task_scheduler.scheduler.running:
             task_scheduler.scheduler.shutdown(wait=False)
