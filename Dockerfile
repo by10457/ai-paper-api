@@ -2,8 +2,8 @@ ARG PYTHON_VERSION=3.13
 ARG RUNTIME_BASE_IMAGE=localhost/ai-paper-api:runtime-base
 ARG MERMAID_CLI_VERSION=10.9.1
 ARG UV_VERSION=0.8.15
-ARG PYPI_INDEX_URL=https://mirrors.tencent.com/pypi/simple/
-ARG PYPI_TRUSTED_HOST=mirrors.tencent.com
+ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PYPI_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
 
 FROM python:${PYTHON_VERSION}-slim AS deps-builder
 

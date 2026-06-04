@@ -22,8 +22,8 @@ HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"
 UV_VERSION="${UV_VERSION:-0.8.15}"
 APT_MIRROR="${APT_MIRROR:-https://mirrors.tencent.com/debian}"
 APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.tencent.com/debian-security}"
-PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tencent.com/pypi/simple/}"
-PYPI_TRUSTED_HOST="${PYPI_TRUSTED_HOST:-mirrors.tencent.com}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+PYPI_TRUSTED_HOST="${PYPI_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 ADD_HOST_GATEWAY="${ADD_HOST_GATEWAY:-true}"
 RUN_AS_HOST_USER="${RUN_AS_HOST_USER:-true}"
@@ -69,8 +69,8 @@ Optional environment variables:
   UV_VERSION        uv package manager version installed from PyPI mirror (default: 0.8.15)
   APT_MIRROR        Debian apt mirror (default: https://mirrors.tencent.com/debian)
   APT_SECURITY_MIRROR Debian security mirror (default: https://mirrors.tencent.com/debian-security)
-  PYPI_INDEX_URL    Python package mirror for uv/pip (default: https://mirrors.tencent.com/pypi/simple/)
-  PYPI_TRUSTED_HOST Python package mirror trusted host (default: mirrors.tencent.com)
+  PYPI_INDEX_URL    Python package mirror for uv/pip (default: https://pypi.tuna.tsinghua.edu.cn/simple)
+  PYPI_TRUSTED_HOST Python package mirror trusted host (default: pypi.tuna.tsinghua.edu.cn)
   NPM_REGISTRY      npm/pnpm registry (default: https://registry.npmmirror.com)
   ADD_HOST_GATEWAY  true/1 to add host.docker.internal mapping (default: true)
   RUN_AS_HOST_USER  true/1 to run container as current host UID:GID for writable bind mounts (default: true)
