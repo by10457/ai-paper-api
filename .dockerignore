@@ -11,6 +11,8 @@
 !api/**
 !core/
 !core/**
+!llm/
+!llm/**
 !models/
 !models/**
 !schemas/

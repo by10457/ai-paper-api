@@ -19,6 +19,12 @@ BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
 BUILD_MODE="${BUILD_MODE:-fast}"
 PULL_IMAGE="${PULL_IMAGE:-false}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"
+UV_VERSION="${UV_VERSION:-0.8.15}"
+APT_MIRROR="${APT_MIRROR:-https://mirrors.tencent.com/debian}"
+APT_SECURITY_MIRROR="${APT_SECURITY_MIRROR:-https://mirrors.tencent.com/debian-security}"
+PYPI_INDEX_URL="${PYPI_INDEX_URL:-https://mirrors.tencent.com/pypi/simple/}"
+PYPI_TRUSTED_HOST="${PYPI_TRUSTED_HOST:-mirrors.tencent.com}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-true}"
 FRONTEND_DIR="${FRONTEND_DIR:-../ai-paper-web}"
 FRONTEND_APP_DIR="${FRONTEND_APP_DIR:-apps/web-antdv-next}"
@@ -70,6 +76,12 @@ Optional environment variables:
   BUILD_NO_CACHE    true/1 to disable Docker build cache (default: false)
   PULL_IMAGE        true/1 to pull base images during build (default: false)
   HEALTH_TIMEOUT    Seconds to wait for Docker healthcheck (default: 90)
+  UV_VERSION        uv package manager version installed from PyPI mirror (default: 0.8.15)
+  APT_MIRROR        Debian apt mirror (default: https://mirrors.tencent.com/debian)
+  APT_SECURITY_MIRROR Debian security mirror (default: https://mirrors.tencent.com/debian-security)
+  PYPI_INDEX_URL    Python package mirror for uv/pip (default: https://mirrors.tencent.com/pypi/simple/)
+  PYPI_TRUSTED_HOST Python package mirror trusted host (default: mirrors.tencent.com)
+  NPM_REGISTRY      npm/pnpm registry (default: https://registry.npmmirror.com)
   ADD_HOST_GATEWAY  true/1 to add host.docker.internal mapping (default: true)
   RUN_AS_HOST_USER  true/1 to run container as current host UID:GID for writable bind mounts (default: true)
 
@@ -244,14 +256,14 @@ build_frontend() {
     auto)
       if [ ! -d "$frontend_path/node_modules" ]; then
         log "Installing frontend dependencies: $frontend_path"
-        pnpm --dir "$frontend_path" install --frozen-lockfile
+        pnpm --dir "$frontend_path" install --frozen-lockfile --registry "$NPM_REGISTRY"
       else
         log "Using existing frontend node_modules: $frontend_path/node_modules"
       fi
       ;;
     true|TRUE|True|1|yes|YES|Yes|on|ON|On)
       log "Installing frontend dependencies: $frontend_path"
-      pnpm --dir "$frontend_path" install --frozen-lockfile
+      pnpm --dir "$frontend_path" install --frozen-lockfile --registry "$NPM_REGISTRY"
       ;;
     false|FALSE|False|0|no|NO|No|off|OFF|Off)
       log "Skipping frontend dependency install: FRONTEND_INSTALL=$FRONTEND_INSTALL"
@@ -278,6 +290,12 @@ docker_build() {
   shift 2
 
   build_args="-f Dockerfile --target $target -t $tag"
+  build_args="$build_args --build-arg UV_VERSION=$UV_VERSION"
+  build_args="$build_args --build-arg APT_MIRROR=$APT_MIRROR"
+  build_args="$build_args --build-arg APT_SECURITY_MIRROR=$APT_SECURITY_MIRROR"
+  build_args="$build_args --build-arg PYPI_INDEX_URL=$PYPI_INDEX_URL"
+  build_args="$build_args --build-arg PYPI_TRUSTED_HOST=$PYPI_TRUSTED_HOST"
+  build_args="$build_args --build-arg NPM_REGISTRY=$NPM_REGISTRY"
   if is_truthy "$PULL_IMAGE"; then
     build_args="$build_args --pull"
   fi
