@@ -1,3 +1,5 @@
+"""负责根据论文大纲、参考文献和写作要求生成论文正文内容。"""
+
 from typing import Any, cast
 
 from langchain_core.output_parsers import StrOutputParser

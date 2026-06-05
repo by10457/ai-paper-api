@@ -1,3 +1,5 @@
+"""负责根据论文正文生成中英文摘要、关键词和致谢内容。"""
+
 import logging
 
 from langchain_core.output_parsers import StrOutputParser

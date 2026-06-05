@@ -1,7 +1,7 @@
 import asyncio
 
 from core.config import get_settings
-from services.thesis.content import crossref_client
+from services.thesis.content import reference_service_serpapi as reference_service
 
 
 class _FakeResponse:
@@ -26,7 +26,7 @@ def test_crossref_uses_mailto_from_env(monkeypatch) -> None:
     get_settings.cache_clear()
     client = _FakeClient()
 
-    asyncio.run(crossref_client._query_one(client, "A title"))
+    asyncio.run(reference_service._query_crossref_one(client, "A title"))
 
     assert client.params["mailto"] == "test@example.com"
     get_settings.cache_clear()
@@ -37,7 +37,7 @@ def test_crossref_uses_default_mailto(monkeypatch) -> None:
     get_settings.cache_clear()
     client = _FakeClient()
 
-    asyncio.run(crossref_client._query_one(client, "A title"))
+    asyncio.run(reference_service._query_crossref_one(client, "A title"))
 
     assert client.params["mailto"] == "noreply@example.com"
     get_settings.cache_clear()

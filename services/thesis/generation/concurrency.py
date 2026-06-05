@@ -53,6 +53,14 @@ async def serpapi_slot() -> AsyncIterator[None]:
 
 
 @asynccontextmanager
+async def wfdata_slot() -> AsyncIterator[None]:
+    """万方开放平台检索调用并发槽。"""
+
+    async with _semaphore("wfdata", get_settings().WFDATA_CONCURRENCY):
+        yield
+
+
+@asynccontextmanager
 async def crossref_slot() -> AsyncIterator[None]:
     """CrossRef 补全调用并发槽。"""
 

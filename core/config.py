@@ -71,13 +71,17 @@ class Settings(BaseSettings):
     TEXT_SHORT_CONCURRENCY: int = Field(default=32, ge=1)
     IMAGE_MODEL_CONCURRENCY: int = Field(default=6, ge=1)
     SERPAPI_CONCURRENCY: int = Field(default=12, ge=1)
+    WFDATA_CONCURRENCY: int = Field(default=12, ge=1)
     CROSSREF_CONCURRENCY: int = Field(default=10, ge=1)
     PAPER_GENERATION_CONCURRENCY: int = Field(default=20, ge=1)
     PAPER_WORKER_POLL_SECONDS: int = Field(default=2, ge=1)
     PAPER_GENERATION_MAX_RETRIES: int = Field(default=2, ge=0)
     PAPER_GENERATION_RETRY_DELAY_SECONDS: int = Field(default=120, ge=1)
 
-    # 参考文献检索配置：SerpApi 用于搜索，Crossref 邮箱用于规范请求来源。
+    # 参考文献检索配置：默认使用万方；SerpAPI/CrossRef 用于英文检索或补全。
+    REFERENCE_PROVIDER_MODE: str = "wfapi"
+    WFDATA_API_KEY: str = ""
+    WFDATA_API_URL: str = "https://api.wfdata.com/openwanfang/getQuery"
     SERPAPI_KEY: str = ""
     CROSSREF_MAILTO: str = ""
 
@@ -99,6 +103,18 @@ class Settings(BaseSettings):
     @property
     def serpapi_key(self) -> str:
         return self.SERPAPI_KEY
+
+    @property
+    def reference_provider_mode(self) -> str:
+        return self.REFERENCE_PROVIDER_MODE
+
+    @property
+    def wfdata_api_key(self) -> str:
+        return self.WFDATA_API_KEY
+
+    @property
+    def wfdata_api_url(self) -> str:
+        return self.WFDATA_API_URL
 
     @property
     def crossref_mailto(self) -> str:

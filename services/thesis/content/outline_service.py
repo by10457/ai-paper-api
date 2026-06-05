@@ -1,3 +1,5 @@
+"""负责根据论文题目和写作配置生成可编辑的结构化论文大纲。"""
+
 import json
 import re
 from typing import Any, cast
