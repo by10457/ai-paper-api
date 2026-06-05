@@ -175,6 +175,35 @@ usecaseDiagram
     assert 'UC1 -->|"触发安全阈值"| UC2' in normalized
 
 
+def test_normalize_flowchart_quotes_labels_and_edge_text() -> None:
+    code = """
+graph TD
+    subgraph 前端业务服务
+        A[用户输入(题目/字数)] --> B{是否通过:校验}
+    end
+    B --> C[生成论文文件] : 通过
+"""
+
+    normalized = _normalize_mermaid_code(code)
+
+    assert normalized.startswith("flowchart TD")
+    assert 'subgraph SUBGRAPH_1["前端业务服务"]' in normalized
+    assert 'A["用户输入(题目/字数)"] --> B{"是否通过:校验"}' in normalized
+    assert 'B -->|"通过"| C["生成论文文件"]' in normalized
+
+
+def test_normalize_flowchart_splits_semicolon_statements() -> None:
+    code = 'graph TD;A[模块A] --> B[模块B];B --> C[模块C]'
+
+    normalized = _normalize_mermaid_code(code)
+
+    assert normalized.splitlines() == [
+        "flowchart TD",
+        'A["模块A"] --> B["模块B"]',
+        'B --> C["模块C"]',
+    ]
+
+
 def test_summarize_render_error_keeps_first_line_only() -> None:
     error = RuntimeError("Mermaid 渲染失败\nstack line 1\nstack line 2")
 

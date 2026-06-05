@@ -57,7 +57,7 @@ async def render_all_figures(
 
             except Exception as exc:
                 if method == "mermaid":
-                    logger.warning("占位符 #%d Mermaid 失败，转 ai_image 兜底: %s", index, summarize_render_error(exc))
+                    logger.info("占位符 #%d Mermaid 渲染失败，已转 AI 插图兜底: %s", index, summarize_render_error(exc))
                     method = "ai_image"
                     max_retries = 1
                     attempt = 0

@@ -41,7 +41,7 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "你需要根据图片内容自主选择一种渲染方式（三选一）：`mermaid`、`chart`、`ai_image`。\n"
                 "**严禁在同一个位置同时给出两种方式！严禁嵌套或混合！**\n\n"
                 "### 如何选择 render_method\n"
-                "- `mermaid` 更适合：系统架构图、模块关系图、业务流程图、调用链、状态流转图、简单时序图。\n"
+                "- `mermaid` 更适合：系统架构图、模块关系图、业务流程图、调用链、状态流转图。\n"
                 "- `chart` 更适合：折线图、柱状图、饼图、测试数据图、性能趋势图、实验结果对比图。\n"
                 "- `ai_image` 更适合：抽象概念图、理论示意图、产品/界面场景图、难以规则化表达的说明图。\n"
                 "- 如果图的核心是节点关系、流程步骤、模块连接，请优先考虑 `mermaid`。\n"
@@ -55,12 +55,15 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "{{\n"
                 '  "caption": "\u56fe X.Y \u6b64\u56fe\u7684\u6807\u9898",\n'
                 '  "render_method": "mermaid",\n'
-                '  "mermaid_code": "graph TD\\n    A[模块A] --> B[模块B]"\n'
+                '  "mermaid_code": "flowchart TD\\n    A[\\"模块A\\"] --> B[\\"模块B\\"]"\n'
                 "}}\n"
                 "<</FIGURE>>\n"
                 "约束：\n"
-                "- Mermaid 图尽量紧凑，优先用 LR、TD 或 TB。\n"
-                "- Mermaid 只使用 graph/flowchart、sequenceDiagram、stateDiagram-v2 等稳定语法，禁止使用 usecaseDiagram。\n"
+                "- Mermaid 图尽量紧凑，优先使用 flowchart TD 或 flowchart LR。\n"
+                "- Mermaid 默认只使用 flowchart 稳定语法，禁止使用 usecaseDiagram、classDiagram、erDiagram、journey、gantt。\n"
+                "- 节点必须使用安全 ID，例如 A、B、C、M1、Step1；不要用中文作为节点 ID。\n"
+                "- 节点文字必须写在引号中，例如 A[\"用户提交论文信息\"]、B{\"是否通过校验\"}。\n"
+                "- 连线文字必须使用 -->|\"文字\"| 写法，禁止使用 A --> B : 文字 这种冒号写法。\n"
                 "- 节点数量尽量控制在 4-10 个以内，文字标签保持简洁。\n"
                 "- mermaid_code 中换行用 \\n 表示，引号用 \\\" 转义。\n\n"
                 "### 选择方案 B：标准数据图 → render_method: chart\n"

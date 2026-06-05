@@ -13,6 +13,8 @@ from services.thesis.image.utils import auto_crop_whitespace_fast
 
 logger = logging.getLogger(__name__)
 
+_FLOWCHART_START_PATTERN = re.compile(r"^(?:graph|flowchart)\s+(?:TD|TB|BT|LR|RL)\b", re.IGNORECASE)
+
 
 def _mermaid_node_id(prefix: str, index: int) -> str:
     """生成 Mermaid flowchart 安全节点 ID。"""
@@ -34,7 +36,115 @@ def _normalize_mermaid_code(mermaid_code: str) -> str:
     code = re.sub(r"\s*```$", "", code).strip()
     if code.lower().startswith("usecasediagram"):
         return _convert_usecase_diagram_to_flowchart(code)
+    if _FLOWCHART_START_PATTERN.match(code):
+        return _normalize_flowchart_code(code)
     return code
+
+
+def _normalize_flowchart_code(mermaid_code: str) -> str:
+    """修正 flowchart 中 LLM 常生成的高风险语法。"""
+
+    lines = _split_flowchart_lines(mermaid_code)
+    normalized: list[str] = []
+    subgraph_index = 0
+
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if index == 0:
+            normalized.append(_normalize_flowchart_header(line))
+            continue
+
+        line, subgraph_index = _normalize_subgraph_line(line, subgraph_index)
+        line = _quote_flowchart_node_labels(line)
+        line = _normalize_colon_edge_label(line)
+        normalized.append(line)
+
+    return "\n".join(normalized)
+
+
+def _split_flowchart_lines(mermaid_code: str) -> list[str]:
+    """把 LLM 常输出的一行分号 Mermaid 拆成多行。"""
+
+    lines: list[str] = []
+    for raw_line in mermaid_code.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if ";" not in line:
+            lines.append(raw_line.rstrip(";"))
+            continue
+        parts = [part.strip() for part in line.split(";") if part.strip()]
+        if parts:
+            lines.extend(parts)
+    return lines
+
+
+def _normalize_flowchart_header(line: str) -> str:
+    """统一 flowchart 头部声明。"""
+
+    header = line.strip().rstrip(";")
+    return re.sub(r"^graph\b", "flowchart", header, flags=re.IGNORECASE)
+
+
+def _normalize_subgraph_line(line: str, subgraph_index: int) -> tuple[str, int]:
+    """把中文 subgraph 标题改为带安全 ID 的写法。"""
+
+    indent = line[: len(line) - len(line.lstrip())]
+    stripped = line.strip().rstrip(";")
+    match = re.match(r"^subgraph\s+(.+)$", stripped, flags=re.IGNORECASE)
+    if not match:
+        return line, subgraph_index
+
+    body = match.group(1).strip()
+    if re.match(r"^[A-Za-z][A-Za-z0-9_]*\s*(?:\[|\()", body):
+        return line, subgraph_index
+    if re.match(r"^[A-Za-z][A-Za-z0-9_]*$", body):
+        return line, subgraph_index
+
+    subgraph_index += 1
+    label = body.strip('"')
+    return f'{indent}subgraph SUBGRAPH_{subgraph_index}["{_flowchart_label(label)}"]', subgraph_index
+
+
+def _normalize_colon_edge_label(line: str) -> str:
+    """把 A --> B : 标签 修正为 A -->|标签| B。"""
+
+    match = re.match(
+        r"^(?P<indent>\s*)(?P<source>.+?)\s*(?P<arrow>-->|---|-.->|==>)\s*(?P<target>.+?)\s+:\s+(?P<label>.+)$",
+        line.rstrip(";"),
+    )
+    if not match:
+        return line
+
+    source = match.group("source").strip()
+    arrow = match.group("arrow")
+    target = match.group("target").strip()
+    label = _flowchart_label(match.group("label").strip().strip('"'))
+    return f'{match.group("indent")}{source} {arrow}|"{label}"| {target}'
+
+
+def _quote_flowchart_node_labels(line: str) -> str:
+    """给 flowchart 节点标签加引号，降低中文标点导致的解析失败。"""
+
+    line = _replace_node_label(line, r"(?P<id>\b[A-Za-z][A-Za-z0-9_]*)\s*\[\[(?P<label>[^\]\n]+?)\]\]", "[[", "]]")
+    line = _replace_node_label(line, r"(?P<id>\b[A-Za-z][A-Za-z0-9_]*)\s*\(\((?P<label>[^)\n]+?)\)\)", "((", "))")
+    line = _replace_node_label(line, r"(?P<id>\b[A-Za-z][A-Za-z0-9_]*)\s*\[(?P<label>[^\]\n]+?)\]", "[", "]")
+    line = _replace_node_label(line, r"(?P<id>\b[A-Za-z][A-Za-z0-9_]*)\s*\{(?P<label>[^}\n]+?)\}", "{", "}")
+    line = _replace_node_label(line, r"(?P<id>\b[A-Za-z][A-Za-z0-9_]*)\s*\((?P<label>[^)\n]+?)\)", "(", ")")
+    return line
+
+
+def _replace_node_label(line: str, pattern: str, opening: str, closing: str) -> str:
+    """替换单类 Mermaid 节点标签。"""
+
+    def repl(match: re.Match[str]) -> str:
+        label = match.group("label").strip()
+        if label.startswith('"') and label.endswith('"'):
+            return match.group(0)
+        return f'{match.group("id")}{opening}"{_flowchart_label(label.strip(chr(34)))}"{closing}'
+
+    return re.sub(pattern, repl, line)
 
 
 def _convert_usecase_diagram_to_flowchart(mermaid_code: str) -> str:

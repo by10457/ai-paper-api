@@ -262,7 +262,6 @@ async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: 
 
     docx_path = str(_result_value(result, "docx_path", ""))
     file_key = await upload_to_qiniu(docx_path, task_id)
-    await notify_callback(task_id, file_key, status="completed")
     await status_store.write_status_async(
         task_id,
         "completed",
@@ -280,6 +279,7 @@ async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: 
     if direct_task_id is not None:
         status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
+    await notify_callback(task_id, file_key, status="completed")
 
 
 async def _mark_generation_failed(task_id: str, exc: Exception, direct_task_id: int | None = None) -> None:
