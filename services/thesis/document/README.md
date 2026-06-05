@@ -8,7 +8,7 @@
 
 1. 生成参考文献、正文、摘要、致谢。
 2. 从正文中解析图片占位符。
-3. 渲染 Mermaid、图表或 AI 图片，得到 `image_paths`。
+3. 调用 `services/thesis/image` 渲染 Mermaid、图表或 AI 图片，得到 `image_paths`。
 4. 调用 `document/docx_builder.py` 中的 `build_word_document(...)` 输出 `.docx` 文件。
 
 因此文档层的核心输入是：
@@ -31,7 +31,6 @@
 | `figures.py` | 插入图片并限制最大宽高，避免图片破坏版式。 |
 | `formatting.py` | 底层格式工具：字体、固定行距、页码字段参数等。 |
 | `placeholder.py` | 对外复用 `schemas.thesis` 中的图片占位符解析能力。 |
-| `image_renderer.py` | 将 Mermaid、图表、AI 图片占位符渲染为本地图片。 |
 | `utils.py` | 文档相关的小工具，例如安全文件名处理。 |
 
 ## Word 生成顺序
@@ -58,6 +57,7 @@
 
 - 业务状态、订单、支付和上传回调不要放到本目录，应放在 `business` 或 `generation` 目录。
 - 大模型提示词、正文生成、摘要生成和参考文献生成不要放到本目录，应放在 `content` 目录。
+- Mermaid、图表和 AI 图片生成不要放到本目录，应放在 `services/thesis/image`。
 - 新增 Word 页面时，优先放到 `pages.py`；如果只是主流程顺序调整，再改 `docx_builder.py`。
 - 新增段落、字体、行距、页码等底层格式能力时，优先放到 `formatting.py`。
 - 新增 section、页眉、页脚、页码重启规则时，优先放到 `sections.py`。

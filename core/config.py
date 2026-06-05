@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     PUPPETEER_EXECUTABLE_PATH: str = ""
     TEXT_LONG_CONCURRENCY: int = Field(default=16, ge=1)
     TEXT_SHORT_CONCURRENCY: int = Field(default=32, ge=1)
+    MERMAID_RENDER_CONCURRENCY: int = Field(default=2, ge=1)
+    CHART_RENDER_CONCURRENCY: int = Field(default=6, ge=1)
+    AI_IMAGE_RENDER_CONCURRENCY: int = Field(default=6, ge=1)
     IMAGE_MODEL_CONCURRENCY: int = Field(default=6, ge=1)
     SERPAPI_CONCURRENCY: int = Field(default=12, ge=1)
     WFDATA_CONCURRENCY: int = Field(default=12, ge=1)

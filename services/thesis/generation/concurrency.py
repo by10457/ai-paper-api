@@ -37,6 +37,30 @@ async def text_short_slot() -> AsyncIterator[None]:
 
 
 @asynccontextmanager
+async def mermaid_render_slot() -> AsyncIterator[None]:
+    """Mermaid/Chromium 本地渲染并发槽。"""
+
+    async with _semaphore("mermaid_render", get_settings().MERMAID_RENDER_CONCURRENCY):
+        yield
+
+
+@asynccontextmanager
+async def chart_render_slot() -> AsyncIterator[None]:
+    """matplotlib 本地图表渲染并发槽。"""
+
+    async with _semaphore("chart_render", get_settings().CHART_RENDER_CONCURRENCY):
+        yield
+
+
+@asynccontextmanager
+async def ai_image_render_slot() -> AsyncIterator[None]:
+    """AI 插图渲染流程并发槽。"""
+
+    async with _semaphore("ai_image_render", get_settings().AI_IMAGE_RENDER_CONCURRENCY):
+        yield
+
+
+@asynccontextmanager
 async def image_model_slot() -> AsyncIterator[None]:
     """图片模型调用并发槽。"""
 

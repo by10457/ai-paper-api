@@ -12,17 +12,18 @@ from services.thesis.content.abstract_service import (
 from services.thesis.content.fulltext_service import generate_fulltext
 from services.thesis.content.reference_service import generate_references
 from services.thesis.document.docx_builder import build_word_document
-from services.thesis.document.image_renderer import (
-    GenerateContentImageGenerator,
-    ImageGenerator,
-    PlaceholderImageGenerator,
-    render_all_figures,
-)
 from services.thesis.document.placeholder import (
     extract_figure_placeholders,
     split_by_render_method,
 )
 from services.thesis.document.utils import sanitize_filename
+from services.thesis.image import (
+    GenerateContentImageGenerator,
+    ImageGenerator,
+    OpenAIImageGenerator,
+    PlaceholderImageGenerator,
+    render_all_figures,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,12 @@ async def generate_thesis_document(
 
     if image_config and image_model_protocol in {"google-generate-content", "gemini-generate-content"}:
         image_generator: ImageGenerator = GenerateContentImageGenerator(
+            api_key=image_config.api_key,
+            model=image_config.model_name,
+            base_url=image_config.api_base_url,
+        )
+    elif image_config and image_model_protocol == "openai-image-generations":
+        image_generator = OpenAIImageGenerator(
             api_key=image_config.api_key,
             model=image_config.model_name,
             base_url=image_config.api_base_url,
