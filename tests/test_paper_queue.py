@@ -131,11 +131,11 @@ def test_paper_queue_moves_due_delayed_job(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(redis_module, "redis_client", fake_redis)
 
     async def run() -> None:
-        assert await paper_queue.enqueue_direct_generation(11, delay_seconds=1)
+        assert await paper_queue.enqueue_generation_task(11, delay_seconds=1)
         for payload in fake_redis.delayed:
             fake_redis.delayed[payload] = 0
         assert await paper_queue.move_due_delayed_jobs() == 1
         job = await paper_queue.pop_ready_generation_job()
-        assert job == paper_queue.PaperQueueJob("direct", 11)
+        assert job == paper_queue.PaperQueueJob("task", 11)
 
     asyncio.run(run())

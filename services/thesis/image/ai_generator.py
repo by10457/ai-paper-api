@@ -2,12 +2,15 @@
 
 import asyncio
 import base64
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 
 import httpx
 from PIL import Image
+from tortoise import timezone
 
+from llm.call_logger import record_model_call
 from services.thesis.generation.concurrency import image_model_slot
 
 IMAGE_MODEL_TIMEOUT_SECONDS = 45.0
@@ -115,10 +118,17 @@ class PlaceholderImageGenerator(ImageGenerator):
 class GenerateContentImageGenerator(ImageGenerator):
     """通过 Gemini generateContent 协议调用文生图能力。"""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://generativelanguage.googleapis.com"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://generativelanguage.googleapis.com",
+        model_config_id: int | None = None,
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.model_config_id = model_config_id
 
     async def generate(
         self,
@@ -129,6 +139,8 @@ class GenerateContentImageGenerator(ImageGenerator):
     ) -> str:
         prompt = _build_academic_image_prompt(description, _style_description(style))
         real_aspect = aspect_ratio if aspect_ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"] else "16:9"
+        started_at = timezone.now()
+        started = time.perf_counter()
 
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
@@ -144,14 +156,45 @@ class GenerateContentImageGenerator(ImageGenerator):
                 resp = await client.post(self._build_url(), json=payload)
                 resp.raise_for_status()
             except httpx.TimeoutException:
+                await _record_image_call(
+                    provider="gemini-generate-content",
+                    model_name=self.model,
+                    model_config_id=self.model_config_id,
+                    prompt=prompt,
+                    status="failed",
+                    latency_ms=_elapsed_ms(started),
+                    started_at=started_at,
+                    error_message=f"图片模型调用超时（超过 {int(IMAGE_MODEL_TIMEOUT_SECONDS)} 秒）",
+                )
                 raise RuntimeError(f"图片模型调用超时（超过 {int(IMAGE_MODEL_TIMEOUT_SECONDS)} 秒）") from None
             except httpx.HTTPStatusError as exc:
-                raise RuntimeError(self._build_http_error_message(exc.response)) from None
+                error_message = self._build_http_error_message(exc.response)
+                await _record_image_call(
+                    provider="gemini-generate-content",
+                    model_name=self.model,
+                    model_config_id=self.model_config_id,
+                    prompt=prompt,
+                    status="failed",
+                    latency_ms=_elapsed_ms(started),
+                    started_at=started_at,
+                    error_message=error_message,
+                )
+                raise RuntimeError(error_message) from None
 
             base64_data = self._extract_base64_image(resp.json())
             with open(output_path, "wb") as file:
                 file.write(base64.b64decode(base64_data))
 
+        await _record_image_call(
+            provider="gemini-generate-content",
+            model_name=self.model,
+            model_config_id=self.model_config_id,
+            prompt=prompt,
+            status="success",
+            latency_ms=_elapsed_ms(started),
+            started_at=started_at,
+            response_chars=len(base64_data),
+        )
         return output_path
 
     def _extract_base64_image(self, data: dict) -> str:
@@ -194,10 +237,17 @@ class GenerateContentImageGenerator(ImageGenerator):
 class OpenAIImageGenerator(ImageGenerator):
     """通过 OpenAI Images API 协议调用文生图能力。"""
 
-    def __init__(self, api_key: str, model: str, base_url: str = "https://api.openai.com"):
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        base_url: str = "https://api.openai.com",
+        model_config_id: int | None = None,
+    ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.model_config_id = model_config_id
 
     async def generate(
         self,
@@ -206,9 +256,12 @@ class OpenAIImageGenerator(ImageGenerator):
         aspect_ratio: str,
         output_path: str,
     ) -> str:
+        prompt = _build_academic_image_prompt(description, _style_description(style))
+        started_at = timezone.now()
+        started = time.perf_counter()
         payload = {
             "model": self.model,
-            "prompt": _build_academic_image_prompt(description, _style_description(style)),
+            "prompt": prompt,
             "size": self._resolve_size(aspect_ratio),
             "n": 1,
         }
@@ -223,14 +276,45 @@ class OpenAIImageGenerator(ImageGenerator):
                 resp = await client.post(self._build_url(), headers=headers, json=payload)
                 resp.raise_for_status()
             except httpx.TimeoutException:
+                await _record_image_call(
+                    provider="openai-image-generations",
+                    model_name=self.model,
+                    model_config_id=self.model_config_id,
+                    prompt=prompt,
+                    status="failed",
+                    latency_ms=_elapsed_ms(started),
+                    started_at=started_at,
+                    error_message=f"图片模型调用超时（超过 {int(IMAGE_MODEL_TIMEOUT_SECONDS)} 秒）",
+                )
                 raise RuntimeError(f"图片模型调用超时（超过 {int(IMAGE_MODEL_TIMEOUT_SECONDS)} 秒）") from None
             except httpx.HTTPStatusError as exc:
-                raise RuntimeError(self._build_http_error_message(exc.response)) from None
+                error_message = self._build_http_error_message(exc.response)
+                await _record_image_call(
+                    provider="openai-image-generations",
+                    model_name=self.model,
+                    model_config_id=self.model_config_id,
+                    prompt=prompt,
+                    status="failed",
+                    latency_ms=_elapsed_ms(started),
+                    started_at=started_at,
+                    error_message=error_message,
+                )
+                raise RuntimeError(error_message) from None
 
             image_bytes = await self._extract_image_bytes(resp.json(), client)
             with open(output_path, "wb") as file:
                 file.write(image_bytes)
 
+        await _record_image_call(
+            provider="openai-image-generations",
+            model_name=self.model,
+            model_config_id=self.model_config_id,
+            prompt=prompt,
+            status="success",
+            latency_ms=_elapsed_ms(started),
+            started_at=started_at,
+            response_chars=len(image_bytes),
+        )
         return output_path
 
     def _resolve_size(self, aspect_ratio: str) -> str:
@@ -291,3 +375,39 @@ class OpenAIImageGenerator(ImageGenerator):
             f"图片模型 OpenAI Images API 调用失败: status={response.status_code}, "
             f"url={self._build_safe_url()}, response={response_text}"
         )
+
+
+def _elapsed_ms(started: float) -> int:
+    """计算耗时毫秒。"""
+
+    return int((time.perf_counter() - started) * 1000)
+
+
+async def _record_image_call(
+    *,
+    provider: str,
+    model_name: str,
+    model_config_id: int | None,
+    prompt: str,
+    status: str,
+    latency_ms: int,
+    started_at: object,
+    response_chars: int = 0,
+    error_message: str | None = None,
+) -> None:
+    """记录图片模型调用日志。"""
+
+    await record_model_call(
+        config_type="figure",
+        call_type="image",
+        provider=provider,
+        model_name=model_name,
+        model_config_id=model_config_id,
+        status=status,
+        prompt_chars=len(prompt),
+        response_chars=response_chars,
+        latency_ms=latency_ms,
+        error_message=error_message,
+        started_at=started_at,
+        completed_at=timezone.now(),
+    )

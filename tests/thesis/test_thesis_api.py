@@ -91,17 +91,17 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
         assert task_id
         return SimpleNamespace(id=11, task_id=task_id, status="paid"), True
 
-    async def fake_enqueue_direct_generation(
-        direct_task_id: int,
+    async def fake_enqueue_generation_task(
+        generation_task_id: int,
         delay_seconds: int = 0,
     ) -> bool:
-        assert direct_task_id == 11
+        assert generation_task_id == 11
         assert delay_seconds == 0
-        enqueue_calls.append(direct_task_id)
+        enqueue_calls.append(generation_task_id)
         return True
 
     monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
-    monkeypatch.setattr(generation_task, "enqueue_direct_generation", fake_enqueue_direct_generation)
+    monkeypatch.setattr(generation_task, "enqueue_generation_task", fake_enqueue_generation_task)
 
     response = client.post(
         "/api/v1/thesis/generate",
@@ -153,7 +153,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
     assert payload["ai_image_count"] == 1
 
 
-def test_generate_reuses_idempotent_direct_task(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_reuses_idempotent_generation_task(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_create_direct_generate_task(
         user: SimpleNamespace,
         *,
@@ -166,12 +166,12 @@ def test_generate_reuses_idempotent_direct_task(client: TestClient, monkeypatch:
         assert idempotency_key == "wxy-paper-order-1"
         return SimpleNamespace(id=11, task_id="existing-task", status="generating"), False
 
-    async def fake_enqueue_direct_generation(direct_task_id: int, delay_seconds: int = 0) -> bool:
+    async def fake_enqueue_generation_task(generation_task_id: int, delay_seconds: int = 0) -> bool:
         del delay_seconds
-        raise AssertionError(f"幂等复用任务不应该重复启动生成: {direct_task_id}")
+        raise AssertionError(f"幂等复用任务不应该重复启动生成: {generation_task_id}")
 
     monkeypatch.setattr(PaperOrderService, "create_direct_generate_task", fake_create_direct_generate_task)
-    monkeypatch.setattr(generation_task, "enqueue_direct_generation", fake_enqueue_direct_generation)
+    monkeypatch.setattr(generation_task, "enqueue_generation_task", fake_enqueue_generation_task)
 
     response = client.post(
         "/api/v1/thesis/generate",

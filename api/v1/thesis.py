@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi import Path as FastApiPath
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from api.dependencies.api_token import get_api_token_or_jwt_user
 from models.user import User
@@ -29,6 +29,8 @@ from schemas.thesis import (
 )
 from services.thesis.business import order_workflow
 from services.thesis.generation import task_service as generation_task
+from services.thesis.generation.runtime_context import use_runtime_context
+from services.thesis.generation.sse import stream_order_status_events
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +56,9 @@ async def create_outline(
 ) -> OutlineResponse:
     """根据标题生成论文大纲。"""
 
-    del current_user
     try:
-        return await generation_task.generate_outline_for_request(req)
+        with use_runtime_context(user_id=current_user.id, stage="outline"):
+            return await generation_task.generate_outline_for_request(req)
     except RuntimeError as exc:
         logger.exception("大纲生成失败")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -154,6 +156,23 @@ async def check_paper_order_status(
     """查询论文订单状态。"""
 
     return Response.ok(data=await order_workflow.get_order_status(current_user, order_sn))
+
+
+@router.get("/orders/events", summary="SSE 推送论文订单生成状态")
+async def stream_paper_order_status_events(
+    order_sn: str,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> StreamingResponse:
+    """通过 SSE 推送论文订单状态和阶段进度。"""
+
+    return StreamingResponse(
+        stream_order_status_events(current_user, order_sn, order_workflow.get_order_status),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @router.get(

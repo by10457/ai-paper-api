@@ -5,7 +5,7 @@ import logging
 from fastapi import HTTPException, status
 
 from core.config import settings
-from models.paper import PaperOrder
+from models.paper import PaperGenerationTask, PaperOrder
 from models.user import User
 from schemas.common import PageResponse
 from schemas.thesis import (
@@ -23,12 +23,11 @@ from schemas.thesis import (
 )
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation import status_store
-from services.thesis.generation.paper_queue import enqueue_order_generation
+from services.thesis.generation.paper_queue import enqueue_generation_task
+from services.thesis.generation.runtime_context import use_runtime_context
 from services.thesis.generation.task_service import (
-    create_task_id,
-    json_outline_to_markdown,
     load_generate_outline,
-    run_generate_task,
+    run_generation_task,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,14 +48,15 @@ async def create_outline_record(user: User, req: PaperOutlineCreateRequest) -> P
 
     try:
         generate_outline = load_generate_outline()
-        outline_data = await generate_outline(
-            req.title,
-            int(req.form_params.get("lengthnum") or 8000),
-            str(req.form_params.get("codetype") or "否"),
-            str(req.form_params.get("language") or "否"),
-            req.three_level,
-            req.about_msg,
-        )
+        with use_runtime_context(user_id=user.id, stage="outline"):
+            outline_data = await generate_outline(
+                req.title,
+                int(req.form_params.get("lengthnum") or 8000),
+                str(req.form_params.get("codetype") or "否"),
+                str(req.form_params.get("language") or "否"),
+                req.three_level,
+                req.about_msg,
+            )
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(f"大纲生成失败: {exc}") from exc
     record = await PaperOrderService.create_outline_record(user, req, outline_data)
@@ -92,7 +92,8 @@ async def pay_order(
     order = await PaperOrderService.get_order(user, req.order_sn)
     should_enqueue = await PaperOrderService.pay_order(user, order)
     if should_enqueue:
-        await enqueue_order_generation(order.id)
+        generation_task = await PaperOrderService.create_order_generation_task(order.id)
+        await enqueue_generation_task(generation_task.id)
     return PaperOrderPayResponse(
         order_sn=order.order_sn,
         points=user.points,
@@ -146,11 +147,17 @@ async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailRe
     order = await PaperOrderService.get_order(user, order_sn)
     order = await _refresh_generating_order(order)
     item = _paper_order_list_item(order)
+    generation_task = await _latest_generation_task(order.id)
     return PaperOrderDetailResponse(
         **item.model_dump(),
         config_form=order.config_form if isinstance(order.config_form, dict) else None,
         outline_json=order.outline_json if isinstance(order.outline_json, list) else [],
         task_id=order.task_id,
+        task_stage=generation_task.current_stage if generation_task else None,
+        task_progress=generation_task.progress if generation_task else 0,
+        process_events=generation_task.process_events if generation_task and isinstance(generation_task.process_events, list) else [],
+        process_metadata=generation_task.process_metadata if generation_task and isinstance(generation_task.process_metadata, dict) else None,
+        result_summary=generation_task.result_summary if generation_task and isinstance(generation_task.result_summary, dict) else None,
         file_key=order.file_key,
         storage_provider=order.storage_provider,
         local_file_key=order.local_file_key,
@@ -161,45 +168,27 @@ async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailRe
 async def run_paid_paper_order(order_id: int) -> None:
     """支付成功后的后台生成流程，失败时回写订单状态。"""
 
-    task_id = create_task_id()
-    order = await PaperOrderService.mark_generating_if_paid(order_id, task_id)
-    if order is None:
-        return
-
     try:
-        normalized = PaperOrderService.normalize_generate_input(order)
-        if not normalized.outline_json:
-            raise RuntimeError("大纲不能为空")
-
-        await run_generate_task(
-            task_id,
-            normalized.title,
-            json_outline_to_markdown(normalized.outline_json),
-            {"target_word_count": normalized.target_word_count},
-            normalized.codetype,
-            normalized.wxquote,
-            normalized.language,
-            normalized.wxnum,
-            callback_url=order.callback_url or "",
-            callback_secret=order.callback_secret or "",
-        )
-        status_data = await status_store.read_status_async(task_id)
-        await PaperOrderService.mark_from_task_status(order, status_data)
+        generation_task = await PaperOrderService.create_order_generation_task(order_id)
+        await run_generation_task(generation_task.id)
     except Exception as exc:  # noqa: BLE001
         logger.exception("论文订单后台生成失败")
-        order.status = "failed"
-        order.last_error = str(exc)[:500]
-        await order.save(update_fields=["status", "last_error", "updated_at"])
+        order = await PaperOrder.filter(id=order_id).first()
+        if order is not None:
+            order.status = "failed"
+            order.last_error = str(exc)[:500]
+            await order.save(update_fields=["status", "last_error", "updated_at"])
 
 
 async def _refresh_generating_order(order: PaperOrder) -> PaperOrder:
-    if order.task_id and order.status == "generating":
+    if order.task_id and order.status in {"generating", "paid"}:
         status_data = await status_store.read_status_async(order.task_id)
         return await PaperOrderService.mark_from_task_status(order, status_data)
     return order
 
 
 def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
+    status_data = status_store.read_status(order.task_id) if order.task_id else None
     is_paid = 1 if order.status in {"paid", "generating", "completed", "failed"} else 0
     has_file = 1 if order.status == "completed" else 0
     return PaperOrderStatusResponse(
@@ -214,7 +203,15 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         local_download_url=_build_local_order_download_url(order),
         download_url=_build_order_download_url(order),
         error_msg=order.last_error,
+        message=str(status_data.get("message") or "") if status_data else order.last_error,
+        stage=str(status_data.get("stage") or "") if status_data else None,
+        progress=int(status_data.get("progress") or (100 if order.status == "completed" else 0)) if status_data else 0,
+        events=status_data.get("events", []) if status_data else [],
     )
+
+
+async def _latest_generation_task(order_id: int) -> PaperGenerationTask | None:
+    return await PaperGenerationTask.filter(order_id=order_id).order_by("-id").first()
 
 
 def _paper_order_list_item(order: PaperOrder) -> PaperOrderListItemResponse:

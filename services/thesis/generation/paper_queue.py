@@ -13,7 +13,7 @@ from tortoise.expressions import Q
 
 from core import redis as redis_module
 from core.logger import logger
-from models.paper import PaperDirectTask, PaperOrder
+from models.paper import PaperGenerationTask, PaperOrder
 
 PAPER_QUEUE_READY_KEY = "ai-paper:queue:paper:ready"
 PAPER_QUEUE_DELAYED_KEY = "ai-paper:queue:paper:delayed"
@@ -47,7 +47,7 @@ end
 return moved
 """
 
-PaperQueueKind = Literal["order", "direct"]
+PaperQueueKind = Literal["order", "task"]
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ def _decode_job(payload: str) -> PaperQueueJob | None:
     """解析 Redis 队列载荷，异常数据直接丢弃并记录日志。"""
 
     kind, separator, raw_item_id = payload.partition(":")
-    if separator != ":" or kind not in {"order", "direct"}:
+    if separator != ":" or kind not in {"order", "task"}:
         logger.warning(f"忽略非法论文队列任务：{payload}")
         return None
 
@@ -94,10 +94,10 @@ async def enqueue_order_generation(order_id: int, delay_seconds: int = 0) -> boo
     return await _enqueue_generation_job("order", order_id, delay_seconds)
 
 
-async def enqueue_direct_generation(direct_task_id: int, delay_seconds: int = 0) -> bool:
-    """把接口直连生成任务加入 Redis 生成队列。"""
+async def enqueue_generation_task(generation_task_id: int, delay_seconds: int = 0) -> bool:
+    """把论文生成任务加入 Redis 生成队列。"""
 
-    return await _enqueue_generation_job("direct", direct_task_id, delay_seconds)
+    return await _enqueue_generation_job("task", generation_task_id, delay_seconds)
 
 
 async def pop_ready_generation_job() -> PaperQueueJob | None:
@@ -142,16 +142,16 @@ async def enqueue_pending_paid_jobs(limit: int) -> tuple[int, int]:
         logger.warning("Redis 未连接，跳过论文生成任务补投")
         return 0, 0
 
-    orders = await _list_due_paid_orders(limit)
+    generation_tasks = await _list_due_paid_generation_tasks(limit)
+    for generation_task in generation_tasks:
+        await enqueue_generation_task(generation_task.id)
+
+    remaining_limit = max(limit - len(generation_tasks), 0)
+    orders = await _list_due_paid_orders_without_task(remaining_limit)
     for order in orders:
         await enqueue_order_generation(order.id)
 
-    remaining_limit = max(limit - len(orders), 0)
-    direct_tasks = await _list_due_paid_direct_tasks(remaining_limit)
-    for direct_task in direct_tasks:
-        await enqueue_direct_generation(direct_task.id)
-
-    return len(orders), len(direct_tasks)
+    return len(orders), len(generation_tasks)
 
 
 async def _enqueue_generation_job(kind: PaperQueueKind, item_id: int, delay_seconds: int) -> bool:
@@ -181,19 +181,27 @@ async def _enqueue_generation_job(kind: PaperQueueKind, item_id: int, delay_seco
     return True
 
 
-async def _list_due_paid_orders(limit: int) -> list[PaperOrder]:
-    """查询当前已到生成时间的已支付订单。"""
+async def _list_due_paid_orders_without_task(limit: int) -> list[PaperOrder]:
+    """查询已到生成时间但还没有待执行任务的已支付订单。"""
 
     if limit <= 0:
         return []
     eligibility = Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=timezone.now())
-    return await PaperOrder.filter(Q(status="paid") & eligibility).order_by("id").limit(limit)
+    orders = await PaperOrder.filter(Q(status="paid") & eligibility).order_by("id").limit(limit * 2)
+    result: list[PaperOrder] = []
+    for order in orders:
+        existing_task = await PaperGenerationTask.filter(order_id=order.id, status__in=["paid", "generating"]).first()
+        if existing_task is None:
+            result.append(order)
+        if len(result) >= limit:
+            break
+    return result
 
 
-async def _list_due_paid_direct_tasks(limit: int) -> list[PaperDirectTask]:
+async def _list_due_paid_generation_tasks(limit: int) -> list[PaperGenerationTask]:
     """查询当前已到生成时间的接口直连已支付任务。"""
 
     if limit <= 0:
         return []
     eligibility = Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=timezone.now())
-    return await PaperDirectTask.filter(Q(status="paid") & eligibility).order_by("id").limit(limit)
+    return await PaperGenerationTask.filter(Q(status="paid") & eligibility).order_by("id").limit(limit)

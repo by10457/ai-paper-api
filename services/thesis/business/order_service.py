@@ -8,7 +8,7 @@ from tortoise.transactions import in_transaction
 
 from core.config import settings
 from models.admin import PointLedger
-from models.paper import PaperDirectTask, PaperOrder, PaperOutlineRecord
+from models.paper import PaperGenerationTask, PaperOrder, PaperOutlineRecord
 from models.user import User
 from schemas.thesis import (
     NormalizedPaperOrder,
@@ -17,7 +17,7 @@ from schemas.thesis import (
     PaperOrderCreateRequest,
     PaperOutlineCreateRequest,
 )
-from services.thesis.generation.paper_queue import enqueue_direct_generation, enqueue_order_generation
+from services.thesis.generation.paper_queue import enqueue_order_generation
 
 
 class PaperOrderService:
@@ -170,6 +170,40 @@ class PaperOrderService:
         return True
 
     @staticmethod
+    async def create_order_generation_task(order_id: int) -> PaperGenerationTask:
+        """为已支付论文订单创建生成过程任务。"""
+
+        async with in_transaction() as conn:
+            order = await PaperOrder.filter(id=order_id).using_db(conn).select_for_update().first()
+            if order is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="论文订单不存在")
+            existing_task = (
+                await PaperGenerationTask.filter(order_id=order.id, status__in=["paid", "generating"])
+                .using_db(conn)
+                .order_by("-id")
+                .first()
+            )
+            if existing_task is not None:
+                return existing_task
+
+            task_id = PaperOrderService._generate_task_id()
+            generation_task = await PaperGenerationTask.create(
+                using_db=conn,
+                user_id=order.user_id,
+                order=order,
+                task_id=task_id,
+                order_sn=order.order_sn,
+                title=order.title,
+                status="paid",
+                current_stage="queued",
+                progress=2,
+            )
+            order.task_id = task_id
+            order.next_retry_at = None  # type: ignore[assignment]
+            await order.save(using_db=conn, update_fields=["task_id", "next_retry_at", "updated_at"])
+            return generation_task
+
+    @staticmethod
     async def create_direct_generate_task(
         user: User,
         *,
@@ -177,8 +211,8 @@ class PaperOrderService:
         title: str,
         request_payload: dict[str, Any],
         idempotency_key: str | None,
-    ) -> tuple[PaperDirectTask, bool]:
-        """创建接口直连生成任务并扣积分，返回任务和是否需要启动生成。"""
+    ) -> tuple[PaperGenerationTask, bool]:
+        """创建接口直连论文订单并扣积分，返回生成任务和是否需要启动生成。"""
 
         async with in_transaction() as conn:
             locked_user = await User.filter(id=user.id).using_db(conn).select_for_update().first()
@@ -186,43 +220,63 @@ class PaperOrderService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
             if idempotency_key:
-                existing_task = await PaperDirectTask.filter(
+                existing_order = await PaperOrder.filter(
                     user_id=user.id,
                     idempotency_key=idempotency_key,
                 ).using_db(conn).select_for_update().first()
-                if existing_task is not None:
-                    return existing_task, existing_task.status == "paid"
+                if existing_order is not None:
+                    existing_task = await PaperGenerationTask.filter(order_id=existing_order.id).using_db(conn).order_by("-id").first()
+                    if existing_task is not None:
+                        return existing_task, existing_task.status == "paid"
 
             if locked_user.points < settings.PAPER_GENERATE_POINTS:
                 raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="积分余额不足")
 
             locked_user.points -= settings.PAPER_GENERATE_POINTS
             await locked_user.save(using_db=conn, update_fields=["points", "updated_at"])
-            direct_task = await PaperDirectTask.create(
+            order = await PaperOrder.create(
                 using_db=conn,
                 user=locked_user,
+                outline_record=None,
+                order_sn=PaperOrderService._generate_order_sn(),
+                idempotency_key=idempotency_key,
+                title=title,
+                outline_json=request_payload.get("outline_json") or [],
+                config_form=request_payload,
+                cost_points=settings.PAPER_GENERATE_POINTS,
+                paid_points=settings.PAPER_GENERATE_POINTS,
+                status="paid",
+                callback_url=str(request_payload.get("callback_url") or settings.paper_callback_url or "") or None,
+                callback_secret=str(request_payload.get("callback_secret") or settings.paper_callback_secret or "") or None,
+                paid_at=timezone.now(),
+            )
+            generation_task = await PaperGenerationTask.create(
+                using_db=conn,
+                user=locked_user,
+                order=order,
                 idempotency_key=idempotency_key,
                 task_id=task_id,
+                order_sn=order.order_sn,
                 title=title,
-                request_payload=request_payload,
-                callback_url=str(request_payload.get("callback_url") or "") or None,
-                callback_secret=str(request_payload.get("callback_secret") or "") or None,
-                cost_points=settings.PAPER_GENERATE_POINTS,
-                refunded_points=0,
                 status="paid",
+                current_stage="queued",
+                progress=2,
             )
+            order.task_id = task_id
+            await order.save(using_db=conn, update_fields=["task_id", "updated_at"])
             await PointLedger.create(
                 using_db=conn,
                 user=locked_user,
+                order=order,
                 change_type="paper_api_deduct",
                 delta=-settings.PAPER_GENERATE_POINTS,
                 balance_after=locked_user.points,
-                reason=f"直接生成论文 {task_id} 积分支付",
+                reason=f"论文订单 {order.order_sn} 接口调用积分支付",
                 metadata={"task_id": task_id, "title": title, "idempotency_key": idempotency_key},
             )
 
         await user.refresh_from_db()
-        return direct_task, True
+        return generation_task, True
 
     @staticmethod
     async def mark_generating_if_paid(order_id: int, task_id: str) -> PaperOrder | None:
@@ -248,43 +302,43 @@ class PaperOrderService:
             return order
 
     @staticmethod
-    async def mark_direct_task_generating_if_paid(direct_task_id: int) -> PaperDirectTask | None:
+    async def mark_generation_task_generating_if_paid(generation_task_id: int) -> PaperGenerationTask | None:
         """把接口直连已扣费任务切换到生成中；已被其它任务启动时返回 None。"""
 
         async with in_transaction() as conn:
-            direct_task = await PaperDirectTask.filter(id=direct_task_id).using_db(conn).select_for_update().first()
-            if direct_task is None or direct_task.status != "paid":
+            generation_task = await PaperGenerationTask.filter(id=generation_task_id).using_db(conn).select_for_update().first()
+            if generation_task is None or generation_task.status != "paid":
                 return None
-            if direct_task.next_retry_at and direct_task.next_retry_at > timezone.now():
+            if generation_task.next_retry_at and generation_task.next_retry_at > timezone.now():
                 return None
 
-            direct_task.status = "generating"
-            direct_task.started_at = timezone.now()
-            direct_task.last_error = ""
-            direct_task.next_retry_at = None  # type: ignore[assignment]
-            await direct_task.save(
+            generation_task.status = "generating"
+            generation_task.started_at = timezone.now()
+            generation_task.last_error = ""
+            generation_task.next_retry_at = None  # type: ignore[assignment]
+            await generation_task.save(
                 using_db=conn,
                 update_fields=["status", "started_at", "last_error", "next_retry_at", "updated_at"],
             )
-            return direct_task
+            return generation_task
 
     @staticmethod
-    async def mark_direct_task_from_status(direct_task_id: int, data: dict[str, Any] | None) -> None:
-        """根据生成任务状态回写接口直连任务记录。"""
+    async def mark_generation_task_from_status(generation_task_id: int, data: dict[str, Any] | None) -> None:
+        """根据生成状态回写任务过程记录和对应订单。"""
 
-        direct_task = await PaperDirectTask.filter(id=direct_task_id).first()
-        if direct_task is None or not data:
+        generation_task = await PaperGenerationTask.filter(id=generation_task_id).prefetch_related("order").first()
+        if generation_task is None or not data:
             return
 
         task_status = str(data.get("status", ""))
         if task_status == "completed":
-            direct_task.status = "completed"
-            direct_task.storage_provider = str(data.get("storage_provider") or "")
-            direct_task.file_key = str(data.get("file_key") or "")
-            direct_task.local_file_key = str(data.get("local_file_key") or "")
-            direct_task.completed_at = timezone.now()
-            direct_task.last_error = ""
-            await direct_task.save(
+            generation_task.status = "completed"
+            generation_task.storage_provider = str(data.get("storage_provider") or "")
+            generation_task.file_key = str(data.get("file_key") or "")
+            generation_task.local_file_key = str(data.get("local_file_key") or "")
+            generation_task.completed_at = timezone.now()
+            generation_task.last_error = ""
+            await generation_task.save(
                 update_fields=[
                     "status",
                     "storage_provider",
@@ -295,66 +349,12 @@ class PaperOrderService:
                     "updated_at",
                 ]
             )
+            await PaperOrderService.mark_from_task_status(generation_task.order, data)
         elif task_status == "failed":
-            error_type = str(data.get("error_type") or "generation_error")
-            if error_type in {"provider_quota", "provider_config"}:
-                await PaperOrderService.refund_failed_direct_task_points(
-                    direct_task.id,
-                    str(data.get("message") or "生成服务暂时不可用，本次扣除积分已退回，请稍后重试或联系管理员"),
-                    error_type,
-                )
-                return
-            if await PaperOrderService.schedule_direct_task_retry_if_possible(direct_task.id, data):
-                return
-            await PaperOrderService.refund_failed_direct_task_points(
-                direct_task.id,
-                str(data.get("message") or "生成失败，本次扣除积分已退回"),
-                error_type,
-            )
-
-    @staticmethod
-    async def refund_failed_direct_task_points(
-        direct_task_id: int,
-        reason: str,
-        failure_type: str = "generation_error",
-    ) -> None:
-        """生成最终失败时退回接口直连任务扣费。"""
-
-        async with in_transaction() as conn:
-            direct_task = (
-                await PaperDirectTask.filter(id=direct_task_id)
-                .using_db(conn)
-                .select_for_update()
-                .first()
-            )
-            if direct_task is None:
-                return
-
-            refundable = direct_task.cost_points - direct_task.refunded_points
-            user = await User.filter(id=direct_task.user_id).using_db(conn).select_for_update().first()
-            if user is None:
-                return
-
-            if refundable > 0:
-                user.points += refundable
-                await user.save(using_db=conn, update_fields=["points", "updated_at"])
-                direct_task.refunded_points += refundable
-                await PointLedger.create(
-                    using_db=conn,
-                    user=user,
-                    change_type="paper_api_refund",
-                    delta=refundable,
-                    balance_after=user.points,
-                    reason=reason,
-                    metadata={"task_id": direct_task.task_id, "reason": failure_type},
-                )
-
-            direct_task.status = "failed"
-            direct_task.last_error = reason[:500]
-            await direct_task.save(
-                using_db=conn,
-                update_fields=["status", "refunded_points", "last_error", "updated_at"],
-            )
+            generation_task.status = "failed"
+            generation_task.last_error = str(data.get("message") or "生成失败")[:500]
+            await generation_task.save(update_fields=["status", "last_error", "updated_at"])
+            await PaperOrderService.mark_from_task_status(generation_task.order, data)
 
     @staticmethod
     async def mark_from_task_status(order: PaperOrder, data: dict[str, Any] | None) -> PaperOrder:
@@ -443,50 +443,6 @@ class PaperOrderService:
         return retry_order
 
     @staticmethod
-    async def schedule_direct_task_retry_if_possible(direct_task_id: int, data: dict[str, Any]) -> bool:
-        """普通生成失败时按配置延迟重试接口直连任务。"""
-
-        should_enqueue = False
-        async with in_transaction() as conn:
-            direct_task = (
-                await PaperDirectTask.filter(id=direct_task_id)
-                .using_db(conn)
-                .select_for_update()
-                .first()
-            )
-            if direct_task is None or direct_task.retry_count >= settings.PAPER_GENERATION_MAX_RETRIES:
-                return False
-
-            retry_count = direct_task.retry_count + 1
-            direct_task.status = "paid"
-            direct_task.started_at = None  # type: ignore[assignment]
-            direct_task.retry_count = retry_count
-            direct_task.next_retry_at = timezone.now() + timedelta(seconds=settings.PAPER_GENERATION_RETRY_DELAY_SECONDS)
-            direct_task.last_error = (
-                f"{str(data.get('message') or '生成失败')}，"
-                f"将自动重试 {retry_count}/{settings.PAPER_GENERATION_MAX_RETRIES}"
-            )[:500]
-            await direct_task.save(
-                using_db=conn,
-                update_fields=[
-                    "status",
-                    "started_at",
-                    "retry_count",
-                    "next_retry_at",
-                    "last_error",
-                    "updated_at",
-                ],
-            )
-            should_enqueue = True
-
-        if should_enqueue:
-            await enqueue_direct_generation(
-                direct_task_id,
-                delay_seconds=settings.PAPER_GENERATION_RETRY_DELAY_SECONDS,
-            )
-        return should_enqueue
-
-    @staticmethod
     async def refund_failed_order_points(
         order_id: int,
         reason: str,
@@ -539,7 +495,7 @@ class PaperOrderService:
         return NormalizedPaperOrder(
             title=order.title,
             outline_json=PaperOrderService._normalize_outline(order.outline_json),
-            target_word_count=PaperOrderService._to_int(config.get("lengthnum"), 8000),
+            target_word_count=PaperOrderService._to_int(config.get("lengthnum") or config.get("target_word_count"), 8000),
             codetype=PaperOrderService._to_text(config.get("codetype"), "否"),
             wxquote=PaperOrderService._to_text(config.get("wxquote"), "标注"),
             language=PaperOrderService._to_text(config.get("language"), "否"),
@@ -578,6 +534,10 @@ class PaperOrderService:
     def _generate_order_sn() -> str:
         timestamp = timezone.now().strftime("%Y%m%d%H%M%S")
         return f"AP{timestamp}{secrets.token_hex(4).upper()}"
+
+    @staticmethod
+    def _generate_task_id() -> str:
+        return secrets.token_hex(6)
 
     @staticmethod
     def _to_text(value: Any, default: str) -> str:

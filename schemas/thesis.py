@@ -105,6 +105,9 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: Literal["pending", "completed", "failed"]
     message: str = ""
+    stage: str = Field(default="", description="当前生成阶段")
+    progress: int = Field(default=0, ge=0, le=100, description="生成进度")
+    events: list[dict[str, Any]] = Field(default_factory=list, description="阶段事件")
     file_key: str = Field(default="", description="主存储文件 key，生成完成后填充")
     download_url: str = Field(default="", description="下载地址，生成完成后填充")
     storage_provider: str = Field(default="", description="主存储类型")
@@ -199,6 +202,10 @@ class PaperOrderStatusResponse(BaseModel):
     download_url: str | None = None
     local_download_url: str | None = None
     error_msg: str | None = None
+    message: str | None = None
+    stage: str | None = None
+    progress: int = 0
+    events: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PaperOrderDownloadUrlResponse(BaseModel):
@@ -236,6 +243,11 @@ class PaperOrderDetailResponse(PaperOrderListItemResponse):
     config_form: dict[str, Any] | None = None
     outline_json: list[dict[str, Any]]
     task_id: str | None = None
+    task_stage: str | None = None
+    task_progress: int = 0
+    process_events: list[dict[str, Any]] = Field(default_factory=list)
+    process_metadata: dict[str, Any] | None = None
+    result_summary: dict[str, Any] | None = None
     file_key: str | None = None
     storage_provider: str | None = None
     local_file_key: str | None = None

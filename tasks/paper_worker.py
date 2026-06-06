@@ -6,7 +6,7 @@ from core.config import settings
 from core.logger import logger
 from services.thesis.business.order_workflow import run_paid_paper_order
 from services.thesis.generation.paper_queue import PaperQueueJob, pop_ready_generation_job
-from services.thesis.generation.task_service import run_direct_generate_task
+from services.thesis.generation.task_service import run_generation_task
 
 
 async def run_paper_generation_worker(stop_event: asyncio.Event) -> None:
@@ -62,4 +62,4 @@ async def _run_queue_job(job: PaperQueueJob) -> None:
     if job.kind == "order":
         await run_paid_paper_order(job.item_id)
     else:
-        await run_direct_generate_task(job.item_id)
+        await run_generation_task(job.item_id)

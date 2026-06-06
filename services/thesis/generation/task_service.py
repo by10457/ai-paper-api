@@ -10,7 +10,7 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 from llm.client import is_provider_config_error, is_provider_quota_error
-from models.paper import PaperDirectTask
+from models.paper import PaperGenerationTask
 from models.user import User
 from schemas.thesis import (
     GenerateRequest,
@@ -22,7 +22,9 @@ from schemas.thesis import (
 )
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation import status_store
-from services.thesis.generation.paper_queue import enqueue_direct_generation
+from services.thesis.generation.paper_queue import enqueue_generation_task
+from services.thesis.generation.progress import publish_progress
+from services.thesis.generation.runtime_context import use_runtime_context
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +98,7 @@ async def submit_generate_request(
     """提交接口直连论文生成任务，扣减积分后进入独立 worker 队列。"""
 
     task_id = create_task_id()
-    direct_task, should_start = await PaperOrderService.create_direct_generate_task(
+    generation_task, should_start = await PaperOrderService.create_direct_generate_task(
         user,
         task_id=task_id,
         title=req.title,
@@ -104,37 +106,66 @@ async def submit_generate_request(
         idempotency_key=idempotency_key,
     )
     if (
-        await status_store.read_status_async(direct_task.task_id) is None
-        and direct_task.status in {"paid", "generating"}
+        await status_store.read_status_async(generation_task.task_id) is None
+        and generation_task.status in {"paid", "generating"}
     ):
-        await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
+        await publish_progress(generation_task.task_id, "queued", "论文生成任务已进入队列")
     if should_start:
-        await enqueue_direct_generation(direct_task.id)
-    return GenerateSubmitResponse(task_id=direct_task.task_id)
+        await enqueue_generation_task(generation_task.id)
+    return GenerateSubmitResponse(task_id=generation_task.task_id)
 
 
-async def run_direct_generate_task(direct_task_id: int) -> None:
-    """后台执行接口直连论文生成任务。"""
+async def run_generation_task(generation_task_id: int) -> None:
+    """后台执行统一论文生成任务。"""
 
-    direct_task = await PaperOrderService.mark_direct_task_generating_if_paid(direct_task_id)
-    if direct_task is None:
+    generation_task = await PaperOrderService.mark_generation_task_generating_if_paid(generation_task_id)
+    if generation_task is None:
         return
 
-    await status_store.write_status_async(direct_task.task_id, "pending", message="正在生成论文...")
+    await publish_progress(generation_task.task_id, "started", "论文生成任务已开始")
+    with use_runtime_context(
+        user_id=generation_task.user_id,
+        order_id=generation_task.order_id,
+        generation_task_id=generation_task.id,
+        task_id=generation_task.task_id,
+    ):
+        try:
+            await _run_order_generation_task(generation_task)
+        except Exception as exc:  # noqa: BLE001
+            await _mark_generation_failed(generation_task.task_id, exc, generation_task.id)
 
-    req = GenerateRequest(**cast(dict[str, Any], direct_task.request_payload))
+
+async def _run_order_generation_task(generation_task: PaperGenerationTask) -> None:
+    """执行论文订单生成任务。"""
+
+    from models.paper import PaperOrder
+
+    order = await PaperOrder.filter(id=generation_task.order_id).first()
+    if order is None:
+        raise RuntimeError("论文订单不存在")
+    normalized = PaperOrderService.normalize_generate_input(order)
+    if not normalized.outline_json:
+        raise RuntimeError("大纲不能为空")
+
+    order.status = "generating"
+    order.task_id = generation_task.task_id
+    order.started_at = generation_task.started_at
+    order.last_error = ""
+    await order.save(update_fields=["status", "task_id", "started_at", "last_error", "updated_at"])
+
     await run_generate_task(
-        direct_task.task_id,
-        req.title,
-        json_outline_to_markdown(req.outline_json),
-        _cover_kwargs(req),
-        req.codetype,
-        req.wxquote,
-        req.language,
-        req.wxnum,
-        direct_task_id=direct_task.id,
-        callback_url=req.callback_url,
-        callback_secret=req.callback_secret,
+        generation_task.task_id,
+        normalized.title,
+        json_outline_to_markdown(normalized.outline_json),
+        {"target_word_count": normalized.target_word_count},
+        normalized.codetype,
+        normalized.wxquote,
+        normalized.language,
+        normalized.wxnum,
+        generation_task_id=generation_task.id,
+        callback_url=order.callback_url or "",
+        callback_secret=order.callback_secret or "",
+        enable_callback=bool(order.callback_url),
     )
 
 
@@ -150,14 +181,14 @@ def get_task_status(task_id: str) -> TaskStatusResponse:
 async def get_task_status_for_user(user: User, task_id: str) -> TaskStatusResponse:
     """查询当前用户可访问的接口直连任务状态。"""
 
-    direct_task = await _get_visible_direct_task(user, task_id)
-    if direct_task is not None and direct_task.status in {"paid", "generating"}:
-        return _direct_task_status_response(direct_task)
+    generation_task = await _get_visible_generation_task(user, task_id)
+    if generation_task is not None and generation_task.status in {"paid", "generating"}:
+        return _generation_task_status_response(generation_task)
     data = await status_store.read_status_async(task_id)
     if data is not None:
         return TaskStatusResponse(**data)
-    if direct_task is not None:
-        return _direct_task_status_response(direct_task)
+    if generation_task is not None:
+        return _generation_task_status_response(generation_task)
     raise HTTPException(status_code=404, detail="任务不存在")
 
 
@@ -187,7 +218,7 @@ def _download_path_from_status(data: dict[str, Any] | None) -> Path:
 async def get_download_path_for_user(user: User, task_id: str) -> Path:
     """返回当前用户可访问的已完成 Word 文件路径。"""
 
-    await _get_visible_direct_task(user, task_id)
+    await _get_visible_generation_task(user, task_id)
     data = await status_store.read_status_async(task_id)
     return _download_path_from_status(data)
 
@@ -201,9 +232,10 @@ async def run_generate_task(
     wxquote: str = "标注",
     language: str = "否",
     wxnum: int = 25,
-    direct_task_id: int | None = None,
+    generation_task_id: int | None = None,
     callback_url: str = "",
     callback_secret: str = "",
+    enable_callback: bool = True,
 ) -> None:
     """后台执行论文生成、上传和业务回调，并同步任务状态。"""
 
@@ -220,65 +252,64 @@ async def run_generate_task(
             wxnum=wxnum,
             **cover_kwargs,
         )
-        await _mark_generation_completed(task_id, result, direct_task_id, callback_url, callback_secret)
+        await _mark_generation_completed(
+            task_id,
+            result,
+            generation_task_id,
+            callback_url,
+            callback_secret,
+            enable_callback,
+        )
     except Exception as exc:  # noqa: BLE001
-        await _mark_generation_failed(task_id, exc, direct_task_id, callback_url, callback_secret)
+        await _mark_generation_failed(task_id, exc, generation_task_id, callback_url, callback_secret, enable_callback)
 
 
-def _cover_kwargs(req: GenerateRequest) -> dict[str, Any]:
-    return {
-        "target_word_count": req.target_word_count,
-        "author": req.author,
-        "advisor": req.advisor,
-        "degree_type": req.degree_type,
-        "major": req.major,
-        "school": req.school,
-        "year_month": req.year_month,
-        "student_id": req.student_id,
-        "student_class": req.student_class,
-    }
-
-
-async def _get_visible_direct_task(user: User, task_id: str) -> PaperDirectTask | None:
-    direct_task = await PaperDirectTask.filter(task_id=task_id).first()
-    if direct_task is None:
+async def _get_visible_generation_task(user: User, task_id: str) -> PaperGenerationTask | None:
+    generation_task = await PaperGenerationTask.filter(task_id=task_id).first()
+    if generation_task is None:
         return None
-    if direct_task.user_id != user.id and user.role != "admin":
+    if generation_task.user_id != user.id and user.role != "admin":
         raise HTTPException(status_code=404, detail="任务不存在")
-    return direct_task
+    return generation_task
 
 
-def _direct_task_status_response(direct_task: PaperDirectTask) -> TaskStatusResponse:
+def _generation_task_status_response(generation_task: PaperGenerationTask) -> TaskStatusResponse:
     status = "pending"
-    if direct_task.status in {"completed", "failed"}:
-        status = direct_task.status
+    if generation_task.status in {"completed", "failed"}:
+        status = generation_task.status
     return TaskStatusResponse(
-        task_id=direct_task.task_id,
+        task_id=generation_task.task_id,
         status=cast(Any, status),
-        message=direct_task.last_error or ("论文生成完成" if direct_task.status == "completed" else "正在生成论文..."),
-        file_key=direct_task.file_key or "",
-        storage_provider=direct_task.storage_provider or "",
-        local_file_key=direct_task.local_file_key or "",
-        local_download_url=_build_local_download_url(direct_task.local_file_key),
+        message=generation_task.last_error or ("论文生成完成" if generation_task.status == "completed" else "正在生成论文..."),
+        stage=generation_task.current_stage or "",
+        progress=generation_task.progress,
+        events=cast(list[dict[str, Any]], generation_task.process_events or []),
+        file_key=generation_task.file_key or "",
+        storage_provider=generation_task.storage_provider or "",
+        local_file_key=generation_task.local_file_key or "",
+        local_download_url=_build_local_download_url(generation_task.local_file_key),
     )
 
 
 async def _mark_generation_completed(
     task_id: str,
     result: Any,
-    direct_task_id: int | None = None,
+    generation_task_id: int | None = None,
     callback_url: str = "",
     callback_secret: str = "",
+    enable_callback: bool = True,
 ) -> None:
     from services.thesis.business.order_callback import notify_callback
     from services.thesis.storage.document_storage import store_document
 
     docx_path = str(_result_value(result, "docx_path", ""))
+    await publish_progress(task_id, "storage", "正在保存论文文件")
     stored = await store_document(docx_path, task_id)
-    await status_store.write_status_async(
+    await publish_progress(
         task_id,
         "completed",
-        message="论文生成完成",
+        "论文生成完成",
+        status="completed",
         storage_provider=stored.storage_provider,
         file_key=stored.file_key,
         download_url=stored.download_url,
@@ -293,9 +324,11 @@ async def _mark_generation_completed(
         fulltext_char_count=_result_value(result, "fulltext_char_count", 0),
         truncation_warning=_result_value(result, "truncation_warning", False),
     )
-    if direct_task_id is not None:
+    if generation_task_id is not None:
         status_data = await status_store.read_status_async(task_id)
-        await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
+        await PaperOrderService.mark_generation_task_from_status(generation_task_id, status_data)
+    if not enable_callback:
+        return
     await notify_callback(
         task_id,
         file_key=stored.file_key,
@@ -313,9 +346,10 @@ async def _mark_generation_completed(
 async def _mark_generation_failed(
     task_id: str,
     exc: Exception,
-    direct_task_id: int | None = None,
+    generation_task_id: int | None = None,
     callback_url: str = "",
     callback_secret: str = "",
+    enable_callback: bool = True,
 ) -> None:
     logger.exception("论文生成失败")
     if is_provider_quota_error(exc):
@@ -327,16 +361,19 @@ async def _mark_generation_failed(
     else:
         error_type = "generation_error"
         error_msg = "生成失败，请稍后重试或联系管理员"
-    await status_store.write_status_async(
+    await publish_progress(
         task_id,
         "failed",
-        message=error_msg,
+        error_msg,
+        status="failed",
         error_type=error_type,
         internal_error=str(exc)[:500],
     )
-    if direct_task_id is not None:
+    if generation_task_id is not None:
         status_data = await status_store.read_status_async(task_id)
-        await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
+        await PaperOrderService.mark_generation_task_from_status(generation_task_id, status_data)
+    if not enable_callback:
+        return
     try:
         from services.thesis.business.order_callback import notify_callback
 

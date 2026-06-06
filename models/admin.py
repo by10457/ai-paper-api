@@ -7,7 +7,7 @@ from tortoise import fields
 from models.base import BaseModel
 
 if TYPE_CHECKING:
-    from models.paper import PaperOrder
+    from models.paper import PaperGenerationTask, PaperOrder
     from models.user import User
 
 
@@ -61,12 +61,20 @@ class ModelCallLog(BaseModel):
 
     user: fields.ForeignKeyNullableRelation[User]
     order: fields.ForeignKeyNullableRelation[PaperOrder]
+    generation_task: fields.ForeignKeyNullableRelation[PaperGenerationTask]
     model_config: fields.ForeignKeyNullableRelation[ModelConfig]
     user_id: int | None
     order_id: int | None
+    generation_task_id: int | None
     model_config_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="model_call_logs", null=True, description="用户")
     order = fields.ForeignKeyField("models.PaperOrder", related_name="model_call_logs", null=True, description="订单")
+    generation_task = fields.ForeignKeyField(
+        "models.PaperGenerationTask",
+        related_name="model_call_logs",
+        null=True,
+        description="论文生成任务",
+    )
     model_config = fields.ForeignKeyField(
         "models.ModelConfig",
         related_name="call_logs",
@@ -74,13 +82,21 @@ class ModelCallLog(BaseModel):
         description="模型配置",
     )
     config_type = fields.CharField(max_length=32, description="调用用途")
+    call_type = fields.CharField(max_length=32, default="text", description="调用类型：text/image")
+    task_id = fields.CharField(max_length=64, null=True, description="生成任务 ID")
+    stage = fields.CharField(max_length=64, null=True, description="生成阶段")
     provider = fields.CharField(max_length=64, description="调用协议/服务商标识")
     model_name = fields.CharField(max_length=128, description="模型名称")
     input_tokens = fields.IntField(default=0, description="输入 token")
     output_tokens = fields.IntField(default=0, description="输出 token")
+    prompt_chars = fields.IntField(default=0, description="输入字符数")
+    response_chars = fields.IntField(default=0, description="输出字符数")
     latency_ms = fields.IntField(default=0, description="耗时毫秒")
     status = fields.CharField(max_length=32, description="调用状态")
     error_message = fields.CharField(max_length=500, null=True, description="错误信息")
+    metadata = fields.JSONField(null=True, description="扩展元数据")
+    started_at = fields.DatetimeField(null=True, description="调用开始时间")
+    completed_at = fields.DatetimeField(null=True, description="调用结束时间")
 
     class Meta:
         table = "model_call_logs"

@@ -28,6 +28,7 @@ from llm.prompts.thesis_reference_prompt import (
     REFERENCE_KEYWORD_PROMPT,
 )
 from services.thesis.generation.concurrency import crossref_slot, serpapi_slot, text_short_slot
+from services.thesis.generation.progress import record_process_detail
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +430,15 @@ async def generate_references(
         logger.warning("参考文献关键词提取失败，使用标题兜底: %s", exc)
         zh_query = title
         en_queries = [title]
+    await record_process_detail(
+        "references",
+        "已提取 SerpAPI 文献检索关键词",
+        provider="serpapi",
+        zh_query=zh_query,
+        en_queries=en_queries,
+        include_chinese=include_chinese,
+        include_english=include_english,
+    )
 
     # 搜索量加大缓冲：考虑去重 + 无年份淘汰的损耗
     zh_search_num = min(max(wxnum + 10, 20), 40)
@@ -451,6 +461,15 @@ async def generate_references(
             zh_results.extend(group)
         else:
             en_results.extend(group)
+    await record_process_detail(
+        "references",
+        "SerpAPI 文献检索完成",
+        provider="serpapi",
+        zh_result_count=len(zh_results),
+        en_result_count=len(en_results),
+        zh_search_num=zh_search_num if include_chinese else 0,
+        en_search_num=en_search_num if include_english else 0,
+    )
 
     seen_titles: set[str] = set()
 
@@ -549,5 +568,16 @@ async def generate_references(
             _append_formatted(zh_remaining, target_total - len(lines), is_zh=True)
         if include_english and len(lines) < target_total:
             _append_formatted(en_remaining, target_total - len(lines), is_zh=False)
+    await record_process_detail(
+        "references",
+        "参考文献格式化完成",
+        provider="serpapi",
+        target_total=target_total,
+        target_zh=target_zh,
+        target_en=target_en,
+        filtered_zh_count=len(zh_filtered),
+        filtered_en_count=len(en_filtered),
+        final_count=len(lines),
+    )
 
     return "\n".join(lines)

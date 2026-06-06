@@ -75,8 +75,7 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
         )
     )
 
-    assert calls[0] == "references"
-    assert calls[1] == ("fulltext", references_text, 9000)
+    assert calls.index("references") < calls.index(("fulltext", references_text, 9000))
     assert "to_thread" in calls
     assert ("build", references_text) in calls
     assert result.docx_path == "/tmp/fake.docx"

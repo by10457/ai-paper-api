@@ -5,6 +5,7 @@ Gemini generateContent 三类文本调用协议。
 """
 
 import json
+import time
 from typing import Any, cast
 
 import httpx
@@ -12,9 +13,11 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_openai import ChatOpenAI
-from pydantic import SecretStr
+from pydantic import ConfigDict, SecretStr
+from tortoise import timezone
 from tortoise.exceptions import ConfigurationError
 
+from llm.call_logger import record_model_call
 from models.admin import ModelConfig
 
 ANTHROPIC_PROTOCOLS = {"anthropic", "claude", "claude-messages"}
@@ -371,6 +374,166 @@ class GeminiGenerateContentChatModel(BaseChatModel):
         return "".join(texts).strip()
 
 
+class LoggingChatModel(BaseChatModel):
+    """给 LangChain ChatModel 增加调用日志记录。"""
+
+    wrapped: BaseChatModel
+    model_config_id: int | None = None
+    config_type: str
+    provider: str
+    configured_model_name: str
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @property
+    def _llm_type(self) -> str:
+        """返回被包装模型类型。"""
+
+        return f"logged-{self.wrapped._llm_type}"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """同步调用被包装模型并记录日志。"""
+
+        del run_manager
+        started_at = timezone.now()
+        started = time.perf_counter()
+        prompt_chars = _messages_chars(messages)
+        try:
+            message = self.wrapped.invoke(messages, stop=stop, **kwargs)
+            output_text = _message_text(message)
+            _schedule_model_call_log(
+                config_type=self.config_type,
+                provider=self.provider,
+                model_name=self.configured_model_name,
+                status="success",
+                model_config_id=self.model_config_id,
+                prompt_chars=prompt_chars,
+                response_chars=len(output_text),
+                latency_ms=_elapsed_ms(started),
+                started_at=started_at,
+                completed_at=timezone.now(),
+            )
+            return _message_to_chat_result(message, self.configured_model_name)
+        except Exception as exc:
+            _schedule_model_call_log(
+                config_type=self.config_type,
+                provider=self.provider,
+                model_name=self.configured_model_name,
+                status="failed",
+                model_config_id=self.model_config_id,
+                prompt_chars=prompt_chars,
+                latency_ms=_elapsed_ms(started),
+                error_message=str(exc),
+                started_at=started_at,
+                completed_at=timezone.now(),
+            )
+            raise
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: Any = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """异步调用被包装模型并记录日志。"""
+
+        del run_manager
+        started_at = timezone.now()
+        started = time.perf_counter()
+        prompt_chars = _messages_chars(messages)
+        try:
+            message = await self.wrapped.ainvoke(messages, stop=stop, **kwargs)
+            output_text = _message_text(message)
+            await record_model_call(
+                config_type=self.config_type,
+                provider=self.provider,
+                model_name=self.configured_model_name,
+                status="success",
+                model_config_id=self.model_config_id,
+                prompt_chars=prompt_chars,
+                response_chars=len(output_text),
+                latency_ms=_elapsed_ms(started),
+                started_at=started_at,
+                completed_at=timezone.now(),
+            )
+            return _message_to_chat_result(message, self.configured_model_name)
+        except Exception as exc:
+            await record_model_call(
+                config_type=self.config_type,
+                provider=self.provider,
+                model_name=self.configured_model_name,
+                status="failed",
+                model_config_id=self.model_config_id,
+                prompt_chars=prompt_chars,
+                latency_ms=_elapsed_ms(started),
+                error_message=str(exc),
+                started_at=started_at,
+                completed_at=timezone.now(),
+            )
+            raise
+
+
+def _message_to_chat_result(message: BaseMessage, model_name: str) -> ChatResult:
+    """把单条 AIMessage 转换为 ChatResult。"""
+
+    return ChatResult(
+        generations=[
+            ChatGeneration(
+                message=AIMessage(content=_message_text(message)),
+                generation_info={"model": model_name},
+            )
+        ],
+        llm_output={},
+    )
+
+
+def _message_text(message: BaseMessage) -> str:
+    """提取 LangChain 消息中的文本内容。"""
+
+    content = message.content
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for item in content:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "\n".join(parts)
+
+
+def _messages_chars(messages: list[BaseMessage]) -> int:
+    """统计输入消息字符数。"""
+
+    return sum(len(_message_text(message)) for message in messages)
+
+
+def _elapsed_ms(started: float) -> int:
+    """计算耗时毫秒。"""
+
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _schedule_model_call_log(**kwargs: Any) -> None:
+    """同步路径中尽力调度日志写入。"""
+
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(record_model_call(**kwargs))
+        return
+    loop.create_task(record_model_call(**kwargs))
+
+
 def _create_gemini_generate_content_llm(
     *,
     model: str,
@@ -440,11 +603,18 @@ async def create_configured_llm(
     if config is None:
         raise ValueError(f"请先在管理后台配置启用的模型：{config_type} 或 default")
 
-    return _create_chat_model(
+    llm = _create_chat_model(
         protocol=config.provider,
         model=model or config.model_name,
         api_key=config.api_key,
         base_url=config.api_base_url,
         temperature=temperature,
         max_tokens=max_tokens,
+    )
+    return LoggingChatModel(
+        wrapped=llm,
+        model_config_id=config.id,
+        config_type=config_type,
+        provider=config.provider,
+        configured_model_name=model or config.model_name,
     )

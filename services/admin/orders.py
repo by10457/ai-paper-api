@@ -5,7 +5,7 @@ from tortoise import timezone
 from tortoise.expressions import F, Q
 
 from models.admin import PointLedger
-from models.paper import PaperOrder
+from models.paper import PaperGenerationTask, PaperOrder
 from models.user import User
 from schemas.admin import AdminOrderDetailResponse, AdminOrderListItem
 from schemas.common import PageResponse
@@ -49,13 +49,15 @@ class AdminOrderService:
 
         order = await get_order_or_404(order_id)
         ledgers = await PointLedger.filter(order=order).order_by("-id")
+        generation_task = await PaperGenerationTask.filter(order_id=order.id).order_by("-id").first()
         return AdminOrderDetailResponse(
             order=AdminOrderService._order_list_item(order),
             config_form=order.config_form if isinstance(order.config_form, dict) else None,
             outline_json=order.outline_json if isinstance(order.outline_json, list) else [],
             request_payload=order.outline_record.request_payload
-            if isinstance(order.outline_record.request_payload, dict)
+            if order.outline_record and isinstance(order.outline_record.request_payload, dict)
             else None,
+            generation_task=AdminOrderService._generation_task_payload(generation_task),
             point_ledgers=[PointLedgerResponse.model_validate(item) for item in ledgers],
         )
 
@@ -210,3 +212,25 @@ class AdminOrderService:
             paid_at=order.paid_at,
             completed_at=order.completed_at,
         )
+
+    @staticmethod
+    def _generation_task_payload(generation_task: PaperGenerationTask | None) -> dict | None:
+        """返回订单最近一次生成任务的过程数据。"""
+
+        if generation_task is None:
+            return None
+        return {
+            "id": generation_task.id,
+            "task_id": generation_task.task_id,
+            "order_sn": generation_task.order_sn,
+            "status": generation_task.status,
+            "current_stage": generation_task.current_stage,
+            "progress": generation_task.progress,
+            "process_events": generation_task.process_events or [],
+            "process_metadata": generation_task.process_metadata or {},
+            "result_summary": generation_task.result_summary or {},
+            "started_at": generation_task.started_at,
+            "completed_at": generation_task.completed_at,
+            "retry_count": generation_task.retry_count,
+            "last_error": generation_task.last_error,
+        }

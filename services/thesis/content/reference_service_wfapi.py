@@ -13,10 +13,14 @@ from core.config import get_settings
 from llm.client import create_configured_llm
 from llm.prompts.thesis_reference_prompt import REFERENCE_KEYWORD_PROMPT
 from services.thesis.generation.concurrency import text_short_slot, wfdata_slot
+from services.thesis.generation.progress import record_process_detail
 
 logger = logging.getLogger(__name__)
 
 WFDATA_COLLECTIONS = ["OpenPeriodical"]
+WFDATA_MAX_ATTEMPTS = 3
+WFDATA_RETRY_BACKOFF_SECONDS = 1.5
+WFDATA_RESPONSE_PREVIEW_LENGTH = 500
 WFDATA_RETURNED_FIELDS = [
     "Title",
     "Creator",
@@ -193,6 +197,101 @@ def _build_search_payload(query: str, rows: int, *, language: str) -> dict[str, 
     }
 
 
+def _build_relaxed_query(query: str, language: str) -> str:
+    """中文检索无结果时，去掉英文技术词后再尝试一次。"""
+
+    if language != "chi":
+        return ""
+
+    relaxed_query = re.sub(r"[A-Za-z][A-Za-z0-9_.+#/-]*", " ", query)
+    relaxed_query = re.sub(r"\s+", " ", relaxed_query).strip()
+    if not relaxed_query or relaxed_query == query.strip() or not _contains_chinese(relaxed_query):
+        return ""
+    return relaxed_query
+
+
+def _build_search_payloads(query: str, rows: int, *, language: str) -> list[dict[str, Any]]:
+    payloads = [_build_search_payload(query, rows, language=language)]
+    relaxed_query = _build_relaxed_query(query, language)
+    if relaxed_query:
+        relaxed_payload = _build_search_payload(relaxed_query, rows, language=language)
+        if relaxed_payload["query"] != payloads[0]["query"]:
+            payloads.append(relaxed_payload)
+    return payloads
+
+
+def _build_wfdata_headers(api_key: str) -> dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Ca-AppKey": api_key,
+    }
+
+
+def _build_wfdata_timeout() -> httpx.Timeout:
+    return httpx.Timeout(timeout=30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
+
+
+def _response_preview(response: httpx.Response) -> str:
+    text = response.text.replace("\n", " ").strip()
+    if len(text) <= WFDATA_RESPONSE_PREVIEW_LENGTH:
+        return text
+    return text[:WFDATA_RESPONSE_PREVIEW_LENGTH] + "..."
+
+
+def _parse_search_documents(response: httpx.Response) -> list[dict[str, Any]]:
+    payload = response.json()
+    if not isinstance(payload, dict):
+        logger.warning("万方参考文献响应不是 JSON 对象: status=%s, preview=%r", response.status_code, _response_preview(response))
+        return []
+
+    documents = payload.get("documents", [])
+    if not isinstance(documents, list):
+        logger.warning("万方参考文献响应缺少 documents 列表: keys=%s, preview=%r", list(payload.keys()), _response_preview(response))
+        return []
+    return cast(list[dict[str, Any]], documents)
+
+
+def _log_wfdata_search_request(
+    *,
+    attempt: int,
+    candidate: int,
+    candidate_count: int,
+    url: str,
+    language: str,
+    rows: int,
+    payload: dict[str, Any],
+) -> None:
+    logger.info(
+        "万方参考文献检索请求: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, url=%s, query=%r",
+        candidate,
+        candidate_count,
+        attempt,
+        WFDATA_MAX_ATTEMPTS,
+        language,
+        payload.get("rows", rows),
+        url,
+        payload.get("query"),
+    )
+
+
+def _log_wfdata_search_response(
+    *,
+    response: httpx.Response,
+    language: str,
+    requested_rows: int,
+    document_count: int,
+) -> None:
+    logger.info(
+        "万方参考文献检索响应: language=%s, requested_rows=%s, status=%s, documents=%s, preview=%r",
+        language,
+        requested_rows,
+        response.status_code,
+        document_count,
+        _response_preview(response),
+    )
+
+
 async def _search_wfdata(query: str, rows: int, *, language: str) -> list[dict[str, Any]]:
     """调用万方文献检索接口，失败返回空列表。"""
 
@@ -201,23 +300,112 @@ async def _search_wfdata(query: str, rows: int, *, language: str) -> list[dict[s
         logger.info("WFDATA_API_KEY 未配置，跳过万方参考文献检索")
         return []
 
-    try:
-        async with wfdata_slot(), httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(
-                settings.wfdata_api_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Ca-AppKey": settings.wfdata_api_key,
-                },
-                json=_build_search_payload(query, rows, language=language),
-            )
-            response.raise_for_status()
-            payload = cast(dict[str, Any], response.json())
-            documents = payload.get("documents", [])
-            return cast(list[dict[str, Any]], documents if isinstance(documents, list) else [])
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("万方参考文献检索失败 query=%r: %s", query, exc)
-        return []
+    payloads = _build_search_payloads(query, rows, language=language)
+    headers = _build_wfdata_headers(settings.wfdata_api_key)
+    timeout = _build_wfdata_timeout()
+    last_error: Exception | None = None
+
+    async with wfdata_slot():
+        for candidate, payload in enumerate(payloads, start=1):
+            for attempt in range(1, WFDATA_MAX_ATTEMPTS + 1):
+                _log_wfdata_search_request(
+                    attempt=attempt,
+                    candidate=candidate,
+                    candidate_count=len(payloads),
+                    url=settings.wfdata_api_url,
+                    language=language,
+                    rows=rows,
+                    payload=payload,
+                )
+
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=timeout,
+                        follow_redirects=True,
+                        trust_env=False,
+                    ) as client:
+                        response = await client.post(settings.wfdata_api_url, headers=headers, json=payload)
+
+                    response.raise_for_status()
+                    documents = _parse_search_documents(response)
+                    _log_wfdata_search_response(
+                        response=response,
+                        language=language,
+                        requested_rows=cast(int, payload["rows"]),
+                        document_count=len(documents),
+                    )
+                    if documents or candidate == len(payloads):
+                        return documents
+                    logger.info(
+                        "万方参考文献检索无结果，尝试降级查询: language=%s, old_query=%r, next_query=%r",
+                        language,
+                        payload.get("query"),
+                        payloads[candidate].get("query"),
+                    )
+                    break
+                except httpx.HTTPStatusError as exc:
+                    logger.warning(
+                        "万方参考文献检索 HTTP 失败: candidate=%s/%s, attempt=%s/%s, language=%s, status=%s, query=%r, preview=%r",
+                        candidate,
+                        len(payloads),
+                        attempt,
+                        WFDATA_MAX_ATTEMPTS,
+                        language,
+                        exc.response.status_code,
+                        payload.get("query"),
+                        _response_preview(exc.response),
+                    )
+                    return []
+                except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as exc:
+                    last_error = exc
+                    logger.warning(
+                        "万方参考文献检索连接异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
+                        candidate,
+                        len(payloads),
+                        attempt,
+                        WFDATA_MAX_ATTEMPTS,
+                        language,
+                        payload.get("rows"),
+                        payload.get("query"),
+                        type(exc).__name__,
+                        exc,
+                    )
+                    if attempt < WFDATA_MAX_ATTEMPTS:
+                        await asyncio.sleep(WFDATA_RETRY_BACKOFF_SECONDS * attempt)
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    logger.warning(
+                        "万方参考文献检索解析异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
+                        candidate,
+                        len(payloads),
+                        attempt,
+                        WFDATA_MAX_ATTEMPTS,
+                        language,
+                        payload.get("rows"),
+                        payload.get("query"),
+                        type(exc).__name__,
+                        exc,
+                    )
+                    return []
+
+    last_payload = payloads[-1]
+    if last_error:
+        logger.warning(
+            "万方参考文献检索最终失败: language=%s, rows=%s, query=%r, error_type=%s, error=%s",
+            language,
+            last_payload.get("rows"),
+            last_payload.get("query"),
+            type(last_error).__name__,
+            last_error,
+        )
+    else:
+        logger.info(
+            "万方参考文献检索最终无结果: language=%s, rows=%s, query=%r",
+            language,
+            last_payload.get("rows"),
+            last_payload.get("query"),
+        )
+    return []
 
 
 def _normalize_wf_document(document: dict[str, Any], *, prefer_english: bool) -> dict[str, Any]:
@@ -382,6 +570,16 @@ async def generate_references(
     else:
         target_en = 0
         target_zh = target_total
+    await record_process_detail(
+        "references",
+        "已提取万方文献检索关键词",
+        provider="wfapi",
+        zh_query=zh_query,
+        en_queries=en_queries,
+        target_total=target_total,
+        target_zh=target_zh,
+        target_en=target_en,
+    )
 
     search_tasks = [_search_wfdata(zh_query, _search_rows_for_target(target_zh), language="chi")]
     if include_english:
@@ -391,6 +589,15 @@ async def generate_references(
     grouped_documents = await asyncio.gather(*search_tasks)
     zh_documents = grouped_documents[0]
     en_documents = [document for group in grouped_documents[1:] for document in group]
+    await record_process_detail(
+        "references",
+        "万方文献检索完成",
+        provider="wfapi",
+        zh_result_count=len(zh_documents),
+        en_result_count=len(en_documents),
+        requested_zh_rows=_search_rows_for_target(target_zh),
+        requested_en_rows=_search_rows_for_target(target_en),
+    )
     if not zh_documents and not en_documents:
         logger.warning("万方参考文献检索结果为空")
         return ""
@@ -403,5 +610,13 @@ async def generate_references(
     _append_formatted_references(lines, zh_items, target_zh)
     if include_english:
         _append_formatted_references(lines, en_items, target_en)
+    await record_process_detail(
+        "references",
+        "参考文献格式化完成",
+        provider="wfapi",
+        final_count=len(lines),
+        final_zh_count=min(len(zh_items), target_zh),
+        final_en_count=min(len(en_items), target_en) if include_english else 0,
+    )
 
     return "\n".join(lines)

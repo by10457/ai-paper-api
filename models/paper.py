@@ -24,12 +24,13 @@ class PaperOutlineRecord(BaseModel):
 
 class PaperOrder(BaseModel):
     user: fields.ForeignKeyRelation[User]
-    outline_record: fields.ForeignKeyRelation[PaperOutlineRecord]
+    outline_record: fields.ForeignKeyNullableRelation[PaperOutlineRecord]
     user_id: int
     user = fields.ForeignKeyField("models.User", related_name="paper_orders", description="用户")
     outline_record = fields.ForeignKeyField(
         "models.PaperOutlineRecord",
         related_name="paper_orders",
+        null=True,
         description="大纲记录",
     )
     order_sn = fields.CharField(max_length=64, unique=True, description="论文订单号")
@@ -65,22 +66,30 @@ class PaperOrder(BaseModel):
         unique_together = (("user", "idempotency_key"),)
 
 
-class PaperDirectTask(BaseModel):
+class PaperGenerationTask(BaseModel):
     user: fields.ForeignKeyRelation[User]
+    order: fields.ForeignKeyRelation[PaperOrder]
     user_id: int
-    user = fields.ForeignKeyField("models.User", related_name="paper_direct_tasks", description="用户")
+    order_id: int
+    user = fields.ForeignKeyField("models.User", related_name="paper_generation_tasks", description="用户")
+    order = fields.ForeignKeyField(
+        "models.PaperOrder",
+        related_name="generation_tasks",
+        description="关联论文订单",
+    )
     idempotency_key = fields.CharField(max_length=128, null=True, description="请求幂等键")
     task_id = fields.CharField(max_length=64, unique=True, description="生成任务 ID")
+    order_sn = fields.CharField(max_length=64, description="论文订单号")
     title = fields.CharField(max_length=200, description="论文标题")
-    request_payload = fields.JSONField(description="生成请求快照")
-    cost_points = fields.IntField(default=200, description="应扣积分")
-    refunded_points = fields.IntField(default=0, description="已退积分")
     status = fields.CharField(max_length=32, default="paid", description="任务状态")
+    current_stage = fields.CharField(max_length=64, null=True, description="当前生成阶段")
+    progress = fields.IntField(default=0, description="当前生成进度")
+    process_events = fields.JSONField(null=True, description="论文生成过程事件")
+    process_metadata = fields.JSONField(null=True, description="论文生成过程关键数据")
+    result_summary = fields.JSONField(null=True, description="论文生成结果摘要")
     storage_provider = fields.CharField(max_length=32, null=True, description="主存储类型")
     file_key = fields.CharField(max_length=512, null=True, description="主存储文件 key")
     local_file_key = fields.CharField(max_length=512, null=True, description="本地兜底文件 key")
-    callback_url = fields.CharField(max_length=1024, null=True, description="生成完成回调地址")
-    callback_secret = fields.CharField(max_length=255, null=True, description="生成完成回调密钥")
     last_error = fields.CharField(max_length=500, null=True, description="最近一次错误")
     started_at = fields.DatetimeField(null=True, description="开始生成时间")
     completed_at = fields.DatetimeField(null=True, description="完成时间")
@@ -88,6 +97,6 @@ class PaperDirectTask(BaseModel):
     next_retry_at = fields.DatetimeField(null=True, description="下次自动重试时间")
 
     class Meta:
-        table = "paper_direct_tasks"
-        table_description = "接口直连论文生成任务"
+        table = "paper_generation_tasks"
+        table_description = "论文生成任务"
         unique_together = (("user", "idempotency_key"),)

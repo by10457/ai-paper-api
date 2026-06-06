@@ -153,25 +153,24 @@ def test_order_list_item_does_not_expose_download_url() -> None:
     assert item.download_url is None
 
 
-def test_run_paid_paper_order_skips_when_order_start_was_claimed(
+def test_run_paid_paper_order_delegates_to_generation_task(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    claimed_order_ids: list[int] = []
+    calls: list[tuple[str, int]] = []
 
-    async def fake_mark_generating_if_paid(order_id: int, task_id: str) -> None:
-        assert task_id
-        claimed_order_ids.append(order_id)
-        return None
+    async def fake_create_order_generation_task(order_id: int) -> SimpleNamespace:
+        calls.append(("create", order_id))
+        return SimpleNamespace(id=456)
 
-    async def fake_run_generate_task(*args: object, **kwargs: object) -> None:
-        raise AssertionError("重复后台任务不应该再次启动论文生成")
+    async def fake_run_generation_task(generation_task_id: int) -> None:
+        calls.append(("run", generation_task_id))
 
-    monkeypatch.setattr(PaperOrderService, "mark_generating_if_paid", fake_mark_generating_if_paid)
-    monkeypatch.setattr(order_workflow, "run_generate_task", fake_run_generate_task)
+    monkeypatch.setattr(PaperOrderService, "create_order_generation_task", fake_create_order_generation_task)
+    monkeypatch.setattr(order_workflow, "run_generation_task", fake_run_generation_task)
 
     asyncio.run(order_workflow.run_paid_paper_order(123))
 
-    assert claimed_order_ids == [123]
+    assert calls == [("create", 123), ("run", 456)]
 
 
 @pytest.mark.parametrize(

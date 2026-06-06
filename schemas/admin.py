@@ -98,6 +98,7 @@ class AdminOrderDetailResponse(BaseModel):
     config_form: dict[str, Any] | None
     outline_json: list[dict[str, Any]]
     request_payload: dict[str, Any] | None
+    generation_task: dict[str, Any] | None = None
     point_ledgers: list[PointLedgerResponse]
 
 
@@ -151,15 +152,23 @@ class ModelCallLogResponse(BaseModel):
     id: int
     user_id: int | None
     order_id: int | None
+    generation_task_id: int | None
     model_config_id: int | None
     config_type: str
+    call_type: str
+    task_id: str | None
+    stage: str | None
     provider: str
     model_name: str
     input_tokens: int
     output_tokens: int
+    prompt_chars: int
+    response_chars: int
     latency_ms: int
     status: str
     error_message: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
     created_at: datetime
 
 

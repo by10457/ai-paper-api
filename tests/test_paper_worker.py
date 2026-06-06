@@ -11,22 +11,22 @@ def test_paper_worker_dispatches_available_slots(monkeypatch: pytest.MonkeyPatch
     jobs: list[PaperQueueJob | None] = [
         PaperQueueJob("order", 1),
         PaperQueueJob("order", 2),
-        PaperQueueJob("direct", 10),
+        PaperQueueJob("task", 10),
         None,
     ]
 
     async def fake_run_order(order_id: int) -> None:
         calls.append(("order", order_id))
 
-    async def fake_run_direct_task(direct_task_id: int) -> None:
-        calls.append(("direct", direct_task_id))
+    async def fake_run_generation_task(generation_task_id: int) -> None:
+        calls.append(("task", generation_task_id))
 
     async def fake_pop_ready_generation_job() -> PaperQueueJob | None:
         return jobs.pop(0)
 
     monkeypatch.setattr(paper_worker, "pop_ready_generation_job", fake_pop_ready_generation_job)
     monkeypatch.setattr(paper_worker, "run_paid_paper_order", fake_run_order)
-    monkeypatch.setattr(paper_worker, "run_direct_generate_task", fake_run_direct_task)
+    monkeypatch.setattr(paper_worker, "run_generation_task", fake_run_generation_task)
 
     running_tasks: set[asyncio.Task[None]] = set()
 
@@ -36,7 +36,7 @@ def test_paper_worker_dispatches_available_slots(monkeypatch: pytest.MonkeyPatch
 
     asyncio.run(run())
 
-    assert calls == [("order", 1), ("order", 2), ("direct", 10)]
+    assert calls == [("order", 1), ("order", 2), ("task", 10)]
 
 
 def test_paper_worker_drops_completed_tasks() -> None:
