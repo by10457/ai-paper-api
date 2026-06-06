@@ -97,6 +97,21 @@ uv run pytest tests/ -v
 
 模板提供了 `Dockerfile`、`.dockerignore` 和 `start.sh`，用于构建镜像、启动容器、挂载日志目录。
 
+`start.sh` 默认开启 `DOCKER_BUILDKIT=1`，`Dockerfile` 中的 `uv sync` 会使用 BuildKit cache 保存已下载的 Python 包。`runtime-base` 镜像用于复用 Chromium、mmdc、Python 虚拟环境等运行时依赖；BuildKit cache 用于在依赖层重新执行时复用包下载缓存。二者都依赖当前服务器上的 Docker 构建缓存，如果执行过 `docker builder prune`、`docker system prune` 或换了新服务器，缓存会重新生成。
+
+常用部署命令：
+
+```bash
+# 代码更新后的常规部署：复用 runtime-base，只重新构建业务代码层。
+ENV_FILE=.env.docker sh start.sh
+
+# 依赖或运行环境变化时：重建 runtime-base。
+BUILD_MODE=deps ENV_FILE=.env.docker sh start.sh
+
+# 强制完整构建，一般只在排查缓存问题时使用。
+BUILD_MODE=full ENV_FILE=.env.docker sh start.sh
+```
+
 ## AI 论文生成
 
 本服务提供 AI 论文生成中转接口，供订单、支付或其他业务系统调用：

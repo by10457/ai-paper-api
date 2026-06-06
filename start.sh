@@ -18,6 +18,7 @@ CONTAINER_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR:-/app/public/output/thesis}"
 NETWORK_NAME="${NETWORK_NAME:-}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
 BUILD_MODE="${BUILD_MODE:-fast}"
+DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
 PULL_IMAGE="${PULL_IMAGE:-false}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-90}"
 UV_VERSION="${UV_VERSION:-0.8.15}"
@@ -54,6 +55,7 @@ Optional environment variables:
                     full: rebuild app through all Dockerfile stages.
                     deps: rebuild runtime base image only, then exit.
                     none: skip build and recreate container from IMAGE_NAME.
+  DOCKER_BUILDKIT   true/1 to enable Docker BuildKit cache mounts (default: 1)
   APP_ROLE          Container role: auto, all, api or scheduler (default: auto)
                     auto: APP_DEBUG=true or SCHEDULER_ENABLED=false starts api only;
                     otherwise starts api+scheduler.
@@ -243,7 +245,7 @@ docker_build() {
   fi
 
   # shellcheck disable=SC2086
-  docker build $build_args "$@" .
+  DOCKER_BUILDKIT="$DOCKER_BUILDKIT" docker build $build_args "$@" .
 }
 
 build_images() {

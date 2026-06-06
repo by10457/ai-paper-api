@@ -14,6 +14,7 @@ ARG UV_VERSION
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_HTTP_TIMEOUT=120 \
+    UV_LINK_MODE=copy \
     PIP_INDEX_URL=${PYPI_INDEX_URL} \
     PIP_TRUSTED_HOST=${PYPI_TRUSTED_HOST} \
     UV_DEFAULT_INDEX=${PYPI_INDEX_URL} \
@@ -21,12 +22,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "uv==${UV_VERSION}"
+RUN --mount=type=cache,id=ai-paper-api-pip-cache,target=/root/.cache/pip \
+    pip install "uv==${UV_VERSION}"
 
 # 先复制依赖文件，依赖不变时可复用 Docker layer。
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-dev --no-install-project --default-index "${PYPI_INDEX_URL}" \
+RUN --mount=type=cache,id=ai-paper-api-uv-cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --no-install-project --default-index "${PYPI_INDEX_URL}" \
     && /app/.venv/bin/python -c "import docx, fastapi, langchain_openai, matplotlib, minio, numpy, PIL, qcloud_cos, qiniu, redis, tortoise, uvicorn"
 
 
