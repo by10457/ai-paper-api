@@ -1,3 +1,5 @@
+"""论文订单、大纲记录与积分扣减的数据服务。"""
+
 import secrets
 from datetime import timedelta
 from typing import Any

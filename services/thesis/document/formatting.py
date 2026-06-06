@@ -1,3 +1,5 @@
+"""Word 基础格式工具，集中处理字体、行距与页码格式。"""
+
 from typing import Any, cast
 
 from docx.oxml import OxmlElement

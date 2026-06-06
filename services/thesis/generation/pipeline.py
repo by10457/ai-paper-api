@@ -1,3 +1,5 @@
+"""论文生成主流水线，串联参考文献、正文、摘要、图片渲染和 Word 构建。"""
+
 import asyncio
 import logging
 from collections.abc import Awaitable

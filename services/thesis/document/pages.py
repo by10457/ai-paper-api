@@ -1,3 +1,5 @@
+"""论文前后置页面构建工具，包括封面、摘要、承诺书、致谢和参考文献页。"""
+
 import datetime
 from typing import Any
 

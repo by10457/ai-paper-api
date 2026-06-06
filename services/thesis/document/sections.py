@@ -1,3 +1,5 @@
+"""Word section 构建工具，负责页面分节、页眉页脚和页码配置。"""
+
 from typing import Any
 
 from docx.document import Document as DocxDocument

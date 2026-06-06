@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any, cast
 
 import httpx
@@ -54,6 +55,23 @@ _TYPE_MARKER_MAP = {
     "Patent": "P",
     "Standard": "S",
 }
+
+
+@dataclass(frozen=True)
+class WfReferenceTargets:
+    """万方参考文献中英文目标数量。"""
+
+    total: int
+    zh: int
+    en: int
+
+
+@dataclass(frozen=True)
+class WfSearchResults:
+    """万方中英文检索结果。"""
+
+    zh_documents: list[dict[str, Any]]
+    en_documents: list[dict[str, Any]]
 
 
 def _scalar_from_value(value: dict[str, Any]) -> str:
@@ -330,6 +348,153 @@ def _log_wfdata_search_response(
     )
 
 
+def _log_wfdata_http_error(
+    exc: httpx.HTTPStatusError,
+    *,
+    candidate: int,
+    candidate_count: int,
+    attempt: int,
+    language: str,
+    payload: dict[str, Any],
+) -> None:
+    """记录万方 HTTP 状态码错误。"""
+
+    logger.warning(
+        "万方参考文献检索 HTTP 失败: candidate=%s/%s, attempt=%s/%s, language=%s, status=%s, query=%r, preview=%r",
+        candidate,
+        candidate_count,
+        attempt,
+        WFDATA_MAX_ATTEMPTS,
+        language,
+        exc.response.status_code,
+        payload.get("query"),
+        _response_preview(exc.response),
+    )
+
+
+def _log_wfdata_connection_error(
+    exc: Exception,
+    *,
+    candidate: int,
+    candidate_count: int,
+    attempt: int,
+    language: str,
+    payload: dict[str, Any],
+) -> None:
+    """记录万方连接异常；重试成功时这类日志只作为过程信息。"""
+
+    logger.info(
+        "万方参考文献检索连接异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
+        candidate,
+        candidate_count,
+        attempt,
+        WFDATA_MAX_ATTEMPTS,
+        language,
+        payload.get("rows"),
+        payload.get("query"),
+        type(exc).__name__,
+        exc,
+    )
+
+
+def _log_wfdata_parse_error(
+    exc: Exception,
+    *,
+    candidate: int,
+    candidate_count: int,
+    attempt: int,
+    language: str,
+    payload: dict[str, Any],
+) -> None:
+    """记录万方响应解析错误。"""
+
+    logger.warning(
+        "万方参考文献检索解析异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
+        candidate,
+        candidate_count,
+        attempt,
+        WFDATA_MAX_ATTEMPTS,
+        language,
+        payload.get("rows"),
+        payload.get("query"),
+        type(exc).__name__,
+        exc,
+    )
+
+
+async def _search_wfdata_payload(
+    *,
+    url: str,
+    headers: dict[str, str],
+    timeout: httpx.Timeout,
+    payload: dict[str, Any],
+    candidate: int,
+    candidate_count: int,
+    language: str,
+    rows: int,
+) -> tuple[list[dict[str, Any]] | None, Exception | None]:
+    """检索单个万方查询载荷；None 表示 HTTP 或解析错误应终止本轮检索。"""
+
+    last_error: Exception | None = None
+    for attempt in range(1, WFDATA_MAX_ATTEMPTS + 1):
+        _log_wfdata_search_request(
+            attempt=attempt,
+            candidate=candidate,
+            candidate_count=candidate_count,
+            url=url,
+            language=language,
+            rows=rows,
+            payload=payload,
+        )
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+                response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            documents = _parse_search_documents(response)
+            _log_wfdata_search_response(
+                response=response,
+                language=language,
+                requested_rows=cast(int, payload["rows"]),
+                document_count=len(documents),
+            )
+            return documents, None
+        except httpx.HTTPStatusError as exc:
+            _log_wfdata_http_error(
+                exc,
+                candidate=candidate,
+                candidate_count=candidate_count,
+                attempt=attempt,
+                language=language,
+                payload=payload,
+            )
+            return None, exc
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as exc:
+            last_error = exc
+            _log_wfdata_connection_error(
+                exc,
+                candidate=candidate,
+                candidate_count=candidate_count,
+                attempt=attempt,
+                language=language,
+                payload=payload,
+            )
+            if attempt < WFDATA_MAX_ATTEMPTS:
+                await asyncio.sleep(WFDATA_RETRY_BACKOFF_SECONDS * attempt)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            _log_wfdata_parse_error(
+                exc,
+                candidate=candidate,
+                candidate_count=candidate_count,
+                attempt=attempt,
+                language=language,
+                payload=payload,
+            )
+            return None, exc
+
+    return [], last_error
+
+
 async def _search_wfdata(query: str, rows: int, *, language: str) -> list[dict[str, Any]]:
     """调用万方文献检索接口，失败返回空列表。"""
 
@@ -345,86 +510,26 @@ async def _search_wfdata(query: str, rows: int, *, language: str) -> list[dict[s
 
     async with wfdata_slot():
         for candidate, payload in enumerate(payloads, start=1):
-            for attempt in range(1, WFDATA_MAX_ATTEMPTS + 1):
-                _log_wfdata_search_request(
-                    attempt=attempt,
-                    candidate=candidate,
-                    candidate_count=len(payloads),
-                    url=settings.wfdata_api_url,
-                    language=language,
-                    rows=rows,
-                    payload=payload,
-                )
-
-                try:
-                    async with httpx.AsyncClient(
-                        timeout=timeout,
-                        follow_redirects=True,
-                        trust_env=False,
-                    ) as client:
-                        response = await client.post(settings.wfdata_api_url, headers=headers, json=payload)
-
-                    response.raise_for_status()
-                    documents = _parse_search_documents(response)
-                    _log_wfdata_search_response(
-                        response=response,
-                        language=language,
-                        requested_rows=cast(int, payload["rows"]),
-                        document_count=len(documents),
-                    )
-                    if documents or candidate == len(payloads):
-                        return documents
-                    logger.info(
-                        "万方参考文献检索无结果，尝试降级查询: language=%s, old_query=%r, next_query=%r",
-                        language,
-                        payload.get("query"),
-                        payloads[candidate].get("query"),
-                    )
-                    break
-                except httpx.HTTPStatusError as exc:
-                    logger.warning(
-                        "万方参考文献检索 HTTP 失败: candidate=%s/%s, attempt=%s/%s, language=%s, status=%s, query=%r, preview=%r",
-                        candidate,
-                        len(payloads),
-                        attempt,
-                        WFDATA_MAX_ATTEMPTS,
-                        language,
-                        exc.response.status_code,
-                        payload.get("query"),
-                        _response_preview(exc.response),
-                    )
-                    return []
-                except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as exc:
-                    last_error = exc
-                    logger.info(
-                        "万方参考文献检索连接异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
-                        candidate,
-                        len(payloads),
-                        attempt,
-                        WFDATA_MAX_ATTEMPTS,
-                        language,
-                        payload.get("rows"),
-                        payload.get("query"),
-                        type(exc).__name__,
-                        exc,
-                    )
-                    if attempt < WFDATA_MAX_ATTEMPTS:
-                        await asyncio.sleep(WFDATA_RETRY_BACKOFF_SECONDS * attempt)
-                except Exception as exc:  # noqa: BLE001
-                    last_error = exc
-                    logger.warning(
-                        "万方参考文献检索解析异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
-                        candidate,
-                        len(payloads),
-                        attempt,
-                        WFDATA_MAX_ATTEMPTS,
-                        language,
-                        payload.get("rows"),
-                        payload.get("query"),
-                        type(exc).__name__,
-                        exc,
-                    )
-                    return []
+            documents, last_error = await _search_wfdata_payload(
+                url=settings.wfdata_api_url,
+                headers=headers,
+                timeout=timeout,
+                payload=payload,
+                candidate=candidate,
+                candidate_count=len(payloads),
+                language=language,
+                rows=rows,
+            )
+            if documents is None:
+                return []
+            if documents or candidate == len(payloads):
+                return documents
+            logger.info(
+                "万方参考文献检索无结果，尝试降级查询: language=%s, old_query=%r, next_query=%r",
+                language,
+                payload.get("query"),
+                payloads[candidate].get("query"),
+            )
 
     last_payload = payloads[-1]
     if last_error:
@@ -619,6 +724,135 @@ async def _search_wfdata_batches(queries: list[str], target_count: int, *, langu
     return documents
 
 
+def _build_wf_reference_targets(wxnum: int, *, include_english: bool) -> WfReferenceTargets:
+    """按是否需要外文文献拆分万方参考文献目标数量。"""
+
+    target_total = max(1, wxnum)
+    if include_english:
+        target_en = max(3, round(target_total / 3))
+        return WfReferenceTargets(total=target_total, zh=target_total - target_en, en=target_en)
+    return WfReferenceTargets(total=target_total, zh=target_total, en=0)
+
+
+async def _search_wf_references(
+    zh_queries: list[str],
+    en_queries: list[str],
+    targets: WfReferenceTargets,
+    *,
+    include_english: bool,
+) -> WfSearchResults:
+    """根据中英文检索词调用万方，返回原始文献结果。"""
+
+    search_tasks = [_search_wfdata_batches(zh_queries, targets.zh, language="chi")]
+    if include_english and targets.en > 0:
+        search_tasks.append(_search_wfdata_batches(en_queries, targets.en, language="eng"))
+
+    grouped_documents = await asyncio.gather(*search_tasks)
+    return WfSearchResults(
+        zh_documents=grouped_documents[0],
+        en_documents=grouped_documents[1] if include_english and len(grouped_documents) > 1 else [],
+    )
+
+
+def _format_wf_references(
+    zh_documents: list[dict[str, Any]],
+    en_documents: list[dict[str, Any]],
+    targets: WfReferenceTargets,
+    *,
+    include_english: bool,
+) -> tuple[str, int, int, int]:
+    """去重并格式化万方参考文献，返回文本和数量统计。"""
+
+    seen_titles: set[str] = set()
+    zh_items = _dedup_documents(zh_documents, prefer_english=False, seen_titles=seen_titles)
+    en_items = _dedup_documents(en_documents, prefer_english=True, seen_titles=seen_titles)
+
+    lines: list[str] = []
+    final_zh_count = _append_formatted_references_with_count(lines, zh_items[: targets.zh], targets.zh)
+    final_en_count = 0
+    if include_english:
+        final_en_count = _append_formatted_references_with_count(lines, en_items[: targets.en], targets.en)
+
+    if len(lines) < targets.total:
+        final_zh_count += _append_formatted_references_with_count(
+            lines,
+            zh_items[targets.zh :],
+            targets.total - len(lines),
+        )
+    if include_english and len(lines) < targets.total:
+        final_en_count += _append_formatted_references_with_count(
+            lines,
+            en_items[targets.en :],
+            targets.total - len(lines),
+        )
+    return "\n".join(lines), len(lines), final_zh_count, final_en_count
+
+
+async def _record_wf_keywords(
+    zh_queries: list[str],
+    en_queries: list[str],
+    targets: WfReferenceTargets,
+    *,
+    include_english: bool,
+) -> None:
+    """记录万方关键词提取结果。"""
+
+    await record_process_detail(
+        "references",
+        "已提取万方文献检索关键词",
+        provider="wfapi",
+        zh_query=zh_queries[0],
+        zh_queries=zh_queries,
+        en_queries=en_queries,
+        target_total=targets.total,
+        target_zh=targets.zh,
+        target_en=targets.en,
+        en_query_count=len(en_queries) if include_english else 0,
+    )
+
+
+async def _record_wf_search_results(
+    search_results: WfSearchResults,
+    zh_queries: list[str],
+    en_queries: list[str],
+    targets: WfReferenceTargets,
+    *,
+    include_english: bool,
+) -> None:
+    """记录万方检索结果数量。"""
+
+    await record_process_detail(
+        "references",
+        "万方文献检索完成",
+        provider="wfapi",
+        zh_result_count=len(search_results.zh_documents),
+        en_result_count=len(search_results.en_documents),
+        requested_zh_rows=_search_rows_for_target(targets.zh),
+        requested_en_rows=_search_rows_for_target(targets.en),
+        zh_query_count=len(zh_queries),
+        en_query_count=len(en_queries) if include_english else 0,
+    )
+
+
+async def _record_wf_format_result(
+    *,
+    final_count: int,
+    final_zh_count: int,
+    final_en_count: int,
+    include_english: bool,
+) -> None:
+    """记录万方参考文献最终格式化结果。"""
+
+    await record_process_detail(
+        "references",
+        "参考文献格式化完成",
+        provider="wfapi",
+        final_count=final_count,
+        final_zh_count=final_zh_count,
+        final_en_count=final_en_count if include_english else 0,
+    )
+
+
 async def generate_references(
     title: str,
     outline: str,
@@ -627,77 +861,38 @@ async def generate_references(
 ) -> str:
     """使用万方开放平台生成参考文献列表。"""
 
-    target_total = max(1, wxnum)
+    targets = _build_wf_reference_targets(wxnum, include_english=include_english)
     zh_queries, en_queries = await _extract_keyword_queries(title, outline)
-    if include_english:
-        target_en = max(3, round(target_total / 3))
-        target_zh = target_total - target_en
-    else:
-        target_en = 0
-        target_zh = target_total
-    await record_process_detail(
-        "references",
-        "已提取万方文献检索关键词",
-        provider="wfapi",
-        zh_query=zh_queries[0],
-        zh_queries=zh_queries,
-        en_queries=en_queries,
-        target_total=target_total,
-        target_zh=target_zh,
-        target_en=target_en,
-    )
+    await _record_wf_keywords(zh_queries, en_queries, targets, include_english=include_english)
 
-    search_tasks = [_search_wfdata_batches(zh_queries, target_zh, language="chi")]
-    if include_english and target_en > 0:
-        search_tasks.append(_search_wfdata_batches(en_queries, target_en, language="eng"))
-
-    grouped_documents = await asyncio.gather(*search_tasks)
-    zh_documents = grouped_documents[0]
-    en_documents = grouped_documents[1] if include_english and len(grouped_documents) > 1 else []
-    await record_process_detail(
-        "references",
-        "万方文献检索完成",
-        provider="wfapi",
-        zh_result_count=len(zh_documents),
-        en_result_count=len(en_documents),
-        requested_zh_rows=_search_rows_for_target(target_zh),
-        requested_en_rows=_search_rows_for_target(target_en),
-        zh_query_count=len(zh_queries),
-        en_query_count=len(en_queries) if include_english else 0,
+    search_results = await _search_wf_references(
+        zh_queries,
+        en_queries,
+        targets,
+        include_english=include_english,
     )
-    if not zh_documents and not en_documents:
+    await _record_wf_search_results(
+        search_results,
+        zh_queries,
+        en_queries,
+        targets,
+        include_english=include_english,
+    )
+    if not search_results.zh_documents and not search_results.en_documents:
         logger.warning("万方参考文献检索结果为空")
         return ""
 
-    seen_titles: set[str] = set()
-    zh_items = _dedup_documents(zh_documents, prefer_english=False, seen_titles=seen_titles)
-    en_items = _dedup_documents(en_documents, prefer_english=True, seen_titles=seen_titles)
-
-    lines: list[str] = []
-    final_zh_count = _append_formatted_references_with_count(lines, zh_items[:target_zh], target_zh)
-    final_en_count = 0
-    if include_english:
-        final_en_count = _append_formatted_references_with_count(lines, en_items[:target_en], target_en)
-
-    if len(lines) < target_total:
-        final_zh_count += _append_formatted_references_with_count(
-            lines,
-            zh_items[target_zh:],
-            target_total - len(lines),
-        )
-    if include_english and len(lines) < target_total:
-        final_en_count += _append_formatted_references_with_count(
-            lines,
-            en_items[target_en:],
-            target_total - len(lines),
-        )
-    await record_process_detail(
-        "references",
-        "参考文献格式化完成",
-        provider="wfapi",
-        final_count=len(lines),
+    references, final_count, final_zh_count, final_en_count = _format_wf_references(
+        search_results.zh_documents,
+        search_results.en_documents,
+        targets,
+        include_english=include_english,
+    )
+    await _record_wf_format_result(
+        final_count=final_count,
         final_zh_count=final_zh_count,
-        final_en_count=final_en_count if include_english else 0,
+        final_en_count=final_en_count,
+        include_english=include_english,
     )
 
-    return "\n".join(lines)
+    return references

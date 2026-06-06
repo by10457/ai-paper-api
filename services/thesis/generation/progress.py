@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any
 
@@ -14,7 +15,11 @@ from tortoise import timezone
 from core.logger import logger
 from models.paper import PaperGenerationTask
 from services.thesis.generation import status_store
-from services.thesis.generation.runtime_context import get_runtime_context, use_runtime_context
+from services.thesis.generation.runtime_context import (
+    GenerationRuntimeContext,
+    get_runtime_context,
+    use_runtime_context,
+)
 
 MAX_PROCESS_EVENTS = 80
 
@@ -86,7 +91,7 @@ async def record_process_detail(stage: str, message: str, **details: Any) -> Non
             logger.debug("同步论文生成过程详情到数据库失败: task_id={}, stage={}, err={}", ctx.task_id, stage, exc)
 
 
-def stage_context(stage: str):
+def stage_context(stage: str) -> AbstractContextManager[GenerationRuntimeContext]:
     """返回阶段上下文管理器，供 LLM 日志自动记录当前阶段。"""
 
     return use_runtime_context(stage=stage)

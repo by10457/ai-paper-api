@@ -1,3 +1,5 @@
+"""论文文档通用工具函数。"""
+
 import re
 import unicodedata
 

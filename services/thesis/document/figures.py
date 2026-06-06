@@ -1,3 +1,5 @@
+"""Word 文档图片插入工具，负责按版面约束写入本地图片。"""
+
 from docx.document import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.shared import Cm, Pt

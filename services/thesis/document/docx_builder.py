@@ -1,3 +1,5 @@
+"""论文 Word 文档构建入口，负责组织封面、摘要、正文、图表、致谢和参考文献。"""
+
 import datetime
 import re
 from pathlib import Path

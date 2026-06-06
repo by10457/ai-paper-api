@@ -67,7 +67,7 @@ class ImageGenerator(ABC):
 class LazyImageGenerator(ImageGenerator):
     """延迟初始化真实图片生成器，避免 Mermaid 成功时触发图片模型配置读取。"""
 
-    def __init__(self, factory: Callable[[], Awaitable[ImageGenerator]]):
+    def __init__(self, factory: Callable[[], Awaitable[ImageGenerator]]) -> None:
         self._factory = factory
         self._generator: ImageGenerator | None = None
         self._lock = asyncio.Lock()
@@ -79,6 +79,8 @@ class LazyImageGenerator(ImageGenerator):
         aspect_ratio: str,
         output_path: str,
     ) -> str:
+        """按需创建真实生成器，再转发本次生图请求。"""
+
         generator = await self._get_generator()
         return await generator.generate(description, style, aspect_ratio, output_path)
 
@@ -103,6 +105,8 @@ class PlaceholderImageGenerator(ImageGenerator):
         aspect_ratio: str,
         output_path: str,
     ) -> str:
+        """生成空白占位图，供未配置图片模型或测试场景使用。"""
+
         ratios = {
             "16:9": (1024, 576),
             "4:3": (1024, 768),
@@ -124,7 +128,7 @@ class GenerateContentImageGenerator(ImageGenerator):
         model: str,
         base_url: str = "https://generativelanguage.googleapis.com",
         model_config_id: int | None = None,
-    ):
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -137,6 +141,8 @@ class GenerateContentImageGenerator(ImageGenerator):
         aspect_ratio: str,
         output_path: str,
     ) -> str:
+        """调用 generateContent 图片协议生成论文插图。"""
+
         prompt = _build_academic_image_prompt(description, _style_description(style))
         real_aspect = aspect_ratio if aspect_ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"] else "16:9"
         started_at = timezone.now()
@@ -243,7 +249,7 @@ class OpenAIImageGenerator(ImageGenerator):
         model: str,
         base_url: str = "https://api.openai.com",
         model_config_id: int | None = None,
-    ):
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -256,6 +262,8 @@ class OpenAIImageGenerator(ImageGenerator):
         aspect_ratio: str,
         output_path: str,
     ) -> str:
+        """调用 OpenAI Images API 生成论文插图。"""
+
         prompt = _build_academic_image_prompt(description, _style_description(style))
         started_at = timezone.now()
         started = time.perf_counter()

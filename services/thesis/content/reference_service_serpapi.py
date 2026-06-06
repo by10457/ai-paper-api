@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any, cast
 
@@ -59,6 +60,43 @@ _TYPE_MAP = {
 }
 
 
+@dataclass(frozen=True)
+class ScholarKeywordQueries:
+    """SerpAPI Google Scholar 检索关键词。"""
+
+    zh_query: str
+    en_queries: list[str]
+
+
+@dataclass(frozen=True)
+class ReferenceTargets:
+    """参考文献目标数量拆分。"""
+
+    total: int
+    zh: int
+    en: int
+
+
+@dataclass(frozen=True)
+class ScholarSearchResults:
+    """SerpAPI 检索结果及本次请求规模。"""
+
+    zh_results: list[dict[str, Any]]
+    en_results: list[dict[str, Any]]
+    zh_search_num: int
+    en_search_num: int
+
+
+@dataclass(frozen=True)
+class ScholarFallbackFields:
+    """从 Scholar summary 中解析出的降级来源字段。"""
+
+    journal: str = ""
+    university: str = ""
+    volume_issue: str = ""
+    pages: str = ""
+
+
 async def _search_scholar(query: str, num: int = 8) -> list[dict[str, Any]]:
     """调用 SerpAPI Google Scholar，失败返回空列表。"""
     api_key = get_settings().serpapi_key
@@ -102,6 +140,32 @@ def _normalize_authors(authors: str, is_zh: bool) -> str:
     if is_zh:
         authors = authors.replace(" ,", ",").replace(", ", ",")
     return authors
+
+
+def _format_authors_from_sources(
+    *,
+    crossref_authors: list[str],
+    scholar_authors: list[dict[str, Any]],
+    summary: str,
+    is_zh: bool,
+) -> str:
+    """按 CrossRef、Scholar 作者列表、summary 的优先级提取作者。"""
+
+    if crossref_authors:
+        if len(crossref_authors) > 3:
+            suffix = ",等" if is_zh else ",et al."
+            return _normalize_authors(",".join(crossref_authors[:3]) + suffix, is_zh=is_zh)
+        return _normalize_authors(",".join(crossref_authors), is_zh=is_zh)
+
+    if scholar_authors:
+        authors = ",".join(author.get("name", "").strip() for author in scholar_authors[:3] if author.get("name"))
+        if len(scholar_authors) > 3 and authors:
+            authors += ",等" if is_zh else ",et al."
+        return _normalize_authors(authors, is_zh=is_zh) if authors else ""
+
+    if summary and " - " in summary:
+        return _normalize_authors(summary.split(" - ", 1)[0].strip(), is_zh=is_zh)
+    return ""
 
 
 def _looks_like_university(text: str) -> bool:
@@ -188,6 +252,106 @@ def _extract_crossref_fields(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_scholar_fallback_fields(summary: str, *, has_crossref: bool) -> ScholarFallbackFields:
+    """从 Scholar summary 中解析期刊、学校、卷期和页码。"""
+
+    if has_crossref or " - " not in summary:
+        return ScholarFallbackFields()
+
+    journal = ""
+    university = ""
+    volume_issue = ""
+    pages = ""
+    dash_segments = [segment.strip() for segment in summary.split(" - ") if segment.strip()]
+    info_segments = dash_segments[1:]
+    if info_segments and DOMAIN_RE.match(info_segments[-1]):
+        info_segments = info_segments[:-1]
+
+    for segment in info_segments:
+        if YEAR_PATTERN.fullmatch(segment.strip()):
+            continue
+        if _looks_like_university(segment):
+            university = segment
+            continue
+        for part in [value.strip() for value in segment.split(",") if value.strip()]:
+            if YEAR_PATTERN.fullmatch(part):
+                continue
+            volume_match = VOL_ISSUE_RE.search(part)
+            if volume_match and not volume_issue:
+                volume_issue = volume_match.group(0)
+                continue
+            page_match = PAGES_RE.search(part)
+            if page_match and not pages:
+                pages = f"{page_match.group(1)}-{page_match.group(2)}"
+                continue
+            if not journal:
+                journal = part
+    return ScholarFallbackFields(journal=journal, university=university, volume_issue=volume_issue, pages=pages)
+
+
+def _resolve_volume_issue(volume: str, issue: str, fallback_volume_issue: str, *, has_crossref: bool) -> str:
+    """合并卷期字段，CrossRef 优先，Scholar summary 作为降级来源。"""
+
+    if volume and issue:
+        return f"{volume}({issue})"
+    if volume:
+        return volume
+    if not has_crossref and fallback_volume_issue:
+        return fallback_volume_issue
+    return ""
+
+
+def _resolve_doc_marker(journal: str, crossref_type: str, university: str) -> str:
+    """推断 GB/T 7714 文献类型标识。"""
+
+    if journal:
+        return "J"
+    if crossref_type:
+        return _TYPE_MAP.get(crossref_type, "J")
+    if university:
+        return "D"
+    return "J"
+
+
+def _build_reference_body(
+    *,
+    authors: str,
+    title: str,
+    marker: str,
+    journal: str,
+    year: str,
+    volume_issue: str,
+    page: str,
+    university: str,
+) -> str:
+    """组装 GB/T 7714 风格参考文献正文，不含编号。"""
+
+    parts: list[str] = []
+    if authors:
+        parts.append(authors)
+    parts.append(f"{title}[{marker}]")
+
+    if marker == "D":
+        source = university or journal
+        parts.append(f"{source},{year}" if source else year)
+    else:
+        if not volume_issue and not page:
+            return ""
+        detail_items: list[str] = []
+        if journal:
+            detail_items.append(journal)
+        detail_items.append(year)
+        if volume_issue:
+            detail_items.append(volume_issue)
+        detail = ",".join(detail_items)
+        if page:
+            detail += f":{page}"
+        parts.append(detail)
+
+    body = ".".join(parts).strip()
+    return body if body.endswith(".") else body + "."
+
+
 async def _enrich_with_crossref(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """批量用 CrossRef 补全文献的作者、期刊、年份、卷期和页码。"""
     if not items:
@@ -213,139 +377,58 @@ def _format_one_reference(item: dict[str, Any], index: int, is_zh: bool) -> str:
     优先使用 CrossRef 补全的结构化字段（卷/期/页码/作者/期刊），
     CrossRef 未命中时降级为从 Scholar summary 正则提取。
     """
-    title = item.get("title", "").strip()
+    title = str(item.get("title", "")).strip()
     if not title:
         return ""
 
     publication_info = item.get("publication_info", {})
-    summary = publication_info.get("summary", "")
-    authors_list = publication_info.get("authors", [])
+    publication_info = publication_info if isinstance(publication_info, dict) else {}
+    summary = str(publication_info.get("summary", ""))
+    scholar_authors = cast(list[dict[str, Any]], publication_info.get("authors", []))
+    crossref_authors = cast(list[str], item.get("crossref_authors", []))
+    crossref_journal = str(item.get("crossref_journal", ""))
+    crossref_year = str(item.get("crossref_year", ""))
+    crossref_volume = str(item.get("crossref_volume", ""))
+    crossref_issue = str(item.get("crossref_issue", ""))
+    crossref_page = str(item.get("crossref_page", ""))
+    crossref_type = str(item.get("crossref_type", ""))
+    has_crossref = bool(crossref_journal or crossref_volume or crossref_page)
 
-    # ── CrossRef 补全数据 ──
-    cr_authors = item.get("crossref_authors", [])
-    cr_journal = item.get("crossref_journal", "")
-    cr_year = item.get("crossref_year", "")
-    cr_volume = item.get("crossref_volume", "")
-    cr_issue = item.get("crossref_issue", "")
-    cr_page = item.get("crossref_page", "")
-    cr_type = item.get("crossref_type", "")
-    has_crossref = bool(cr_journal or cr_volume or cr_page)
-
-    # ── 提取作者 ──
-    if cr_authors:
-        if len(cr_authors) > 3:
-            authors = ",".join(cr_authors[:3])
-            authors += ",等" if is_zh else ",et al."
-        else:
-            authors = ",".join(cr_authors)
-    elif authors_list:
-        authors = ",".join(author.get("name", "").strip() for author in authors_list[:3] if author.get("name"))
-        if len(authors_list) > 3 and authors:
-            authors += ",等" if is_zh else ",et al."
-    elif summary and " - " in summary:
-        authors = summary.split(" - ", 1)[0].strip()
-    else:
-        authors = ""
-    authors = _normalize_authors(authors, is_zh=is_zh) if authors else ""
-
-    # ── 解析期刊/来源/卷期页（Scholar 降级路径） ──
-    journal = ""
-    university = ""
-    volume_issue = ""
-    pages = ""
-
-    if not has_crossref and " - " in summary:
-        dash_segments = [s.strip() for s in summary.split(" - ") if s.strip()]
-        info_segments = dash_segments[1:]
-        if info_segments and DOMAIN_RE.match(info_segments[-1]):
-            info_segments = info_segments[:-1]
-
-        for seg in info_segments:
-            if YEAR_PATTERN.fullmatch(seg.strip()):
-                continue
-            if _looks_like_university(seg):
-                university = seg
-                continue
-            sub_parts = [p.strip() for p in seg.split(",") if p.strip()]
-            for sp in sub_parts:
-                if YEAR_PATTERN.fullmatch(sp):
-                    continue
-                vol_match = VOL_ISSUE_RE.search(sp)
-                if vol_match and not volume_issue:
-                    volume_issue = vol_match.group(0)
-                    continue
-                page_match = PAGES_RE.search(sp)
-                if page_match and not pages:
-                    pages = f"{page_match.group(1)}-{page_match.group(2)}"
-                    continue
-                if not journal:
-                    journal = sp
-
-    # ── 确定最终使用的字段 ──
-    final_journal = cr_journal or journal
-    final_year = cr_year or _extract_year(
+    fallback = _extract_scholar_fallback_fields(summary, has_crossref=has_crossref)
+    journal = crossref_journal or fallback.journal
+    year = crossref_year or _extract_year(
         summary,
         item.get("snippet", ""),
         item.get("publication_date", ""),
     )
-    if not final_year:
+    if not year:
         return ""
 
-    final_volume = cr_volume or ""
-    final_issue = cr_issue or ""
-    final_page = cr_page or pages
-    # 合并卷期: 如果有 CrossRef 数据按 volume(issue) 组装
-    if final_volume and final_issue:
-        final_vol_issue = f"{final_volume}({final_issue})"
-    elif final_volume:
-        final_vol_issue = final_volume
-    elif not has_crossref and volume_issue:
-        final_vol_issue = volume_issue
-    else:
-        final_vol_issue = ""
-
-    # ── 确定文献类型 ──
-    if final_journal:
-        doc_marker = "J"
-    elif cr_type:
-        doc_marker = _TYPE_MAP.get(cr_type, "J")
-    elif university and not final_journal:
-        doc_marker = "D"
-    else:
-        doc_marker = "J"
-
-    is_dissertation = doc_marker == "D"
-
-    # ── 组装引用格式 (GB/T 7714 风格) ──
-    parts: list[str] = []
-    if authors:
-        parts.append(authors)
-
-    parts.append(f"{title}[{doc_marker}]")
-
-    if is_dissertation:
-        # 格式: 作者.标题[D].大学,年份.
-        source = university or final_journal
-        parts.append(f"{source},{final_year}" if source else final_year)
-    else:
-        # 格式: 作者.标题[J].期刊,年份,卷(期):页码.
-        if not final_vol_issue and not final_page:
-            logger.debug("跳过缺卷期页码的期刊文献: %s", title[:80])
-            return ""
-        detail_items: list[str] = []
-        if final_journal:
-            detail_items.append(final_journal)
-        detail_items.append(final_year)
-        if final_vol_issue:
-            detail_items.append(final_vol_issue)
-        detail_str = ",".join(detail_items)
-        if final_page:
-            detail_str += f":{final_page}"
-        parts.append(detail_str)
-
-    body = ".".join(parts).strip()
-    if not body.endswith("."):
-        body += "."
+    marker = _resolve_doc_marker(journal, crossref_type, fallback.university)
+    volume_issue = _resolve_volume_issue(
+        crossref_volume,
+        crossref_issue,
+        fallback.volume_issue,
+        has_crossref=has_crossref,
+    )
+    body = _build_reference_body(
+        authors=_format_authors_from_sources(
+            crossref_authors=crossref_authors,
+            scholar_authors=scholar_authors,
+            summary=summary,
+            is_zh=is_zh,
+        ),
+        title=title,
+        marker=marker,
+        journal=journal,
+        year=year,
+        volume_issue=volume_issue,
+        page=crossref_page or fallback.pages,
+        university=fallback.university,
+    )
+    if not body:
+        logger.debug("跳过缺卷期页码的期刊文献: %s", title[:80])
+        return ""
     return f"[{index}]{body}"
 
 
@@ -393,6 +476,308 @@ async def _filter_results(
         return results[:fallback_num]
 
 
+async def _extract_scholar_keyword_queries(llm: BaseChatModel, title: str, outline: str) -> ScholarKeywordQueries:
+    """提取 Google Scholar 检索词，失败时使用标题兜底。"""
+
+    try:
+        keyword_chain = REFERENCE_SCHOLAR_KEYWORD_PROMPT | llm | StrOutputParser()
+        async with text_short_slot():
+            raw_keywords = cast(str, await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]}))
+        keyword_data = json.loads(raw_keywords.strip())
+        if not isinstance(keyword_data, dict):
+            return ScholarKeywordQueries(zh_query=title, en_queries=[title])
+
+        zh_query = str(keyword_data.get("zh") or title).strip() or title
+        en_queries = keyword_data.get("en") or [title]
+        if not isinstance(en_queries, list):
+            en_queries = [title]
+        normalized_en_queries = [str(query).strip() for query in en_queries[:2] if str(query).strip()]
+        return ScholarKeywordQueries(zh_query=zh_query, en_queries=normalized_en_queries or [title])
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("参考文献关键词提取失败，使用标题兜底: %s", exc)
+        return ScholarKeywordQueries(zh_query=title, en_queries=[title])
+
+
+def _build_reference_targets(wxnum: int, *, include_chinese: bool, include_english: bool) -> ReferenceTargets:
+    """按中英文开关计算参考文献目标数量。"""
+
+    target_total = max(1, wxnum)
+    if include_chinese and include_english:
+        target_en = max(3, round(target_total / 3))
+        return ReferenceTargets(total=target_total, zh=target_total - target_en, en=target_en)
+    if include_english:
+        return ReferenceTargets(total=target_total, zh=0, en=target_total)
+    return ReferenceTargets(total=target_total, zh=target_total, en=0)
+
+
+async def _search_scholar_results(
+    queries: ScholarKeywordQueries,
+    wxnum: int,
+    *,
+    include_chinese: bool,
+    include_english: bool,
+) -> ScholarSearchResults:
+    """按中英文检索开关调用 SerpAPI，并按语言归并结果。"""
+
+    zh_search_num = min(max(wxnum + 10, 20), 40)
+    en_search_num = min(max(wxnum, 15), 30)
+    search_labels: list[str] = []
+    search_tasks = []
+    if include_chinese:
+        search_labels.append("zh")
+        search_tasks.append(_search_scholar(queries.zh_query, num=zh_search_num))
+    if include_english:
+        for query in queries.en_queries:
+            search_labels.append("en")
+            search_tasks.append(_search_scholar(query, num=en_search_num))
+
+    grouped_results = await asyncio.gather(*search_tasks)
+    zh_results: list[dict[str, Any]] = []
+    en_results: list[dict[str, Any]] = []
+    for label, group in zip(search_labels, grouped_results, strict=True):
+        if label == "zh":
+            zh_results.extend(group)
+        else:
+            en_results.extend(group)
+    return ScholarSearchResults(zh_results, en_results, zh_search_num, en_search_num)
+
+
+def _dedup_search_results(
+    zh_results: list[dict[str, Any]],
+    en_results: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按标题去重，中英文结果共享同一个标题集合。"""
+
+    seen_titles: set[str] = set()
+
+    def _dedup(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        for item in items:
+            title_key = _title_key(item)
+            if not title_key or title_key in seen_titles:
+                continue
+            seen_titles.add(title_key)
+            deduped.append(item)
+        return deduped
+
+    return _dedup(zh_results), _dedup(en_results)
+
+
+async def _filter_scholar_results(
+    llm: BaseChatModel,
+    title: str,
+    zh_results: list[dict[str, Any]],
+    en_results: list[dict[str, Any]],
+    targets: ReferenceTargets,
+    wxnum: int,
+    *,
+    include_chinese: bool,
+    include_english: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """调用 LLM 进行相关性筛选，并为后续无年份淘汰预留缓冲。"""
+
+    buffer = 5
+    if include_chinese and include_english:
+        return await asyncio.gather(
+            _filter_results(llm, title, zh_results, "中文", keep_count=targets.zh + buffer, fallback_num=max(10, wxnum)),
+            _filter_results(
+                llm,
+                title,
+                en_results,
+                "英文",
+                keep_count=targets.en + buffer,
+                fallback_num=max(8, min(wxnum, 15)),
+            ),
+        )
+    if include_english:
+        en_filtered = await _filter_results(
+            llm,
+            title,
+            en_results,
+            "英文",
+            keep_count=targets.en + buffer,
+            fallback_num=max(8, min(wxnum, 15)),
+        )
+        return [], en_filtered
+
+    zh_filtered = await _filter_results(
+        llm,
+        title,
+        zh_results,
+        "中文",
+        keep_count=targets.zh + buffer,
+        fallback_num=max(10, wxnum),
+    )
+    return zh_filtered, []
+
+
+async def _enrich_with_crossref_best_effort(items: list[dict[str, Any]], label: str) -> None:
+    """CrossRef 只是补全来源信息，失败不能中断参考文献生成。"""
+
+    if not items:
+        return
+    try:
+        await _enrich_with_crossref(items)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("%s CrossRef 补全失败，降级使用 Scholar 数据: %s", label, exc)
+
+
+async def _record_scholar_keywords(
+    queries: ScholarKeywordQueries,
+    *,
+    include_chinese: bool,
+    include_english: bool,
+) -> None:
+    """记录 SerpAPI 关键词提取结果。"""
+
+    await record_process_detail(
+        "references",
+        "已提取 SerpAPI 文献检索关键词",
+        provider="serpapi",
+        zh_query=queries.zh_query,
+        en_queries=queries.en_queries,
+        include_chinese=include_chinese,
+        include_english=include_english,
+    )
+
+
+async def _record_scholar_search_results(
+    search_results: ScholarSearchResults,
+    *,
+    include_chinese: bool,
+    include_english: bool,
+) -> None:
+    """记录 SerpAPI 检索结果数量。"""
+
+    await record_process_detail(
+        "references",
+        "SerpAPI 文献检索完成",
+        provider="serpapi",
+        zh_result_count=len(search_results.zh_results),
+        en_result_count=len(search_results.en_results),
+        zh_search_num=search_results.zh_search_num if include_chinese else 0,
+        en_search_num=search_results.en_search_num if include_english else 0,
+    )
+
+
+async def _record_scholar_format_result(
+    targets: ReferenceTargets,
+    zh_filtered: list[dict[str, Any]],
+    en_filtered: list[dict[str, Any]],
+    lines: list[str],
+) -> None:
+    """记录 SerpAPI 参考文献最终格式化结果。"""
+
+    await record_process_detail(
+        "references",
+        "参考文献格式化完成",
+        provider="serpapi",
+        target_total=targets.total,
+        target_zh=targets.zh,
+        target_en=targets.en,
+        filtered_zh_count=len(zh_filtered),
+        filtered_en_count=len(en_filtered),
+        final_count=len(lines),
+    )
+
+
+def _append_formatted_references(
+    lines: list[str],
+    used_title_keys: set[str],
+    items: list[dict[str, Any]],
+    *,
+    start_index: int,
+    target_total: int,
+    limit: int,
+    is_zh: bool,
+) -> int:
+    """把候选文献格式化为编号行，返回下一条参考文献编号。"""
+
+    next_index = start_index
+    remaining = limit
+    for item in items:
+        if len(lines) >= target_total or remaining <= 0:
+            break
+        title_key = _title_key(item)
+        if not title_key or title_key in used_title_keys:
+            continue
+        line = _format_one_reference(item, next_index, is_zh=is_zh)
+        if not line:
+            continue
+        lines.append(line)
+        used_title_keys.add(title_key)
+        next_index += 1
+        remaining -= 1
+    return next_index
+
+
+async def _format_scholar_references(
+    zh_filtered: list[dict[str, Any]],
+    en_filtered: list[dict[str, Any]],
+    zh_results: list[dict[str, Any]],
+    en_results: list[dict[str, Any]],
+    targets: ReferenceTargets,
+    *,
+    include_chinese: bool,
+    include_english: bool,
+) -> list[str]:
+    """格式化筛选结果，数量不足时从原始检索结果回补。"""
+
+    await _enrich_with_crossref_best_effort(zh_filtered + en_filtered, "筛选文献")
+
+    used_title_keys: set[str] = set()
+    lines: list[str] = []
+    next_index = 1
+    if include_chinese:
+        next_index = _append_formatted_references(
+            lines,
+            used_title_keys,
+            zh_filtered,
+            start_index=next_index,
+            target_total=targets.total,
+            limit=targets.zh,
+            is_zh=True,
+        )
+    if include_english:
+        next_index = _append_formatted_references(
+            lines,
+            used_title_keys,
+            en_filtered,
+            start_index=next_index,
+            target_total=targets.total,
+            limit=targets.en,
+            is_zh=False,
+        )
+
+    if len(lines) >= targets.total:
+        return lines
+
+    zh_remaining = [item for item in zh_results if include_chinese and _title_key(item) not in used_title_keys]
+    en_remaining = [item for item in en_results if include_english and _title_key(item) not in used_title_keys]
+    await _enrich_with_crossref_best_effort(zh_remaining + en_remaining, "回补文献")
+    if include_chinese:
+        next_index = _append_formatted_references(
+            lines,
+            used_title_keys,
+            zh_remaining,
+            start_index=next_index,
+            target_total=targets.total,
+            limit=targets.total - len(lines),
+            is_zh=True,
+        )
+    if include_english and len(lines) < targets.total:
+        _append_formatted_references(
+            lines,
+            used_title_keys,
+            en_remaining,
+            start_index=next_index,
+            target_total=targets.total,
+            limit=targets.total - len(lines),
+            is_zh=False,
+        )
+    return lines
+
+
 async def generate_references(
     title: str,
     outline: str,
@@ -413,171 +798,46 @@ async def generate_references(
         return ""
 
     llm = await create_configured_llm("outline", temperature=0, max_tokens=512)
+    queries = await _extract_scholar_keyword_queries(llm, title, outline)
+    await _record_scholar_keywords(queries, include_chinese=include_chinese, include_english=include_english)
 
-    try:
-        keyword_chain = REFERENCE_SCHOLAR_KEYWORD_PROMPT | llm | StrOutputParser()
-        async with text_short_slot():
-            raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
-        keyword_data = json.loads(raw_keywords.strip())
-        zh_query = keyword_data.get("zh") or title
-        en_queries = keyword_data.get("en") or [title]
-        if not isinstance(en_queries, list):
-            en_queries = [title]
-        en_queries = [str(query).strip() for query in en_queries[:2] if str(query).strip()]
-        if not en_queries:
-            en_queries = [title]
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("参考文献关键词提取失败，使用标题兜底: %s", exc)
-        zh_query = title
-        en_queries = [title]
-    await record_process_detail(
-        "references",
-        "已提取 SerpAPI 文献检索关键词",
-        provider="serpapi",
-        zh_query=zh_query,
-        en_queries=en_queries,
+    search_results = await _search_scholar_results(
+        queries,
+        wxnum,
+        include_chinese=include_chinese,
+        include_english=include_english,
+    )
+    await _record_scholar_search_results(
+        search_results,
         include_chinese=include_chinese,
         include_english=include_english,
     )
 
-    # 搜索量加大缓冲：考虑去重 + 无年份淘汰的损耗
-    zh_search_num = min(max(wxnum + 10, 20), 40)
-    en_search_num = min(max(wxnum, 15), 30)
-    search_labels: list[str] = []
-    search_tasks = []
-    if include_chinese:
-        search_labels.append("zh")
-        search_tasks.append(_search_scholar(zh_query, num=zh_search_num))
-    if include_english:
-        for query in en_queries:
-            search_labels.append("en")
-            search_tasks.append(_search_scholar(query, num=en_search_num))
-    grouped_results = await asyncio.gather(*search_tasks)
-
-    zh_results: list[dict[str, Any]] = []
-    en_results: list[dict[str, Any]] = []
-    for label, group in zip(search_labels, grouped_results, strict=True):
-        if label == "zh":
-            zh_results.extend(group)
-        else:
-            en_results.extend(group)
-    await record_process_detail(
-        "references",
-        "SerpAPI 文献检索完成",
-        provider="serpapi",
-        zh_result_count=len(zh_results),
-        en_result_count=len(en_results),
-        zh_search_num=zh_search_num if include_chinese else 0,
-        en_search_num=en_search_num if include_english else 0,
-    )
-
-    seen_titles: set[str] = set()
-
-    def _dedup(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        deduped: list[dict[str, Any]] = []
-        for item in items:
-            title_key = _title_key(item)
-            if not title_key or title_key in seen_titles:
-                continue
-            seen_titles.add(title_key)
-            deduped.append(item)
-        return deduped
-
-    zh_results = _dedup(zh_results)
-    en_results = _dedup(en_results)
-
+    zh_results, en_results = _dedup_search_results(search_results.zh_results, search_results.en_results)
     if not zh_results and not en_results:
         logger.warning("参考文献搜索结果为空，跳过生成")
         return ""
 
-    # 动态 1:2 比例（英:中），并加缓冲应对无年份损耗
-    target_total = max(1, wxnum)
-    if include_chinese and include_english:
-        target_en = max(3, round(target_total / 3))
-        target_zh = target_total - target_en
-    elif include_english:
-        target_en = target_total
-        target_zh = 0
-    else:
-        target_en = 0
-        target_zh = target_total
-
-    # LLM 筛选：多要一些，为无年份淘汰留余量
-    buffer = 5
-    if include_chinese and include_english:
-        zh_filtered, en_filtered = await asyncio.gather(
-            _filter_results(llm, title, zh_results, "中文", keep_count=target_zh + buffer, fallback_num=max(10, wxnum)),
-            _filter_results(
-                llm, title, en_results, "英文", keep_count=target_en + buffer, fallback_num=max(8, min(wxnum, 15))
-            ),
-        )
-    elif include_english:
-        zh_filtered = []
-        en_filtered = await _filter_results(
-            llm, title, en_results, "英文", keep_count=target_en + buffer, fallback_num=max(8, min(wxnum, 15))
-        )
-    else:
-        zh_filtered = await _filter_results(
-            llm, title, zh_results, "中文", keep_count=target_zh + buffer, fallback_num=max(10, wxnum)
-        )
-        en_filtered = []
-
-    # ── CrossRef 补全卷期页码 ──
-    all_filtered = zh_filtered + en_filtered
-    try:
-        await _enrich_with_crossref(all_filtered)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("CrossRef 补全整体失败，降级使用 Scholar 数据: %s", exc)
-
-    used_title_keys: set[str] = set()
-    lines: list[str] = []
-    idx = 1
-
-    def _append_formatted(items: list[dict[str, Any]], limit: int, *, is_zh: bool) -> None:
-        nonlocal idx
-        for item in items:
-            if len(lines) >= target_total or limit <= 0:
-                break
-            title_key = _title_key(item)
-            if not title_key or title_key in used_title_keys:
-                continue
-            line = _format_one_reference(item, idx, is_zh=is_zh)
-            if not line:
-                continue
-            lines.append(line)
-            used_title_keys.add(title_key)
-            idx += 1
-            limit -= 1
-
-    if include_chinese:
-        _append_formatted(zh_filtered, target_zh, is_zh=True)
-    if include_english:
-        _append_formatted(en_filtered, target_en, is_zh=False)
-    # 数量不够时从原始结果回补
-    if len(lines) < target_total:
-        # 回补的也需要 CrossRef 补全
-        zh_remaining = [item for item in zh_results if include_chinese and _title_key(item) not in used_title_keys]
-        en_remaining = [item for item in en_results if include_english and _title_key(item) not in used_title_keys]
-        backfill = zh_remaining + en_remaining
-        if backfill:
-            try:
-                await _enrich_with_crossref(backfill)
-            except Exception:  # noqa: BLE001
-                pass
-        if include_chinese:
-            _append_formatted(zh_remaining, target_total - len(lines), is_zh=True)
-        if include_english and len(lines) < target_total:
-            _append_formatted(en_remaining, target_total - len(lines), is_zh=False)
-    await record_process_detail(
-        "references",
-        "参考文献格式化完成",
-        provider="serpapi",
-        target_total=target_total,
-        target_zh=target_zh,
-        target_en=target_en,
-        filtered_zh_count=len(zh_filtered),
-        filtered_en_count=len(en_filtered),
-        final_count=len(lines),
+    targets = _build_reference_targets(wxnum, include_chinese=include_chinese, include_english=include_english)
+    zh_filtered, en_filtered = await _filter_scholar_results(
+        llm,
+        title,
+        zh_results,
+        en_results,
+        targets,
+        wxnum,
+        include_chinese=include_chinese,
+        include_english=include_english,
     )
+    lines = await _format_scholar_references(
+        zh_filtered,
+        en_filtered,
+        zh_results,
+        en_results,
+        targets,
+        include_chinese=include_chinese,
+        include_english=include_english,
+    )
+    await _record_scholar_format_result(targets, zh_filtered, en_filtered, lines)
 
     return "\n".join(lines)

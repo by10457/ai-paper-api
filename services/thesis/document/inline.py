@@ -1,3 +1,5 @@
+"""正文内联内容写入工具，负责 Markdown 文本、引用标记和表格转换。"""
+
 import re
 from typing import Any
 

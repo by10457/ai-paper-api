@@ -208,13 +208,13 @@ def _quote_flowchart_node_labels(line: str) -> str:
 def _replace_node_label(line: str, pattern: str, opening: str, closing: str) -> str:
     """替换单类 Mermaid 节点标签。"""
 
-    def repl(match: re.Match[str]) -> str:
+    def _replace_match(match: re.Match[str]) -> str:
         label = match.group("label").strip()
         if label.startswith('"') and label.endswith('"'):
             return match.group(0)
         return f'{match.group("id")}{opening}"{_flowchart_label(label.strip(chr(34)))}"{closing}'
 
-    return re.sub(pattern, repl, line)
+    return re.sub(pattern, _replace_match, line)
 
 
 def _convert_usecase_diagram_to_flowchart(mermaid_code: str) -> str:

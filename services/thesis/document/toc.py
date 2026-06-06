@@ -1,3 +1,5 @@
+"""Word 目录页生成工具，负责预扫描标题、书签和目录页码占位。"""
+
 import re
 from typing import Any
 
@@ -17,20 +19,11 @@ def _pre_scan_headings(
     title: str = "",
     include_back_matter: bool = True,
 ) -> list[dict[str, object]]:
-    """Pre-scan body Markdown to extract level 1-3 headings for the TOC page.
-
-    Returns a list like::
-
-        [
-            {"text": "First Chapter", "level": 1, "bookmark": "_toc_0", "bookmark_id": 100},
-            {"text": "1.1 Background", "level": 2, "bookmark": "_toc_1", "bookmark_id": 101},
-        ]
-    """
+    """预扫描正文 Markdown，提取 1-3 级标题供目录页使用。"""
     clean_text = re.sub(FIGURE_BLOCK_PATTERN, "", full_text, flags=re.DOTALL)
     entries: list[dict[str, object]] = []
 
-    # Non-body headings that should never appear in the TOC,
-    # even if the LLM accidentally generates them inside the body text.
+    # LLM 偶尔会把前后置页面标题写入正文，这些标题不能进入正文目录。
     non_body_headings = {
         "摘要",
         "摘 要",
@@ -59,10 +52,8 @@ def _pre_scan_headings(
             continue
 
         text = text.strip()
-        # Exclude the thesis title itself
         if title and text == title.strip():
             continue
-        # Exclude non-body section headings (defensive against prompt drift)
         if text.lower() in non_body_headings:
             continue
 

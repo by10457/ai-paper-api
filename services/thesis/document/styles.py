@@ -1,3 +1,5 @@
+"""Word 全局样式初始化工具，负责正文、标题和页面基础设置。"""
+
 from docx.document import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
@@ -43,6 +45,7 @@ def _init_styles(document: DocxDocument) -> None:
         _apply_fixed_line_spacing(style.paragraph_format, pt=22)
         if level == 1:
             style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
 
 def _setup_page(document: DocxDocument) -> None:
     """设置首页 section 的页面尺寸和页边距。"""

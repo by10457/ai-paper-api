@@ -1,3 +1,5 @@
+"""图片占位符协议转发模块，统一暴露 schemas 中的解析与校验能力。"""
+
 from schemas.thesis import (
     FIGURE_BLOCK_PATTERN,
     AiImageFigure,
