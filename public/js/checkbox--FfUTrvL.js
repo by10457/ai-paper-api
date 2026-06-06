@@ -1,1 +1,0 @@
-import{r as e}from"./chunk-CrjmscNJ.js";import{r as t,t as n}from"./Group-DRfAQgn8.js";var r=e({CheckboxGroup:()=>n,default:()=>i});t.install=e=>{e.component(t.name,t),e.component(n.name,n)};var i=t;export{r as n,i as t};

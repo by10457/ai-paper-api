@@ -1,0 +1,1 @@
+import{Qt as e,yn as t}from"../jse/index-index-VhyItEND.js";function n(n){return t(n)&&n.type===e}export{n as t};
