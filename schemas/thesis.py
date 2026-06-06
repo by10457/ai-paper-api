@@ -88,6 +88,8 @@ class GenerateRequest(BaseModel):
     year_month: str = Field(default="", description="留空则自动填当前年月")
     student_id: str = Field(default="", description="学号")
     student_class: str = Field(default="", description="班级")
+    callback_url: str = Field(default="", max_length=1024, description="生成完成后的业务回调地址")
+    callback_secret: str = Field(default="", max_length=255, description="生成回调密钥，不填则使用服务默认配置")
 
 
 class GenerateSubmitResponse(BaseModel):
@@ -103,7 +105,11 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: Literal["pending", "completed", "failed"]
     message: str = ""
-    file_key: str = Field(default="", description="七牛云文件 key，生成完成后填充")
+    file_key: str = Field(default="", description="主存储文件 key，生成完成后填充")
+    download_url: str = Field(default="", description="下载地址，生成完成后填充")
+    storage_provider: str = Field(default="", description="主存储类型")
+    local_file_key: str = Field(default="", description="本地兜底文件 key")
+    local_download_url: str = Field(default="", description="本地兜底下载地址")
     figure_count: int = Field(default=0, ge=0)
     mermaid_count: int = Field(default=0, ge=0)
     chart_count: int = Field(default=0, ge=0)
@@ -134,6 +140,8 @@ class PaperOrderCreateRequest(BaseModel):
     selftemp: int | None = None
     service_ids: list[int] = Field(default_factory=list)
     agent_id: int | None = None
+    callback_url: str = Field(default="", max_length=1024, description="生成完成后的业务回调地址")
+    callback_secret: str = Field(default="", max_length=255, description="生成回调密钥，不填则使用服务默认配置")
 
 
 class PaperOrderPayRequest(BaseModel):
@@ -186,7 +194,10 @@ class PaperOrderStatusResponse(BaseModel):
     has_file: int
     task_id: str | None = None
     file_key: str | None = None
+    storage_provider: str | None = None
+    local_file_key: str | None = None
     download_url: str | None = None
+    local_download_url: str | None = None
     error_msg: str | None = None
 
 
@@ -196,6 +207,9 @@ class PaperOrderDownloadUrlResponse(BaseModel):
     order_sn: str
     download_url: str
     file_key: str | None = None
+    storage_provider: str | None = None
+    local_file_key: str | None = None
+    local_download_url: str | None = None
 
 
 class PaperOrderListItemResponse(BaseModel):
@@ -223,6 +237,9 @@ class PaperOrderDetailResponse(PaperOrderListItemResponse):
     outline_json: list[dict[str, Any]]
     task_id: str | None = None
     file_key: str | None = None
+    storage_provider: str | None = None
+    local_file_key: str | None = None
+    local_download_url: str | None = None
 
 
 class NormalizedPaperOrder(BaseModel):

@@ -1,7 +1,9 @@
 """AI 图片生成器实现。"""
 
+import asyncio
 import base64
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 
 import httpx
 from PIL import Image
@@ -57,6 +59,35 @@ class ImageGenerator(ABC):
         output_path: str,
     ) -> str:
         """生成图片并保存到 output_path，返回实际路径。"""
+
+
+class LazyImageGenerator(ImageGenerator):
+    """延迟初始化真实图片生成器，避免 Mermaid 成功时触发图片模型配置读取。"""
+
+    def __init__(self, factory: Callable[[], Awaitable[ImageGenerator]]):
+        self._factory = factory
+        self._generator: ImageGenerator | None = None
+        self._lock = asyncio.Lock()
+
+    async def generate(
+        self,
+        description: str,
+        style: str,
+        aspect_ratio: str,
+        output_path: str,
+    ) -> str:
+        generator = await self._get_generator()
+        return await generator.generate(description, style, aspect_ratio, output_path)
+
+    async def _get_generator(self) -> ImageGenerator:
+        """返回真实图片生成器，首次使用时创建。"""
+
+        if self._generator is not None:
+            return self._generator
+        async with self._lock:
+            if self._generator is None:
+                self._generator = await self._factory()
+        return self._generator
 
 
 class PlaceholderImageGenerator(ImageGenerator):

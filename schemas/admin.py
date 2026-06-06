@@ -83,7 +83,9 @@ class AdminOrderListItem(BaseModel):
     paid_points: int
     refunded_points: int
     task_id: str | None
+    storage_provider: str | None
     file_key: str | None
+    local_file_key: str | None
     download_url: str | None
     last_error: str | None
     created_at: datetime

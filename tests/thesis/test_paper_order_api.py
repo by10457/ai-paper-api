@@ -8,7 +8,7 @@ from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
 from services.thesis.business import order_workflow
 from services.thesis.business.order_service import PaperOrderService
-from services.thesis.storage.qiniu_uploader import build_qiniu_private_download_url
+from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url
 
 
 @pytest.fixture
@@ -115,7 +115,7 @@ def test_qiniu_private_download_url_uses_configured_domain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "services.thesis.storage.qiniu_uploader.get_settings",
+        "services.thesis.storage.qiniu_storage.get_settings",
         lambda: SimpleNamespace(
             qiniu_access_key="access",
             qiniu_secret_key="secret",

@@ -204,6 +204,38 @@ def test_normalize_flowchart_splits_semicolon_statements() -> None:
     ]
 
 
+def test_normalize_flowchart_with_misplaced_usecase_syntax() -> None:
+    code = """
+flowchart TD
+    actor 普通用户
+    package "业务服务" {
+        usecase "提交数据" as UC1
+    }
+    普通用户 --> UC1
+"""
+
+    normalized = _normalize_mermaid_code(code)
+
+    assert normalized.startswith("flowchart TD")
+    assert 'ACTOR_1["普通用户"]' in normalized
+    assert 'subgraph PKG_1["业务服务"]' in normalized
+    assert 'UC1(["提交数据"])' in normalized
+    assert "ACTOR_1 --> UC1" in normalized
+
+
+def test_normalize_flowchart_bare_chinese_edge_endpoints() -> None:
+    code = """
+flowchart TD
+    普通用户 --> 业务系统
+    业务系统 -->|处理请求| 生成服务
+"""
+
+    normalized = _normalize_mermaid_code(code)
+
+    assert 'NODE_1["普通用户"] --> NODE_2["业务系统"]' in normalized
+    assert 'NODE_2["业务系统"] -->|处理请求| NODE_3["生成服务"]' in normalized
+
+
 def test_summarize_render_error_keeps_first_line_only() -> None:
     error = RuntimeError("Mermaid 渲染失败\nstack line 1\nstack line 2")
 

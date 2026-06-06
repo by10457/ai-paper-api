@@ -120,15 +120,28 @@ uv run pytest tests/ -v
 调用论文接口时使用 `Authorization: Bearer <token>`。积分与余额按 1:10 折算，默认论文生成扣费 200 积分。
 服务端业务系统调用 `POST /api/v1/thesis/generate` 或 `POST /api/v1/thesis/orders` 时，建议传入 `Idempotency-Key` 请求头，使用本地业务订单号等稳定值，避免 HTTP 重试导致重复扣费或重复生成。
 
-论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此静态文件路径可通过 `/output/thesis/{task_id}/...` 访问；生产下载入口仍建议由业务系统基于七牛文件 key 签发。
+论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此本地文件始终可作为下载兜底；主存储可通过 `STORAGE_PROVIDER` 选择 `local`、`qiniu`、`minio` 或 `cos`。生成请求可传入 `callback_url` 和 `callback_secret`，让不同调用方接收自己的完成回调；环境变量中的 `PAPER_CALLBACK_URL` / `PAPER_CALLBACK_SECRET` 只作为未传入时的默认兜底。
 
-文本生成模型和图片生成模型统一在管理后台“模型配置”中维护，环境变量不再保存模型 API Key、Base URL 或模型名。需要在 `.env` / `.env.docker` 中补齐论文输出目录、七牛和业务系统回调配置：
+文本生成模型和图片生成模型统一在管理后台“模型配置”中维护，环境变量不再保存模型 API Key、Base URL 或模型名。需要在 `.env` / `.env.docker` 中补齐论文输出目录、文件存储和默认回调配置：
 
 ```env
 THESIS_OUTPUT_ROOT=public/output/thesis
+PUBLIC_BASE_URL=http://localhost:10462
+STORAGE_PROVIDER=local
+STORAGE_OBJECT_PREFIX=paper
+STORAGE_DOWNLOAD_EXPIRES=3600
 QINIU_ACCESS_KEY=
 QINIU_SECRET_KEY=
 QINIU_BUCKET=
+QINIU_DOMAIN=
+MINIO_ENDPOINT=
+MINIO_ACCESS_KEY=
+MINIO_SECRET_KEY=
+MINIO_BUCKET=
+COS_SECRET_ID=
+COS_SECRET_KEY=
+COS_BUCKET=
+COS_REGION=ap-guangzhou
 PAPER_CALLBACK_URL=http://localhost:10460/api/internal/paper/callback
 PAPER_CALLBACK_SECRET=
 ```

@@ -3,6 +3,7 @@
 from services.thesis.image.ai_generator import (
     GenerateContentImageGenerator,
     ImageGenerator,
+    LazyImageGenerator,
     OpenAIImageGenerator,
     PlaceholderImageGenerator,
 )
@@ -13,6 +14,7 @@ from services.thesis.image.renderer import render_all_figures
 __all__ = [
     "GenerateContentImageGenerator",
     "ImageGenerator",
+    "LazyImageGenerator",
     "OpenAIImageGenerator",
     "PlaceholderImageGenerator",
     "render_all_figures",

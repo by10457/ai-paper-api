@@ -31,7 +31,7 @@ class AdminOverviewService:
         health = {
             "mysql": "ok" if db_connected else "degraded",
             "redis": "ok" if redis_module.redis_client is not None else "degraded",
-            "storage": "ok" if settings.QINIU_BUCKET else "unconfigured",
+            "storage": AdminOverviewService._storage_health(),
             "model": "ok" if has_model_config else "unconfigured",
         }
 
@@ -70,3 +70,18 @@ class AdminOverviewService:
 
         result = await User.all().annotate(total=Sum("api_token_call_count")).values("total")
         return int((result[0].get("total") if result else 0) or 0)
+
+    @staticmethod
+    def _storage_health() -> str:
+        """按当前存储类型判断配置健康状态。"""
+
+        provider = settings.STORAGE_PROVIDER.strip().lower() or "local"
+        if provider == "local":
+            return "ok"
+        if provider == "qiniu":
+            return "ok" if settings.QINIU_BUCKET else "unconfigured"
+        if provider == "minio":
+            return "ok" if settings.MINIO_ENDPOINT and settings.MINIO_BUCKET else "unconfigured"
+        if provider == "cos":
+            return "ok" if settings.COS_BUCKET and settings.COS_REGION else "unconfigured"
+        return "unconfigured"

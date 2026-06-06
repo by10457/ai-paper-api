@@ -120,6 +120,9 @@ async def get_order_download_url(user: User, order_sn: str) -> PaperOrderDownloa
         order_sn=order.order_sn,
         download_url=download_url,
         file_key=order.file_key,
+        storage_provider=order.storage_provider,
+        local_file_key=order.local_file_key,
+        local_download_url=_build_local_order_download_url(order),
     )
 
 
@@ -149,6 +152,9 @@ async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailRe
         outline_json=order.outline_json if isinstance(order.outline_json, list) else [],
         task_id=order.task_id,
         file_key=order.file_key,
+        storage_provider=order.storage_provider,
+        local_file_key=order.local_file_key,
+        local_download_url=_build_local_order_download_url(order),
     )
 
 
@@ -174,6 +180,8 @@ async def run_paid_paper_order(order_id: int) -> None:
             normalized.wxquote,
             normalized.language,
             normalized.wxnum,
+            callback_url=order.callback_url or "",
+            callback_secret=order.callback_secret or "",
         )
         status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_from_task_status(order, status_data)
@@ -201,7 +209,10 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         has_file=has_file,
         task_id=order.task_id,
         file_key=order.file_key,
-        download_url=None,
+        storage_provider=order.storage_provider,
+        local_file_key=order.local_file_key,
+        local_download_url=_build_local_order_download_url(order),
+        download_url=_build_order_download_url(order),
         error_msg=order.last_error,
     )
 
@@ -225,8 +236,18 @@ def _paper_order_list_item(order: PaperOrder) -> PaperOrderListItemResponse:
 
 
 def _build_order_download_url(order: PaperOrder) -> str | None:
-    if order.status != "completed" or not order.file_key:
+    if order.status != "completed":
         return None
-    from services.thesis.storage.qiniu_uploader import build_qiniu_private_download_url
+    if order.storage_provider == "manual" and order.download_url:
+        return order.download_url
+    from services.thesis.storage.document_storage import build_download_url
 
-    return build_qiniu_private_download_url(order.file_key)
+    return build_download_url(order.storage_provider, order.file_key, order.local_file_key) or order.download_url
+
+
+def _build_local_order_download_url(order: PaperOrder) -> str | None:
+    if order.status != "completed" or not order.local_file_key:
+        return None
+    from services.thesis.storage.document_storage import build_local_download_url
+
+    return build_local_download_url(order.local_file_key)

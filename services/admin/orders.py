@@ -138,11 +138,20 @@ class AdminOrderService:
         order = await get_order_or_404(order_id)
         order.status = "completed"
         order.download_url = download_url
+        order.storage_provider = "manual"
         order.file_key = file_key or order.file_key
         order.completed_at = timezone.now()
         order.last_error = ""
         await order.save(
-            update_fields=["status", "download_url", "file_key", "completed_at", "last_error", "updated_at"]
+            update_fields=[
+                "status",
+                "storage_provider",
+                "download_url",
+                "file_key",
+                "completed_at",
+                "last_error",
+                "updated_at",
+            ]
         )
         await write_audit_log(
             operator=operator,
@@ -192,7 +201,9 @@ class AdminOrderService:
             paid_points=order.paid_points,
             refunded_points=order.refunded_points,
             task_id=order.task_id,
+            storage_provider=order.storage_provider,
             file_key=order.file_key,
+            local_file_key=order.local_file_key,
             download_url=order.download_url,
             last_error=order.last_error,
             created_at=order.created_at,

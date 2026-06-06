@@ -14,6 +14,9 @@ from services.thesis.image.utils import auto_crop_whitespace_fast
 logger = logging.getLogger(__name__)
 
 _FLOWCHART_START_PATTERN = re.compile(r"^(?:graph|flowchart)\s+(?:TD|TB|BT|LR|RL)\b", re.IGNORECASE)
+_SAFE_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+_NODE_EXPR_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\s*(?:\[|\(|\{)")
+_USECASE_SYNTAX_PATTERN = re.compile(r"^\s*(?:actor|package|usecase)\b", re.IGNORECASE | re.MULTILINE)
 
 
 def _mermaid_node_id(prefix: str, index: int) -> str:
@@ -36,9 +39,31 @@ def _normalize_mermaid_code(mermaid_code: str) -> str:
     code = re.sub(r"\s*```$", "", code).strip()
     if code.lower().startswith("usecasediagram"):
         return _convert_usecase_diagram_to_flowchart(code)
+    if _looks_like_usecase_syntax(code):
+        return _convert_usecase_diagram_to_flowchart(_as_usecase_diagram(code))
     if _FLOWCHART_START_PATTERN.match(code):
         return _normalize_flowchart_code(code)
     return code
+
+
+def _looks_like_usecase_syntax(mermaid_code: str) -> bool:
+    """识别 LLM 把 usecase 语法误写进 flowchart 的情况。"""
+
+    return bool(_USECASE_SYNTAX_PATTERN.search(mermaid_code))
+
+
+def _as_usecase_diagram(mermaid_code: str) -> str:
+    """把伪 usecase 内容整理成统一入口。"""
+
+    lines = []
+    for line in mermaid_code.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _FLOWCHART_START_PATTERN.match(stripped):
+            continue
+        lines.append(stripped)
+    return "usecaseDiagram\n" + "\n".join(lines)
 
 
 def _normalize_flowchart_code(mermaid_code: str) -> str:
@@ -46,6 +71,8 @@ def _normalize_flowchart_code(mermaid_code: str) -> str:
 
     lines = _split_flowchart_lines(mermaid_code)
     normalized: list[str] = []
+    label_aliases: dict[str, str] = {}
+    node_index = 0
     subgraph_index = 0
 
     for index, line in enumerate(lines):
@@ -58,6 +85,7 @@ def _normalize_flowchart_code(mermaid_code: str) -> str:
         line, subgraph_index = _normalize_subgraph_line(line, subgraph_index)
         line = _quote_flowchart_node_labels(line)
         line = _normalize_colon_edge_label(line)
+        line, node_index = _normalize_bare_edge_endpoints(line, label_aliases, node_index)
         normalized.append(line)
 
     return "\n".join(normalized)
@@ -122,6 +150,48 @@ def _normalize_colon_edge_label(line: str) -> str:
     target = match.group("target").strip()
     label = _flowchart_label(match.group("label").strip().strip('"'))
     return f'{match.group("indent")}{source} {arrow}|"{label}"| {target}'
+
+
+def _normalize_bare_edge_endpoints(
+    line: str,
+    label_aliases: dict[str, str],
+    node_index: int,
+) -> tuple[str, int]:
+    """把中文裸节点名改为安全节点 ID。"""
+
+    match = re.match(
+        r"^(?P<indent>\s*)(?P<source>.+?)\s*(?P<arrow>-->|---|-.->|==>)\s*"
+        r"(?P<label>\|[^|\n]+?\|\s*)?(?P<target>.+?)\s*$",
+        line.rstrip(";"),
+    )
+    if not match:
+        return line, node_index
+
+    source, node_index = _normalize_edge_endpoint(match.group("source"), label_aliases, node_index)
+    target, node_index = _normalize_edge_endpoint(match.group("target"), label_aliases, node_index)
+    label = (match.group("label") or "").strip()
+    edge = f'{match.group("arrow")}{label} ' if label else f'{match.group("arrow")} '
+    return f'{match.group("indent")}{source} {edge}{target}', node_index
+
+
+def _normalize_edge_endpoint(
+    endpoint: str,
+    label_aliases: dict[str, str],
+    node_index: int,
+) -> tuple[str, int]:
+    """规范化单个连线端点。"""
+
+    value = endpoint.strip()
+    if _SAFE_ID_PATTERN.match(value) or _NODE_EXPR_PATTERN.match(value):
+        return value, node_index
+
+    label = value.strip('"')
+    alias = label_aliases.get(label)
+    if alias is None:
+        node_index += 1
+        alias = _mermaid_node_id("NODE", node_index)
+        label_aliases[label] = alias
+    return f'{alias}["{_flowchart_label(label)}"]', node_index
 
 
 def _quote_flowchart_node_labels(line: str) -> str:

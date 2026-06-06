@@ -66,6 +66,7 @@ class Settings(BaseSettings):
 
     # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
+    PUBLIC_BASE_URL: str = ""
     PUPPETEER_EXECUTABLE_PATH: str = ""
     TEXT_LONG_CONCURRENCY: int = Field(default=16, ge=1)
     TEXT_SHORT_CONCURRENCY: int = Field(default=32, ge=1)
@@ -88,12 +89,34 @@ class Settings(BaseSettings):
     SERPAPI_KEY: str = ""
     CROSSREF_MAILTO: str = ""
 
+    # 文件存储配置：本地文件始终保留，远端存储按 STORAGE_PROVIDER 选择。
+    STORAGE_PROVIDER: str = "local"
+    STORAGE_OBJECT_PREFIX: str = "paper"
+    STORAGE_DOWNLOAD_EXPIRES: int = Field(default=3600, ge=60)
+
     # 七牛云上传配置：论文生成完成后，可将 docx 上传到对象存储。
     QINIU_ACCESS_KEY: str = ""
     QINIU_SECRET_KEY: str = ""
     QINIU_BUCKET: str = ""
     QINIU_DOMAIN: str = ""
     QINIU_DOWNLOAD_EXPIRES: int = Field(default=3600, ge=60)
+
+    # MinIO 存储配置。
+    MINIO_ENDPOINT: str = ""
+    MINIO_ACCESS_KEY: str = ""
+    MINIO_SECRET_KEY: str = ""
+    MINIO_BUCKET: str = ""
+    MINIO_SECURE: bool = False
+    MINIO_DOMAIN: str = ""
+
+    # 腾讯云 COS 存储配置。
+    COS_SECRET_ID: str = ""
+    COS_SECRET_KEY: str = ""
+    COS_BUCKET: str = ""
+    COS_REGION: str = ""
+    COS_DOMAIN: str = ""
+    COS_ACCESS_POLICY: str = "PRIVATE"
+    COS_UPLOAD_ALLOW_PREFIX: str = "*"
 
     # 业务系统回调配置：生成完成后通知上游业务系统。
     PAPER_CALLBACK_URL: str = ""
@@ -102,6 +125,10 @@ class Settings(BaseSettings):
     @property
     def thesis_output_root(self) -> str:
         return self.THESIS_OUTPUT_ROOT
+
+    @property
+    def public_base_url(self) -> str:
+        return self.PUBLIC_BASE_URL
 
     @property
     def serpapi_key(self) -> str:

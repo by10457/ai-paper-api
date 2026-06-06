@@ -133,6 +133,8 @@ async def run_direct_generate_task(direct_task_id: int) -> None:
         req.language,
         req.wxnum,
         direct_task_id=direct_task.id,
+        callback_url=req.callback_url,
+        callback_secret=req.callback_secret,
     )
 
 
@@ -200,6 +202,8 @@ async def run_generate_task(
     language: str = "否",
     wxnum: int = 25,
     direct_task_id: int | None = None,
+    callback_url: str = "",
+    callback_secret: str = "",
 ) -> None:
     """后台执行论文生成、上传和业务回调，并同步任务状态。"""
 
@@ -216,9 +220,9 @@ async def run_generate_task(
             wxnum=wxnum,
             **cover_kwargs,
         )
-        await _mark_generation_completed(task_id, result, direct_task_id)
+        await _mark_generation_completed(task_id, result, direct_task_id, callback_url, callback_secret)
     except Exception as exc:  # noqa: BLE001
-        await _mark_generation_failed(task_id, exc, direct_task_id)
+        await _mark_generation_failed(task_id, exc, direct_task_id, callback_url, callback_secret)
 
 
 def _cover_kwargs(req: GenerateRequest) -> dict[str, Any]:
@@ -253,20 +257,33 @@ def _direct_task_status_response(direct_task: PaperDirectTask) -> TaskStatusResp
         status=cast(Any, status),
         message=direct_task.last_error or ("论文生成完成" if direct_task.status == "completed" else "正在生成论文..."),
         file_key=direct_task.file_key or "",
+        storage_provider=direct_task.storage_provider or "",
+        local_file_key=direct_task.local_file_key or "",
+        local_download_url=_build_local_download_url(direct_task.local_file_key),
     )
 
 
-async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: int | None = None) -> None:
-    from services.thesis.storage.callback import notify_callback
-    from services.thesis.storage.qiniu_uploader import upload_to_qiniu
+async def _mark_generation_completed(
+    task_id: str,
+    result: Any,
+    direct_task_id: int | None = None,
+    callback_url: str = "",
+    callback_secret: str = "",
+) -> None:
+    from services.thesis.business.order_callback import notify_callback
+    from services.thesis.storage.document_storage import store_document
 
     docx_path = str(_result_value(result, "docx_path", ""))
-    file_key = await upload_to_qiniu(docx_path, task_id)
+    stored = await store_document(docx_path, task_id)
     await status_store.write_status_async(
         task_id,
         "completed",
         message="论文生成完成",
-        file_key=file_key,
+        storage_provider=stored.storage_provider,
+        file_key=stored.file_key,
+        download_url=stored.download_url,
+        local_file_key=stored.local_file_key,
+        local_download_url=stored.local_download_url,
         docx_path=docx_path,
         figure_count=_result_value(result, "figure_count", 0),
         mermaid_count=_result_value(result, "mermaid_count", 0),
@@ -279,10 +296,27 @@ async def _mark_generation_completed(task_id: str, result: Any, direct_task_id: 
     if direct_task_id is not None:
         status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
-    await notify_callback(task_id, file_key, status="completed")
+    await notify_callback(
+        task_id,
+        file_key=stored.file_key,
+        status="completed",
+        error_msg="",
+        callback_url=callback_url,
+        callback_secret=callback_secret,
+        download_url=stored.download_url,
+        storage_provider=stored.storage_provider,
+        local_file_key=stored.local_file_key,
+        local_download_url=stored.local_download_url,
+    )
 
 
-async def _mark_generation_failed(task_id: str, exc: Exception, direct_task_id: int | None = None) -> None:
+async def _mark_generation_failed(
+    task_id: str,
+    exc: Exception,
+    direct_task_id: int | None = None,
+    callback_url: str = "",
+    callback_secret: str = "",
+) -> None:
     logger.exception("论文生成失败")
     if is_provider_quota_error(exc):
         error_type = "provider_quota"
@@ -304,9 +338,16 @@ async def _mark_generation_failed(task_id: str, exc: Exception, direct_task_id: 
         status_data = await status_store.read_status_async(task_id)
         await PaperOrderService.mark_direct_task_from_status(direct_task_id, status_data)
     try:
-        from services.thesis.storage.callback import notify_callback
+        from services.thesis.business.order_callback import notify_callback
 
-        await notify_callback(task_id, file_key="", status="failed", error_msg=error_msg)
+        await notify_callback(
+            task_id,
+            file_key="",
+            status="failed",
+            error_msg=error_msg,
+            callback_url=callback_url,
+            callback_secret=callback_secret,
+        )
     except Exception:  # noqa: BLE001
         logger.exception("失败回调业务系统失败")
 
@@ -315,3 +356,11 @@ def _result_value(result: Any, key: str, default: Any) -> Any:
     if isinstance(result, dict):
         return result.get(key, default)
     return getattr(result, key, default)
+
+
+def _build_local_download_url(local_file_key: str | None) -> str:
+    if not local_file_key:
+        return ""
+    from services.thesis.storage.document_storage import build_local_download_url
+
+    return build_local_download_url(local_file_key)

@@ -90,6 +90,8 @@ class PaperOrderService:
             "service_ids": req.service_ids,
             "cost_points": settings.PAPER_GENERATE_POINTS,
             "status": "created",
+            "callback_url": req.callback_url.strip() or None,
+            "callback_secret": req.callback_secret.strip() or None,
         }
         if conn is None:
             return await PaperOrder.create(**data)
@@ -203,6 +205,8 @@ class PaperOrderService:
                 task_id=task_id,
                 title=title,
                 request_payload=request_payload,
+                callback_url=str(request_payload.get("callback_url") or "") or None,
+                callback_secret=str(request_payload.get("callback_secret") or "") or None,
                 cost_points=settings.PAPER_GENERATE_POINTS,
                 refunded_points=0,
                 status="paid",
@@ -275,10 +279,22 @@ class PaperOrderService:
         task_status = str(data.get("status", ""))
         if task_status == "completed":
             direct_task.status = "completed"
+            direct_task.storage_provider = str(data.get("storage_provider") or "")
             direct_task.file_key = str(data.get("file_key") or "")
+            direct_task.local_file_key = str(data.get("local_file_key") or "")
             direct_task.completed_at = timezone.now()
             direct_task.last_error = ""
-            await direct_task.save(update_fields=["status", "file_key", "completed_at", "last_error", "updated_at"])
+            await direct_task.save(
+                update_fields=[
+                    "status",
+                    "storage_provider",
+                    "file_key",
+                    "local_file_key",
+                    "completed_at",
+                    "last_error",
+                    "updated_at",
+                ]
+            )
         elif task_status == "failed":
             if str(data.get("error_type") or "") in {"provider_quota", "provider_config"}:
                 await PaperOrderService.refund_failed_direct_task_points(
@@ -342,14 +358,18 @@ class PaperOrderService:
         task_status = str(data.get("status", ""))
         if task_status == "completed":
             order.status = "completed"
+            order.storage_provider = str(data.get("storage_provider") or "")
             order.file_key = str(data.get("file_key") or "")
+            order.local_file_key = str(data.get("local_file_key") or "")
             order.download_url = str(data.get("download_url") or "")
             order.completed_at = timezone.now()
             order.last_error = ""
             await order.save(
                 update_fields=[
                     "status",
+                    "storage_provider",
                     "file_key",
+                    "local_file_key",
                     "download_url",
                     "completed_at",
                     "last_error",
