@@ -222,17 +222,6 @@ CREATE TABLE IF NOT EXISTS `model_call_logs` (
   CONSTRAINT `fk_model_call_logs_model_config_id` FOREIGN KEY (`model_config_id`) REFERENCES `model_configs` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='大模型调用日志';
 
-CREATE TABLE IF NOT EXISTS `system_configs` (
-  `id` INT NOT NULL AUTO_INCREMENT,
-  `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-  `updated_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-  `key` VARCHAR(128) NOT NULL COMMENT '配置键',
-  `value` TEXT NOT NULL COMMENT '配置值',
-  `description` VARCHAR(255) NULL COMMENT '说明',
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uid_system_configs_key` (`key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统配置';
-
 CREATE TABLE IF NOT EXISTS `audit_logs` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `created_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

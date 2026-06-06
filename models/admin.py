@@ -87,18 +87,6 @@ class ModelCallLog(BaseModel):
         table_description = "大模型调用日志"
 
 
-class SystemConfig(BaseModel):
-    """系统配置键值。"""
-
-    key = fields.CharField(max_length=128, unique=True, description="配置键")
-    value = fields.TextField(description="配置值")
-    description = fields.CharField(max_length=255, null=True, description="说明")
-
-    class Meta:
-        table = "system_configs"
-        table_description = "系统配置"
-
-
 class AuditLog(BaseModel):
     """管理员关键操作审计日志。"""
 
