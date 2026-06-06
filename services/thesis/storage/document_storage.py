@@ -6,14 +6,11 @@ import logging
 from pathlib import Path
 
 from core.config import get_settings
-from services.thesis.storage.cos_storage import build_cos_download_url, store_to_cos
 from services.thesis.storage.local_storage import (
     StoredDocument,
     build_local_download_url,
     store_to_local,
 )
-from services.thesis.storage.minio_storage import build_minio_download_url, store_to_minio
-from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url, store_to_qiniu
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +29,16 @@ async def store_document(local_path: str, task_id: str) -> StoredDocument:
     object_key = build_remote_object_key(path, task_id)
     try:
         if provider == "qiniu":
+            from services.thesis.storage.qiniu_storage import store_to_qiniu
+
             return await store_to_qiniu(path, object_key, local_result)
         if provider == "minio":
+            from services.thesis.storage.minio_storage import store_to_minio
+
             return await store_to_minio(path, object_key, local_result)
         if provider == "cos":
+            from services.thesis.storage.cos_storage import store_to_cos
+
             return await store_to_cos(path, object_key, local_result)
         logger.warning("未知存储类型 %s，使用本地文件兜底", provider)
     except Exception as exc:  # noqa: BLE001
@@ -55,10 +58,16 @@ def build_download_url(
     if key.startswith(("http://", "https://")):
         return key
     if provider == "qiniu" and key:
+        from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url
+
         return build_qiniu_private_download_url(key)
     if provider == "minio" and key:
+        from services.thesis.storage.minio_storage import build_minio_download_url
+
         return build_minio_download_url(key)
     if provider == "cos" and key:
+        from services.thesis.storage.cos_storage import build_cos_download_url
+
         return build_cos_download_url(key)
     if local_file_key:
         return build_local_download_url(local_file_key)

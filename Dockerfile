@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir "uv==${UV_VERSION}"
 COPY pyproject.toml uv.lock ./
 
 RUN uv sync --frozen --no-dev --no-install-project --default-index "${PYPI_INDEX_URL}" \
-    && /app/.venv/bin/python -c "import docx, fastapi, langchain_openai, matplotlib, numpy, PIL, qiniu, redis, tortoise, uvicorn"
+    && /app/.venv/bin/python -c "import docx, fastapi, langchain_openai, matplotlib, minio, numpy, PIL, qcloud_cos, qiniu, redis, tortoise, uvicorn"
 
 
 FROM python:${PYTHON_VERSION}-slim AS runtime-base
