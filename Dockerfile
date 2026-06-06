@@ -2,8 +2,8 @@ ARG PYTHON_VERSION=3.13
 ARG RUNTIME_BASE_IMAGE=localhost/ai-paper-api:runtime-base
 ARG MERMAID_CLI_VERSION=10.9.1
 ARG UV_VERSION=0.8.15
-ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-ARG PYPI_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn
+ARG PYPI_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple/
+ARG PYPI_TRUSTED_HOST=mirrors.cloud.tencent.com
 
 FROM python:${PYTHON_VERSION}-slim AS deps-builder
 
@@ -28,8 +28,13 @@ RUN --mount=type=cache,id=ai-paper-api-pip-cache,target=/root/.cache/pip \
 # 先复制依赖文件，依赖不变时可复用 Docker layer。
 COPY pyproject.toml uv.lock ./
 
+# uv.lock 中记录的是 PyPI 真实文件地址，直接 uv sync --frozen 会绕过国内镜像。
+# 这里先导出锁定版本，再通过镜像源安装，避免服务器访问 files.pythonhosted.org 卡住。
 RUN --mount=type=cache,id=ai-paper-api-uv-cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --no-install-project --default-index "${PYPI_INDEX_URL}" \
+    uv venv --python /usr/local/bin/python3 .venv \
+    && uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements.txt --output-file /tmp/requirements.txt >/dev/null \
+    && uv pip install --python /app/.venv/bin/python --requirements /tmp/requirements.txt --default-index "${PYPI_INDEX_URL}" --compile-bytecode \
+    && rm -f /tmp/requirements.txt \
     && /app/.venv/bin/python -c "import docx, fastapi, langchain_openai, matplotlib, minio, numpy, PIL, qcloud_cos, qiniu, redis, tortoise, uvicorn"
 
 

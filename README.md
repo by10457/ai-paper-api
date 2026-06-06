@@ -97,7 +97,7 @@ uv run pytest tests/ -v
 
 模板提供了 `Dockerfile`、`.dockerignore` 和 `start.sh`，用于构建镜像、启动容器、挂载日志目录。
 
-`start.sh` 默认开启 `DOCKER_BUILDKIT=1`，`Dockerfile` 中的 `uv sync` 会使用 BuildKit cache 保存已下载的 Python 包。`runtime-base` 镜像用于复用 Chromium、mmdc、Python 虚拟环境等运行时依赖；BuildKit cache 用于在依赖层重新执行时复用包下载缓存。二者都依赖当前服务器上的 Docker 构建缓存，如果执行过 `docker builder prune`、`docker system prune` 或换了新服务器，缓存会重新生成。
+`start.sh` 默认开启 `DOCKER_BUILDKIT=1`，`Dockerfile` 会从 `uv.lock` 导出固定版本的 requirements，再通过 `PYPI_INDEX_URL` 指定的镜像源安装依赖，避免 `uv sync --frozen` 直接按 lock 中的 `files.pythonhosted.org` 文件地址下载。`runtime-base` 镜像用于复用 Chromium、mmdc、Python 虚拟环境等运行时依赖；BuildKit cache 用于在依赖层重新执行时复用包下载缓存。二者都依赖当前服务器上的 Docker 构建缓存，如果执行过 `docker builder prune`、`docker system prune` 或换了新服务器，缓存会重新生成。
 
 常用部署命令：
 
