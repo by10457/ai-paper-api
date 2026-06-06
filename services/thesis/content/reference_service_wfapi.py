@@ -11,7 +11,7 @@ from langchain_core.output_parsers import StrOutputParser
 
 from core.config import get_settings
 from llm.client import create_configured_llm
-from llm.prompts.thesis_reference_prompt import REFERENCE_KEYWORD_PROMPT
+from llm.prompts.thesis_reference_prompt import REFERENCE_WFDATA_KEYWORD_PROMPT
 from services.thesis.generation.concurrency import text_short_slot, wfdata_slot
 from services.thesis.generation.progress import record_process_detail
 
@@ -21,6 +21,9 @@ WFDATA_COLLECTIONS = ["OpenPeriodical"]
 WFDATA_MAX_ATTEMPTS = 3
 WFDATA_RETRY_BACKOFF_SECONDS = 1.5
 WFDATA_RESPONSE_PREVIEW_LENGTH = 500
+WFDATA_ZH_QUERY_LIMIT = 8
+WFDATA_EN_QUERY_LIMIT = 6
+WFDATA_BATCH_BUFFER_MULTIPLIER = 3
 WFDATA_RETURNED_FIELDS = [
     "Title",
     "Creator",
@@ -136,15 +139,6 @@ def _with_language_filter(query: str, language: str) -> str:
     return f"({normalized_query}) AND Language:{language}"
 
 
-def _merge_queries_with_or(queries: list[str]) -> str:
-    normalized_queries = [_normalize_query(query) for query in queries if query.strip()]
-    if not normalized_queries:
-        return ""
-    if len(normalized_queries) == 1:
-        return normalized_queries[0]
-    return " OR ".join(f"({query})" for query in normalized_queries)
-
-
 def _title_key(item: dict[str, Any]) -> str:
     return str(item.get("title_key") or item.get("title") or "").strip().lower()
 
@@ -161,25 +155,69 @@ def _to_int(value: str) -> int:
         return 0
 
 
-async def _extract_keyword_queries(title: str, outline: str) -> tuple[str, list[str]]:
+def _append_keyword_values(queries: list[str], value: Any) -> None:
+    if isinstance(value, str):
+        query = value.strip()
+        if query:
+            queries.append(query)
+        return
+
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                queries.append(item.strip())
+
+
+def _dedup_keyword_queries(queries: list[str], fallback: str, limit: int) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        normalized_query = re.sub(r"\s+", " ", query).strip()
+        key = normalized_query.lower()
+        if not normalized_query or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(normalized_query)
+        if len(deduped) >= limit:
+            break
+    return deduped or [fallback]
+
+
+def _collect_keyword_queries(keyword_data: dict[str, Any], fields: tuple[str, ...], fallback: str, limit: int) -> list[str]:
+    queries: list[str] = []
+    for field in fields:
+        _append_keyword_values(queries, keyword_data.get(field))
+    return _dedup_keyword_queries(queries, fallback, limit)
+
+
+async def _extract_keyword_queries(title: str, outline: str) -> tuple[list[str], list[str]]:
     """基于题目和大纲提取中英文检索词，失败时用标题兜底。"""
 
     try:
-        llm = await create_configured_llm("outline", temperature=0, max_tokens=512)
-        keyword_chain = REFERENCE_KEYWORD_PROMPT | llm | StrOutputParser()
+        llm = await create_configured_llm("outline", temperature=0, max_tokens=768)
+        keyword_chain = REFERENCE_WFDATA_KEYWORD_PROMPT | llm | StrOutputParser()
         async with text_short_slot():
             raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
 
         keyword_data = json.loads(str(raw_keywords).strip())
-        zh_query = str(keyword_data.get("zh") or title).strip() or title
-        en_queries = keyword_data.get("en") or [title]
-        if not isinstance(en_queries, list):
-            en_queries = [title]
-        normalized_en_queries = [str(query).strip() for query in en_queries[:2] if str(query).strip()]
-        return zh_query, normalized_en_queries or [title]
+        if not isinstance(keyword_data, dict):
+            return [title], [title]
+        zh_queries = _collect_keyword_queries(
+            keyword_data,
+            ("zh", "zh_related", "zh_extended"),
+            title,
+            WFDATA_ZH_QUERY_LIMIT,
+        )
+        en_queries = _collect_keyword_queries(
+            keyword_data,
+            ("en", "en_related", "en_extended"),
+            title,
+            WFDATA_EN_QUERY_LIMIT,
+        )
+        return zh_queries, en_queries
     except Exception as exc:  # noqa: BLE001
         logger.warning("万方参考文献关键词提取失败，使用标题兜底: %s", exc)
-        return title, [title]
+        return [title], [title]
 
 
 def _build_search_payload(query: str, rows: int, *, language: str) -> dict[str, Any]:
@@ -358,7 +396,7 @@ async def _search_wfdata(query: str, rows: int, *, language: str) -> list[dict[s
                     return []
                 except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as exc:
                     last_error = exc
-                    logger.warning(
+                    logger.info(
                         "万方参考文献检索连接异常: candidate=%s/%s, attempt=%s/%s, language=%s, rows=%s, query=%r, error_type=%s, error=%s",
                         candidate,
                         len(payloads),
@@ -537,7 +575,12 @@ def _dedup_documents(
     return sorted(items, key=lambda item: (item.get("cited_count", 0), item.get("year", "")), reverse=True)
 
 
-def _append_formatted_references(lines: list[str], items: list[dict[str, Any]], target_count: int) -> None:
+def _append_formatted_references_with_count(
+    lines: list[str],
+    items: list[dict[str, Any]],
+    target_count: int,
+) -> int:
+    appended_count = 0
     for item in items:
         if target_count <= 0:
             break
@@ -546,12 +589,34 @@ def _append_formatted_references(lines: list[str], items: list[dict[str, Any]], 
             continue
         lines.append(line)
         target_count -= 1
+        appended_count += 1
+    return appended_count
 
 
 def _search_rows_for_target(target_count: int) -> int:
     if target_count <= 0:
         return 0
     return min(target_count + max(2, round(target_count * 0.2)), 100)
+
+
+async def _search_wfdata_batches(queries: list[str], target_count: int, *, language: str) -> list[dict[str, Any]]:
+    """按多组关键词检索万方，返回合并后的候选文献。"""
+
+    if target_count <= 0:
+        return []
+
+    rows = _search_rows_for_target(target_count)
+    result_buffer = max(rows, target_count * WFDATA_BATCH_BUFFER_MULTIPLIER)
+    documents: list[dict[str, Any]] = []
+
+    # 万方接口偶发建连超时，多批查询按顺序试，避免一篇论文瞬间打出十多个连接。
+    for query in queries:
+        if not query.strip():
+            continue
+        documents.extend(await _search_wfdata(query, rows, language=language))
+        if len(documents) >= result_buffer:
+            break
+    return documents
 
 
 async def generate_references(
@@ -563,7 +628,7 @@ async def generate_references(
     """使用万方开放平台生成参考文献列表。"""
 
     target_total = max(1, wxnum)
-    zh_query, en_queries = await _extract_keyword_queries(title, outline)
+    zh_queries, en_queries = await _extract_keyword_queries(title, outline)
     if include_english:
         target_en = max(3, round(target_total / 3))
         target_zh = target_total - target_en
@@ -574,21 +639,21 @@ async def generate_references(
         "references",
         "已提取万方文献检索关键词",
         provider="wfapi",
-        zh_query=zh_query,
+        zh_query=zh_queries[0],
+        zh_queries=zh_queries,
         en_queries=en_queries,
         target_total=target_total,
         target_zh=target_zh,
         target_en=target_en,
     )
 
-    search_tasks = [_search_wfdata(zh_query, _search_rows_for_target(target_zh), language="chi")]
-    if include_english:
-        en_query = _merge_queries_with_or(en_queries[:2])
-        search_tasks.append(_search_wfdata(en_query, _search_rows_for_target(target_en), language="eng"))
+    search_tasks = [_search_wfdata_batches(zh_queries, target_zh, language="chi")]
+    if include_english and target_en > 0:
+        search_tasks.append(_search_wfdata_batches(en_queries, target_en, language="eng"))
 
     grouped_documents = await asyncio.gather(*search_tasks)
     zh_documents = grouped_documents[0]
-    en_documents = [document for group in grouped_documents[1:] for document in group]
+    en_documents = grouped_documents[1] if include_english and len(grouped_documents) > 1 else []
     await record_process_detail(
         "references",
         "万方文献检索完成",
@@ -597,6 +662,8 @@ async def generate_references(
         en_result_count=len(en_documents),
         requested_zh_rows=_search_rows_for_target(target_zh),
         requested_en_rows=_search_rows_for_target(target_en),
+        zh_query_count=len(zh_queries),
+        en_query_count=len(en_queries) if include_english else 0,
     )
     if not zh_documents and not en_documents:
         logger.warning("万方参考文献检索结果为空")
@@ -607,16 +674,30 @@ async def generate_references(
     en_items = _dedup_documents(en_documents, prefer_english=True, seen_titles=seen_titles)
 
     lines: list[str] = []
-    _append_formatted_references(lines, zh_items, target_zh)
+    final_zh_count = _append_formatted_references_with_count(lines, zh_items[:target_zh], target_zh)
+    final_en_count = 0
     if include_english:
-        _append_formatted_references(lines, en_items, target_en)
+        final_en_count = _append_formatted_references_with_count(lines, en_items[:target_en], target_en)
+
+    if len(lines) < target_total:
+        final_zh_count += _append_formatted_references_with_count(
+            lines,
+            zh_items[target_zh:],
+            target_total - len(lines),
+        )
+    if include_english and len(lines) < target_total:
+        final_en_count += _append_formatted_references_with_count(
+            lines,
+            en_items[target_en:],
+            target_total - len(lines),
+        )
     await record_process_detail(
         "references",
         "参考文献格式化完成",
         provider="wfapi",
         final_count=len(lines),
-        final_zh_count=min(len(zh_items), target_zh),
-        final_en_count=min(len(en_items), target_en) if include_english else 0,
+        final_zh_count=final_zh_count,
+        final_en_count=final_en_count if include_english else 0,
     )
 
     return "\n".join(lines)

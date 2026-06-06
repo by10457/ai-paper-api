@@ -324,6 +324,115 @@ class FallbackFigure(BaseModel):
     error: str = ""
 
 
+_FIGURE_PAYLOAD_KEYS = {
+    "caption",
+    "render_method",
+    "mermaid_code",
+    "description",
+    "style",
+    "aspect_ratio",
+    "chart_type",
+    "title",
+    "x_label",
+    "y_label",
+    "categories",
+    "series",
+}
+_FIGURE_PAYLOAD_KEY_PATTERN = re.compile(
+    r'"(?P<key>caption|render_method|mermaid_code|description|style|aspect_ratio|chart_type|title|x_label|y_label|categories|series)"\s*:'
+)
+
+
+def _clean_figure_block_text(text: str) -> str:
+    """清理占位符外层包裹，保留 JSON 主体。"""
+
+    clean_text = text.strip()
+    clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r"\s*```$", "", clean_text).strip()
+    return clean_text
+
+
+def _remove_trailing_commas(text: str) -> str:
+    """移除 JSON 对象或数组结尾前的多余逗号。"""
+
+    return re.sub(r",\s*([}\]])", r"\1", text)
+
+
+def _strip_outer_object(text: str) -> str:
+    clean_text = _remove_trailing_commas(text.strip())
+    if clean_text.startswith("{") and clean_text.endswith("}"):
+        return clean_text[1:-1]
+    return clean_text
+
+
+def _decode_relaxed_string(raw_value: str) -> str:
+    """解析字符串字段，兼容 Mermaid 代码中未转义的内部双引号。"""
+
+    try:
+        return str(json.loads(raw_value))
+    except json.JSONDecodeError:
+        value = raw_value.strip()
+        if value.startswith('"'):
+            value = value[1:]
+        if value.endswith('"'):
+            value = value[:-1]
+        value = value.replace("\\n", "\n")
+        value = value.replace('\\"', '"')
+        return value
+
+
+def _parse_relaxed_json_value(raw_value: str) -> Any:
+    value = raw_value.strip().rstrip(",").strip()
+    value = _remove_trailing_commas(value)
+    if value.startswith('"'):
+        return _decode_relaxed_string(value)
+    return json.loads(value)
+
+
+def _loads_figure_payload(text: str) -> dict[str, Any]:
+    """解析图片占位符 JSON，严格解析失败后尝试修复常见 LLM 格式错误。"""
+
+    clean_text = _clean_figure_block_text(text)
+    try:
+        raw = json.loads(clean_text)
+        if not isinstance(raw, dict):
+            raise ValueError("占位符 JSON 顶层必须是对象")
+        return raw
+    except json.JSONDecodeError:
+        pass
+
+    repaired_text = _remove_trailing_commas(clean_text)
+    try:
+        raw = json.loads(repaired_text)
+        if not isinstance(raw, dict):
+            raise ValueError("占位符 JSON 顶层必须是对象")
+        return raw
+    except json.JSONDecodeError:
+        pass
+
+    body = _strip_outer_object(clean_text)
+    matches = list(_FIGURE_PAYLOAD_KEY_PATTERN.finditer(body))
+    if not matches:
+        raise json.JSONDecodeError("占位符 JSON 未找到有效字段", clean_text, 0)
+
+    payload: dict[str, Any] = {}
+    for position, match in enumerate(matches):
+        key = match.group("key")
+        if key not in _FIGURE_PAYLOAD_KEYS:
+            continue
+
+        value_start = match.end()
+        value_end = matches[position + 1].start() if position + 1 < len(matches) else len(body)
+        raw_value = body[value_start:value_end].strip().rstrip(",").strip()
+        if not raw_value:
+            continue
+        payload[key] = _parse_relaxed_json_value(raw_value)
+
+    if not payload:
+        raise json.JSONDecodeError("占位符 JSON 未解析出有效字段", clean_text, 0)
+    return payload
+
+
 def validate_figure_payload(raw: dict[str, Any], index: int) -> dict[str, Any]:
     """校验单个占位符；失败时返回 fallback，确保索引不丢失。"""
 
@@ -353,12 +462,8 @@ def extract_figure_placeholders(text: str) -> list[dict[str, Any]]:
 
     for index, match in enumerate(matches):
         try:
-            # 防御性剥离：LLM 偶尔会在 JSON 外包裹 Markdown 代码围栏
-            clean_text = match.strip()
-            clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text, flags=re.IGNORECASE)
-            clean_text = re.sub(r"\s*```$", "", clean_text).strip()
-            raw = json.loads(clean_text)
-        except json.JSONDecodeError as exc:
+            raw = _loads_figure_payload(match)
+        except (json.JSONDecodeError, ValueError, TypeError) as exc:
             logger.warning("占位符 #%d JSON 解析失败: %s", index, exc)
             placeholders.append(FallbackFigure(error=f"JSON 解析失败: {exc}").model_dump() | {"index": index})
             continue

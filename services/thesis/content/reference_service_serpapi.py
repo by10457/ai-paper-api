@@ -25,7 +25,7 @@ from core.config import get_settings
 from llm.client import create_configured_llm
 from llm.prompts.thesis_reference_prompt import (
     REFERENCE_FILTER_PROMPT,
-    REFERENCE_KEYWORD_PROMPT,
+    REFERENCE_SCHOLAR_KEYWORD_PROMPT,
 )
 from services.thesis.generation.concurrency import crossref_slot, serpapi_slot, text_short_slot
 from services.thesis.generation.progress import record_process_detail
@@ -415,7 +415,7 @@ async def generate_references(
     llm = await create_configured_llm("outline", temperature=0, max_tokens=512)
 
     try:
-        keyword_chain = REFERENCE_KEYWORD_PROMPT | llm | StrOutputParser()
+        keyword_chain = REFERENCE_SCHOLAR_KEYWORD_PROMPT | llm | StrOutputParser()
         async with text_short_slot():
             raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
         keyword_data = json.loads(raw_keywords.strip())

@@ -27,12 +27,12 @@ def _wf_document(zh_title: str, en_title: str, year: int, cited_count: int) -> d
 def test_wfapi_splits_25_references_into_17_chinese_and_8_english(monkeypatch) -> None:
     calls: list[tuple[str, int, str]] = []
 
-    async def fake_extract_keyword_queries(title: str, outline: str) -> tuple[str, list[str]]:
-        return "中文关键词", ["english keyword", "paper generation"]
+    async def fake_extract_keyword_queries(title: str, outline: str) -> tuple[list[str], list[str]]:
+        return ["中文关键词", "中文关联关键词"], ["english keyword", "paper generation"]
 
     async def fake_search_wfdata(query: str, rows: int, *, language: str) -> list[dict]:
         calls.append((query, rows, language))
-        if query == "中文关键词":
+        if language == "chi":
             return [_wf_document(f"中文文献{i}", f"Chinese Reference {i}", 2020 + i, 100 - i) for i in range(1, 21)]
         return [_wf_document(f"英文中文题名{i}", f"English Reference {i}", 2020 + i, 100 - i) for i in range(1, 11)]
 
@@ -45,21 +45,22 @@ def test_wfapi_splits_25_references_into_17_chinese_and_8_english(monkeypatch) -
     assert len(lines) == 25
     assert sum("中文文献" in line for line in lines) == 17
     assert sum("English Reference" in line for line in lines) == 8
-    assert calls == [
+    assert set(calls) == {
         ("中文关键词", 20, "chi"),
-        ("(english AND keyword) OR (paper AND generation)", 10, "eng"),
-    ]
+        ("中文关联关键词", 20, "chi"),
+        ("english keyword", 10, "eng"),
+        ("paper generation", 10, "eng"),
+    }
 
 
 def test_wfapi_returns_chinese_only_when_english_disabled(monkeypatch) -> None:
     calls: list[tuple[str, int, str]] = []
 
-    async def fake_extract_keyword_queries(title: str, outline: str) -> tuple[str, list[str]]:
-        return "中文关键词", ["english keyword"]
+    async def fake_extract_keyword_queries(title: str, outline: str) -> tuple[list[str], list[str]]:
+        return ["中文关键词", "中文延伸关键词"], ["english keyword"]
 
     async def fake_search_wfdata(query: str, rows: int, *, language: str) -> list[dict]:
         calls.append((query, rows, language))
-        assert query == "中文关键词"
         return [_wf_document(f"中文文献{i}", f"Chinese Reference {i}", 2020 + i, 100 - i) for i in range(1, 8)]
 
     monkeypatch.setattr(reference_service_wfapi, "_extract_keyword_queries", fake_extract_keyword_queries)
@@ -70,7 +71,29 @@ def test_wfapi_returns_chinese_only_when_english_disabled(monkeypatch) -> None:
 
     assert len(lines) == 5
     assert all("中文文献" in line for line in lines)
-    assert calls == [("中文关键词", 7, "chi")]
+    assert set(calls) == {
+        ("中文关键词", 7, "chi"),
+        ("中文延伸关键词", 7, "chi"),
+    }
+
+
+def test_wfapi_fills_total_count_with_chinese_when_english_empty(monkeypatch) -> None:
+    async def fake_extract_keyword_queries(title: str, outline: str) -> tuple[list[str], list[str]]:
+        return ["中文关键词", "中文关联关键词"], ["english keyword"]
+
+    async def fake_search_wfdata_batches(queries: list[str], target_count: int, *, language: str) -> list[dict]:
+        if language == "eng":
+            return []
+        return [_wf_document(f"中文文献{i}", f"Chinese Reference {i}", 2020 + i, 100 - i) for i in range(1, 31)]
+
+    monkeypatch.setattr(reference_service_wfapi, "_extract_keyword_queries", fake_extract_keyword_queries)
+    monkeypatch.setattr(reference_service_wfapi, "_search_wfdata_batches", fake_search_wfdata_batches)
+
+    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", wxnum=25, include_english=True))
+    lines = references.splitlines()
+
+    assert len(lines) == 25
+    assert all("中文文献" in line for line in lines)
 
 
 def test_wfapi_search_payload_filters_language() -> None:
@@ -81,3 +104,30 @@ def test_wfapi_search_payload_filters_language() -> None:
     assert zh_payload["rows"] == 100
     assert en_payload["query"] == "(deep AND learning) AND Language:eng"
     assert en_payload["rows"] == 10
+
+
+def test_wfapi_collects_keyword_batches() -> None:
+    keyword_data = {
+        "zh": "校园一卡通",
+        "zh_related": ["校园管理系统", "数字校园"],
+        "zh_extended": ["高校信息化", "智慧校园"],
+        "en": ["campus card system"],
+        "en_related": ["smart campus"],
+        "en_extended": ["university information system"],
+    }
+
+    zh_queries = reference_service_wfapi._collect_keyword_queries(
+        keyword_data,
+        ("zh", "zh_related", "zh_extended"),
+        "题目",
+        8,
+    )
+    en_queries = reference_service_wfapi._collect_keyword_queries(
+        keyword_data,
+        ("en", "en_related", "en_extended"),
+        "title",
+        6,
+    )
+
+    assert zh_queries == ["校园一卡通", "校园管理系统", "数字校园", "高校信息化", "智慧校园"]
+    assert en_queries == ["campus card system", "smart campus", "university information system"]

@@ -141,6 +141,48 @@ def test_extract_figure_placeholders_json_parse_error_fallback() -> None:
     assert "JSON 解析失败" in placeholders[0]["error"]
 
 
+def test_extract_figure_placeholders_repairs_unescaped_mermaid_quotes() -> None:
+    text = (
+        "前文\n"
+        "<<FIGURE>>\n"
+        "{\n"
+        '  "caption": "图 3.1 业务流程图",\n'
+        '  "render_method": "mermaid",\n'
+        '  "mermaid_code": "flowchart TD\\n    A["用户提交信息"] --> B["系统校验"]"\n'
+        "}\n"
+        "<</FIGURE>>\n"
+        "后文"
+    )
+
+    placeholders = extract_figure_placeholders(text)
+
+    assert len(placeholders) == 1
+    assert placeholders[0]["render_method"] == "mermaid"
+    assert placeholders[0]["index"] == 0
+    assert 'A["用户提交信息"]' in placeholders[0]["mermaid_code"]
+
+
+def test_extract_figure_placeholders_repairs_trailing_commas() -> None:
+    text = (
+        "<<FIGURE>>\n"
+        "{\n"
+        '  "caption": "图 4.1 测试结果趋势图",\n'
+        '  "render_method": "chart",\n'
+        '  "chart_type": "line",\n'
+        '  "title": "测试结果趋势",\n'
+        '  "categories": ["0", "60", "120",],\n'
+        '  "series": [{"name": "响应时间", "data": [0.5, 1.2, 0.9,],}],\n'
+        "}\n"
+        "<</FIGURE>>"
+    )
+
+    placeholders = extract_figure_placeholders(text)
+
+    assert len(placeholders) == 1
+    assert placeholders[0]["render_method"] == "chart"
+    assert placeholders[0]["categories"] == ["0", "60", "120"]
+
+
 def test_extract_figure_placeholders_missing_required_field_fallback() -> None:
     text = _figure_block(
         {
