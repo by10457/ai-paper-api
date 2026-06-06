@@ -186,11 +186,15 @@ def test_provider_failure_refunds_order_with_sanitized_message(
     error_type: str,
     message: str,
 ) -> None:
-    refund_calls: list[tuple[int, str]] = []
+    refund_calls: list[tuple[int, str, str]] = []
     order = SimpleNamespace(id=7)
 
-    async def fake_refund_failed_order_points(order_id: int, reason: str) -> SimpleNamespace:
-        refund_calls.append((order_id, reason))
+    async def fake_refund_failed_order_points(
+        order_id: int,
+        reason: str,
+        failure_type: str = "generation_error",
+    ) -> SimpleNamespace:
+        refund_calls.append((order_id, reason, failure_type))
         return SimpleNamespace(id=order_id, status="failed", last_error=reason)
 
     monkeypatch.setattr(PaperOrderService, "refund_failed_order_points", fake_refund_failed_order_points)
@@ -208,7 +212,7 @@ def test_provider_failure_refunds_order_with_sanitized_message(
     )
 
     assert result.last_error == message
-    assert refund_calls == [(7, message)]
+    assert refund_calls == [(7, message, error_type)]
 
 
 def test_generation_failure_schedules_retry_before_final_failure(
@@ -237,3 +241,40 @@ def test_generation_failure_schedules_retry_before_final_failure(
 
     assert result is retried_order
     assert retry_calls == [(7, "生成失败，请稍后重试或联系管理员")]
+
+
+def test_generation_failure_refunds_order_after_retry_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refund_calls: list[tuple[int, str, str]] = []
+    order = SimpleNamespace(id=7)
+
+    async def fake_schedule_order_retry_if_possible(order_id: int, data: dict) -> None:
+        assert order_id == 7
+        assert data["error_type"] == "generation_error"
+        return None
+
+    async def fake_refund_failed_order_points(
+        order_id: int,
+        reason: str,
+        failure_type: str = "generation_error",
+    ) -> SimpleNamespace:
+        refund_calls.append((order_id, reason, failure_type))
+        return SimpleNamespace(id=order_id, status="failed", last_error=reason)
+
+    monkeypatch.setattr(PaperOrderService, "schedule_order_retry_if_possible", fake_schedule_order_retry_if_possible)
+    monkeypatch.setattr(PaperOrderService, "refund_failed_order_points", fake_refund_failed_order_points)
+
+    result = asyncio.run(
+        PaperOrderService.mark_from_task_status(
+            order,
+            {
+                "status": "failed",
+                "error_type": "generation_error",
+                "message": "生成失败，请稍后重试或联系管理员",
+            },
+        )
+    )
+
+    assert result.status == "failed"
+    assert refund_calls == [(7, "生成失败，请稍后重试或联系管理员", "generation_error")]

@@ -296,21 +296,29 @@ class PaperOrderService:
                 ]
             )
         elif task_status == "failed":
-            if str(data.get("error_type") or "") in {"provider_quota", "provider_config"}:
+            error_type = str(data.get("error_type") or "generation_error")
+            if error_type in {"provider_quota", "provider_config"}:
                 await PaperOrderService.refund_failed_direct_task_points(
                     direct_task.id,
                     str(data.get("message") or "生成服务暂时不可用，本次扣除积分已退回，请稍后重试或联系管理员"),
+                    error_type,
                 )
                 return
             if await PaperOrderService.schedule_direct_task_retry_if_possible(direct_task.id, data):
                 return
-            direct_task.status = "failed"
-            direct_task.last_error = str(data.get("message") or "生成失败")[:500]
-            await direct_task.save(update_fields=["status", "last_error", "updated_at"])
+            await PaperOrderService.refund_failed_direct_task_points(
+                direct_task.id,
+                str(data.get("message") or "生成失败，本次扣除积分已退回"),
+                error_type,
+            )
 
     @staticmethod
-    async def refund_failed_direct_task_points(direct_task_id: int, reason: str) -> None:
-        """供应商额度不足等平台侧失败时，退回接口直连任务扣费。"""
+    async def refund_failed_direct_task_points(
+        direct_task_id: int,
+        reason: str,
+        failure_type: str = "generation_error",
+    ) -> None:
+        """生成最终失败时退回接口直连任务扣费。"""
 
         async with in_transaction() as conn:
             direct_task = (
@@ -338,7 +346,7 @@ class PaperOrderService:
                     delta=refundable,
                     balance_after=user.points,
                     reason=reason,
-                    metadata={"task_id": direct_task.task_id, "reason": "provider_quota"},
+                    metadata={"task_id": direct_task.task_id, "reason": failure_type},
                 )
 
             direct_task.status = "failed"
@@ -377,17 +385,21 @@ class PaperOrderService:
                 ]
             )
         elif task_status == "failed":
-            if str(data.get("error_type") or "") in {"provider_quota", "provider_config"}:
+            error_type = str(data.get("error_type") or "generation_error")
+            if error_type in {"provider_quota", "provider_config"}:
                 return await PaperOrderService.refund_failed_order_points(
                     order.id,
                     str(data.get("message") or "生成服务暂时不可用，本次扣除积分已退回，请稍后重试或联系管理员"),
+                    error_type,
                 )
             retry_order = await PaperOrderService.schedule_order_retry_if_possible(order.id, data)
             if retry_order is not None:
                 return retry_order
-            order.status = "failed"
-            order.last_error = str(data.get("message") or "生成失败")[:500]
-            await order.save(update_fields=["status", "last_error", "updated_at"])
+            return await PaperOrderService.refund_failed_order_points(
+                order.id,
+                str(data.get("message") or "生成失败，本次扣除积分已退回"),
+                error_type,
+            )
         return order
 
     @staticmethod
@@ -475,8 +487,12 @@ class PaperOrderService:
         return should_enqueue
 
     @staticmethod
-    async def refund_failed_order_points(order_id: int, reason: str) -> PaperOrder:
-        """供应商额度不足等平台侧失败时，退回订单扣费。"""
+    async def refund_failed_order_points(
+        order_id: int,
+        reason: str,
+        failure_type: str = "generation_error",
+    ) -> PaperOrder:
+        """生成最终失败时退回订单扣费。"""
 
         async with in_transaction() as conn:
             order = await PaperOrder.filter(id=order_id).using_db(conn).select_for_update().first()
@@ -501,7 +517,7 @@ class PaperOrderService:
                     delta=refundable,
                     balance_after=user.points,
                     reason=reason,
-                    metadata={"reason": "provider_quota"},
+                    metadata={"reason": failure_type},
                 )
 
             order.status = "failed"
