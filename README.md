@@ -148,7 +148,7 @@ PAPER_CALLBACK_SECRET=
 
 Docker 模式下如果 Java 中转服务运行在宿主机，回调地址使用 `http://host.docker.internal:10460/api/internal/paper/callback`。
 
-Docker 启动时，`start.sh` 会默认把宿主机 `./public/output/thesis` 挂载到容器内 `/app/public/output/thesis`，保证生成的状态文件、图片和 docx 在容器重建后仍保留。
+Docker 启动时，`start.sh` 会把宿主机 `public` 目录挂载到容器内 `/app/public`。开发环境默认使用 `./public`，生产 `.env.docker` 中已配置为 `/data/server/ai-paper-api/public`。这样前端静态资源可以在宿主机上更新，`public/output/thesis` 下的论文生成产物也会在容器重建后保留。
 
 ### 1. 准备环境变量
 
@@ -197,12 +197,16 @@ NETWORK_NAME=backend sh start.sh
 # 指定镜像名、容器名和日志目录
 IMAGE_NAME=ai-paper-api:prod CONTAINER_NAME=ai-paper-api-prod HOST_LOG_DIR=/data/ai-paper-api/logs sh start.sh
 
+# 指定宿主机 public 目录；生产 .env.docker 默认已设置为 /data/server/ai-paper-api/public
+HOST_PUBLIC_DIR=/data/server/ai-paper-api/public ENV_FILE=.env.docker sh start.sh
+
 # 如需临时只启动 API 或只启动 scheduler，可显式覆盖 APP_ROLE
 APP_ROLE=api ENV_FILE=.env.docker sh start.sh
 APP_ROLE=scheduler ENV_FILE=.env.docker sh start.sh
 ```
 
 脚本默认会把宿主机 `./logs` 挂载到容器内 `/app/logs`，与 `.env` 中默认的 `LOG_FILE=logs/app.log` 对齐。
+脚本也会确保宿主机 public 目录下存在 `output/thesis` 子目录，避免论文生成时缺少本地兜底输出目录。
 为了避免日志目录权限不匹配，`start.sh` 默认使用当前宿主机用户的 UID/GID 启动容器；如果你希望使用镜像内置的 `app` 用户，可设置 `RUN_AS_HOST_USER=false`。
 
 ### 3. worker 与连接数

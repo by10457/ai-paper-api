@@ -12,7 +12,8 @@ HOST_PORT="${HOST_PORT:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-}"
 HOST_LOG_DIR="${HOST_LOG_DIR:-logs}"
 CONTAINER_LOG_DIR="${CONTAINER_LOG_DIR:-/app/logs}"
-HOST_OUTPUT_DIR="${HOST_OUTPUT_DIR:-public/output/thesis}"
+HOST_PUBLIC_DIR="${HOST_PUBLIC_DIR:-}"
+CONTAINER_PUBLIC_DIR="${CONTAINER_PUBLIC_DIR:-/app/public}"
 CONTAINER_OUTPUT_DIR="${CONTAINER_OUTPUT_DIR:-/app/public/output/thesis}"
 NETWORK_NAME="${NETWORK_NAME:-}"
 BUILD_NO_CACHE="${BUILD_NO_CACHE:-false}"
@@ -61,7 +62,8 @@ Optional environment variables:
   HOST_PORT         Host port exposed outside Docker (default: APP_PORT in env file, fallback 10462)
   CONTAINER_PORT    Container listening port (default: APP_PORT in env file, fallback 10462)
   HOST_LOG_DIR      Host log directory to mount (default: ./logs)
-  HOST_OUTPUT_DIR   Host thesis output directory to mount (default: ./public/output/thesis)
+  HOST_PUBLIC_DIR   Host public directory to mount (default: ./public)
+                    .env.docker can set it to /data/server/ai-paper-api/public for production.
   NETWORK_NAME      Existing/new Docker network to attach (optional)
   BUILD_NO_CACHE    true/1 to disable Docker build cache (default: false)
   PULL_IMAGE        true/1 to pull base images during build (default: false)
@@ -194,6 +196,9 @@ sanitize_env_file() {
       key = line
       sub(/[[:space:]]*=.*/, "", key)
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      if (key ~ /^(HOST_PUBLIC_DIR|CONTAINER_PUBLIC_DIR)$/) {
+        next
+      }
 
       value = line
       sub(/^[^=]*=/, "", value)
@@ -404,13 +409,18 @@ case "$HOST_LOG_DIR" in
   *) HOST_LOG_PATH="$PROJECT_DIR/$HOST_LOG_DIR" ;;
 esac
 
-case "$HOST_OUTPUT_DIR" in
-  /*) HOST_OUTPUT_PATH="$HOST_OUTPUT_DIR" ;;
-  *) HOST_OUTPUT_PATH="$PROJECT_DIR/$HOST_OUTPUT_DIR" ;;
+if [ -z "$HOST_PUBLIC_DIR" ]; then
+  HOST_PUBLIC_DIR=$(read_env_value HOST_PUBLIC_DIR)
+fi
+[ -n "$HOST_PUBLIC_DIR" ] || HOST_PUBLIC_DIR="public"
+
+case "$HOST_PUBLIC_DIR" in
+  /*) HOST_PUBLIC_PATH="$HOST_PUBLIC_DIR" ;;
+  *) HOST_PUBLIC_PATH="$PROJECT_DIR/$HOST_PUBLIC_DIR" ;;
 esac
 
 mkdir -p "$HOST_LOG_PATH"
-mkdir -p "$HOST_OUTPUT_PATH"
+mkdir -p "$HOST_PUBLIC_PATH/output/thesis"
 
 build_images
 
@@ -420,7 +430,7 @@ RUN_ARGS="
   --restart unless-stopped
   --env-file $SANITIZED_ENV_FILE
   -v $HOST_LOG_PATH:$CONTAINER_LOG_DIR
-  -v $HOST_OUTPUT_PATH:$CONTAINER_OUTPUT_DIR
+  -v $HOST_PUBLIC_PATH:$CONTAINER_PUBLIC_DIR
 "
 
 if [ "$RESOLVED_APP_ROLE" = "api" ] || [ "$RESOLVED_APP_ROLE" = "all" ]; then
@@ -469,6 +479,7 @@ if [ "$RESOLVED_APP_ROLE" = "api" ] || [ "$RESOLVED_APP_ROLE" = "all" ]; then
   log "Health endpoint: http://localhost:$HOST_PORT/api/v1/health"
 fi
 log "Mounted logs: $HOST_LOG_PATH -> $CONTAINER_LOG_DIR"
-log "Mounted thesis output: $HOST_OUTPUT_PATH -> $CONTAINER_OUTPUT_DIR"
+log "Mounted public: $HOST_PUBLIC_PATH -> $CONTAINER_PUBLIC_DIR"
+log "Thesis output: $HOST_PUBLIC_PATH/output/thesis -> $CONTAINER_OUTPUT_DIR"
 log "Container health: $HEALTH"
 log "View logs: docker logs -f $CONTAINER_NAME"
