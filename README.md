@@ -1,294 +1,253 @@
 # AI Paper API
 
-> 基于 FastAPI + Tortoise-ORM + Redis + APScheduler 的论文业务后端服务
+AI Paper API 是一个自研论文生成服务，核心目标是替代不稳定的第三方论文 API，并作为独立服务同时支撑：
+
+- `/home/by/wxy/wxy-server` 等业务后端通过 Token 调用论文生成能力。
+- `/home/by/wxy/ai-paper-web` 管理后台维护用户、积分、订单、模型配置和生成日志。
+- 前端用户通过 Web 页面生成大纲、确认大纲、扣积分并生成 Word 论文。
+
+项目基于 FastAPI、Tortoise-ORM、Redis、APScheduler、LangChain、python-docx、Mermaid CLI、matplotlib 和对象存储 SDK 构建。
+
+## 核心能力
+
+- 用户账号、JWT 登录、长期 API Token。
+- 积分扣费、积分流水、论文订单、失败退费和后台人工处理。
+- 论文大纲生成、正文生成、摘要/关键词/致谢生成、参考文献检索。
+- Mermaid 图、matplotlib 图表、AI 插图渲染和 Word 文档组装。
+- Redis 队列驱动的论文生成 worker，支持幂等提交、失败重试和进程重启补偿。
+- 模型配置在管理后台维护，支持 OpenAI 兼容协议、Anthropic Messages、Gemini generateContent、OpenAI Images、Gemini 图片生成。
+- 存储支持 local、七牛云、MinIO、腾讯云 COS；本地文件始终保留为兜底。
+- 生成完成后回调上游业务系统，并返回存储类型、文件 key 和下载链接。
 
 ## 目录结构
 
-```
+```text
 .
-├── main.py                 # 启动入口
-├── app.py                  # FastAPI 实例 + 生命周期（连接初始化/关闭、开发环境定时任务）
-├── pyproject.toml          # uv 依赖管理 + aerich 迁移工具配置 + pytest 配置
-├── uv.lock                 # uv 锁文件
-├── .env.example            # 环境变量模板（提交到仓库）
-├── .env.docker             # 实际docker运行环境变量（不提交！）
-├── .env                    # 实际环境变量（不提交！）
-│
-├── api/                    # 接口层：路由定义，只做参数校验和调用 service
-│   ├── dependencies/       # FastAPI 依赖注入（获取当前用户、权限校验等）
-│   │   └── auth.py         # 认证与权限依赖
-│   └── v1/
-│       ├── auth.py         # 认证路由
-│       ├── health.py       # 健康检查路由
-│       └── user.py         # 用户路由
-│
-├── core/                   # 核心基础设施
-│   ├── config.py           # 配置中心（读取 .env，全局唯一 settings 对象）
-│   ├── database.py         # MySQL 连接管理（Tortoise-ORM）
-│   ├── redis.py            # Redis 连接管理（redis-py asyncio）
-│   ├── logger.py           # 日志配置（loguru）
-│   └── security.py         # JWT / 密码哈希
-│
-├── models/                 # ORM 数据库模型（与数据表一一对应）
-├── schemas/                # Pydantic 请求/响应类型定义
-├── services/               # 业务逻辑层（不含 HTTP 相关代码）
-├── middlewares/            # 全局中间件（请求日志、请求 ID、耗时统计等）
-│
-├── tasks/                  # 定时任务
-│   ├── scheduler.py        # 调度器实例 + 任务注册函数
-│   └── runner.py           # 定时任务独立运行入口
-│
-├── utils/                  # 通用工具函数
-├── scripts/                # 一次性脚本（数据修复等，不部署到生产）
-├── sql/                    # SQL 初始化文件（建库、初始数据）
-├── public/                 # 静态资源（前端页面、图片等）
-├── tests/                  # 测试
-└── logs/                   # 日志文件（.gitignored）
+├── api/                    # FastAPI 路由层
+│   ├── dependencies/       # JWT、API Token、管理员权限等依赖
+│   └── v1/                 # v1 接口：auth、user、thesis、admin、health
+├── core/                   # 配置、MySQL、Redis、日志、安全等基础设施
+├── doc/                    # 项目专题文档
+├── llm/                    # 大模型客户端、调用日志、提示词
+├── models/                 # Tortoise ORM 模型
+├── schemas/                # Pydantic 请求/响应模型
+├── services/
+│   ├── admin/              # 管理后台业务
+│   └── thesis/
+│       ├── business/       # 订单、积分、回调
+│       ├── content/        # 大纲、正文、摘要、参考文献内容生成
+│       ├── document/       # Word 文档排版与组装
+│       ├── generation/     # Redis 队列、任务状态、生成流水线
+│       ├── image/          # Mermaid、图表和 AI 插图渲染
+│       └── storage/        # local/qiniu/minio/cos 存储
+├── sql/init.sql            # 当前初始阶段的统一建表 SQL
+├── tasks/                  # 定时任务和论文生成 worker 入口
+├── public/                 # 前端静态资源和本地论文产物
+├── Dockerfile              # 分层构建镜像，包含 Chromium、mmdc 和 Python 依赖
+├── start.sh                # Docker 部署脚本
+├── app.py                  # FastAPI 应用实例和生命周期
+└── main.py                 # Uvicorn 启动入口
 ```
 
-## 快速开始
+## 文档导航
+
+详细说明集中在 `doc/`：
+
+- [启动与部署](doc/startup-and-deployment.md)
+- [论文生成流程](doc/thesis-generation.md)
+- [AI 模型配置](doc/ai-model-config.md)
+- [存储配置](doc/storage-config.md)
+- [接口对接](doc/api-integration.md)
+- [运维与排查](doc/operations.md)
+
+服务内部模块边界说明：
+
+- [论文内容生成说明](services/thesis/content/README.md)
+- [论文图片生成与渲染说明](services/thesis/image/README.md)
+- [论文文档存储说明](services/thesis/storage/README.md)
+
+## 本地快速启动
+
+准备 MySQL 和 Redis 后执行：
 
 ```bash
-# 1. 复制环境变量并填写
 cp .env.example .env
-
-# 2. 同步依赖
 uv sync
-
-# 3. 初始化数据库迁移（首次）
-uv run aerich init -t core.database.TORTOISE_ORM
-uv run aerich init-db
-
-# 4. 启动
+mysql -u root -p < sql/init.sql
 uv run python main.py
 ```
 
-默认情况下，应用启动会尝试连接 MySQL 和 Redis；如果连接失败，只会在控制台打印未连接警告，应用仍会继续启动。这样基于模板开发纯 API、纯静态页或暂时不使用数据库/缓存的项目，也可以先跑起来。真正调用依赖 MySQL/Redis 的接口时，仍需要保证对应服务可用。
+默认访问：
 
-应用启动不会自动创建表结构。表结构推荐通过 aerich 迁移维护；如果只是本地临时调试，也可以设置 `DB_GENERATE_SCHEMAS=true` 让 Tortoise 在启动时自动创建缺失表。
+- API 服务：`http://localhost:10462`
+- OpenAPI 文档：`http://localhost:10462/docs`
+- 前端静态页：`http://localhost:10462/index.html`
 
-生产环境可在 `.env` 中设置 `APP_DEBUG=false`，并按服务规格显式设置 `WEB_CONCURRENCY` 控制 worker 进程数。未设置 `WEB_CONCURRENCY` 时，模板默认使用 `min(CPU 核心数, 4)`，避免容器或多核机器上自动开出过多进程。
+本地开发常用配置：
 
-## 常用命令
-
-```bash
-# 生成迁移文件（修改 models 后执行）
-uv run aerich migrate --name "simplify_user_table"
-
-# 应用迁移
-uv run aerich upgrade
-
-# 运行测试
-uv run pytest tests/ -v
+```env
+APP_DEBUG=true
+APP_RELOAD=false
+APP_PORT=10462
+MYSQL_HOST=127.0.0.1
+REDIS_HOST=127.0.0.1
+SCHEDULER_ENABLED=true
 ```
 
-## 内置接口演示
-
-启动后访问 `/`，会自动打开 `public/index.html`，可以在静态页面里完成用户注册、登录、带 JWT 查询当前用户、更新当前用户信息。
-
-当前模板只保留一张 `users` 表，接口示例聚焦普通用户认证流程：
-
-- `POST /api/v1/users/register`：注册用户
-- `POST /api/v1/auth/login`：登录并获取 JWT
-- `GET /api/v1/users/userInfo`：带 JWT 查询当前用户
-- `POST /api/v1/users/updateInfo`：带 JWT 更新当前用户
+`APP_DEBUG=true` 时，API 固定 1 个 Uvicorn worker，并在 FastAPI lifespan 中启动定时任务和论文 worker，方便本机调试。
 
 ## Docker 部署
 
-模板提供了 `Dockerfile`、`.dockerignore` 和 `start.sh`，用于构建镜像、启动容器、挂载日志目录。
-
-`start.sh` 默认开启 `DOCKER_BUILDKIT=1`，`Dockerfile` 会从 `uv.lock` 导出固定版本的 requirements，再通过 `PYPI_INDEX_URL` 指定的镜像源安装依赖，避免 `uv sync --frozen` 直接按 lock 中的 `files.pythonhosted.org` 文件地址下载。`runtime-base` 镜像用于复用 Chromium、mmdc、Python 虚拟环境等运行时依赖；BuildKit cache 用于在依赖层重新执行时复用包下载缓存。二者都依赖当前服务器上的 Docker 构建缓存，如果执行过 `docker builder prune`、`docker system prune` 或换了新服务器，缓存会重新生成。
-
-常用部署命令：
+生产部署通常使用：
 
 ```bash
-# 代码更新后的常规部署：复用 runtime-base，只重新构建业务代码层。
+ENV_FILE=.env.docker sh start.sh
+```
+
+常用模式：
+
+```bash
+# 常规部署：复用 runtime-base，只重建业务代码层
 ENV_FILE=.env.docker sh start.sh
 
-# 依赖或运行环境变化时：重建 runtime-base。
+# 依赖或系统运行环境变化时重建 runtime-base
 BUILD_MODE=deps ENV_FILE=.env.docker sh start.sh
 
-# 强制完整构建，一般只在排查缓存问题时使用。
+# 强制完整构建
 BUILD_MODE=full ENV_FILE=.env.docker sh start.sh
+
+# 不构建，直接用已有镜像重建容器
+BUILD_MODE=none ENV_FILE=.env.docker sh start.sh
 ```
 
-## AI 论文生成
-
-本服务提供 AI 论文生成中转接口，供订单、支付或其他业务系统调用：
-
-- `POST /api/v1/thesis/outline`：带 token 根据标题和配置生成论文大纲，不扣积分
-- `POST /api/v1/thesis/generate`：带 token 提交论文生成后台任务，并扣减论文生成积分
-- `GET /api/v1/thesis/status/{task_id}`：带 token 查询任务状态
-- `GET /api/v1/thesis/download/{task_id}`：带 token 下载本地生成的 docx
-
-论文订单流程接口：
-
-- `POST /api/v1/users/apiToken`：账号密码换取长期调用 token
-- `GET /api/v1/users/points`：查询当前用户积分
-- `GET /api/v1/thesis/price`：查询论文生成扣费积分
-- `POST /api/v1/thesis/outlines`：带 token 生成论文大纲并保存记录，不扣积分
-- `POST /api/v1/thesis/orders`：基于 `record_id` 和编辑后大纲创建论文订单
-- `POST /api/v1/thesis/orders/pay`：基于 `order_sn` 扣 200 积分并开始生成论文
-- `GET /api/v1/thesis/orders/status?order_sn=...`：查询论文订单状态
-- `GET /api/v1/thesis/orders/download-url?order_sn=...`：获取论文下载链接
-
-调用论文接口时使用 `Authorization: Bearer <token>`。积分与余额按 1:10 折算，默认论文生成扣费 200 积分。
-服务端业务系统调用 `POST /api/v1/thesis/generate` 或 `POST /api/v1/thesis/orders` 时，建议传入 `Idempotency-Key` 请求头，使用本地业务订单号等稳定值，避免 HTTP 重试导致重复扣费或重复生成。
-
-论文生成产物默认写入 `public/output/thesis/{task_id}`。该目录位于 `public/` 下，因此本地文件始终可作为下载兜底；主存储可通过 `STORAGE_PROVIDER` 选择 `local`、`qiniu`、`minio` 或 `cos`。生成请求可传入 `callback_url` 和 `callback_secret`，让不同调用方接收自己的完成回调；环境变量中的 `PAPER_CALLBACK_URL` / `PAPER_CALLBACK_SECRET` 只作为未传入时的默认兜底。
-
-文本生成模型和图片生成模型统一在管理后台“模型配置”中维护，环境变量不再保存模型 API Key、Base URL 或模型名。需要在 `.env` / `.env.docker` 中补齐论文输出目录、文件存储和默认回调配置：
-
-```env
-THESIS_OUTPUT_ROOT=public/output/thesis
-PUBLIC_BASE_URL=http://localhost:10462
-STORAGE_PROVIDER=local
-STORAGE_OBJECT_PREFIX=paper
-STORAGE_DOWNLOAD_EXPIRES=3600
-QINIU_ACCESS_KEY=
-QINIU_SECRET_KEY=
-QINIU_BUCKET=
-QINIU_DOMAIN=
-MINIO_ENDPOINT=
-MINIO_ACCESS_KEY=
-MINIO_SECRET_KEY=
-MINIO_BUCKET=
-COS_SECRET_ID=
-COS_SECRET_KEY=
-COS_BUCKET=
-COS_REGION=ap-guangzhou
-PAPER_CALLBACK_URL=http://localhost:10460/api/internal/paper/callback
-PAPER_CALLBACK_SECRET=
-```
-
-Docker 模式下如果 Java 中转服务运行在宿主机，回调地址使用 `http://host.docker.internal:10460/api/internal/paper/callback`。
-
-Docker 启动时，`start.sh` 会把宿主机 `public` 目录挂载到容器内 `/app/public`。开发环境默认使用 `./public`，生产 `.env.docker` 中已配置为 `/data/server/ai-paper-api/public`。这样前端静态资源可以在宿主机上更新，`public/output/thesis` 下的论文生成产物也会在容器重建后保留。
-
-### 1. 准备环境变量
-
-```bash
-cp .env.example .env
-```
-
-如果 MySQL 和 Redis 安装在宿主机，容器内不能继续使用 `127.0.0.1` 连接宿主机服务，建议改成：
-
-```env
-MYSQL_HOST=host.docker.internal
-REDIS_HOST=host.docker.internal
-```
-
-`start.sh` 默认会给容器添加 `host.docker.internal -> host-gateway` 映射，适合 Linux/WSL Docker 环境。
-
-如果 MySQL 和 Redis 也是 Docker 容器，建议把它们和应用容器放到同一个 Docker network，并在 `.env` 中使用容器名或服务名：
-
-```env
-MYSQL_HOST=mysql
-REDIS_HOST=redis
-```
-
-### 2. 启动应用容器
-
-```bash
-sh start.sh
-```
-
-常用自定义参数：
-
-```bash
-# 默认使用 .env 中的 APP_PORT=10462。
-# APP_DEBUG=true 或 SCHEDULER_ENABLED=false 时只启动 API。
-sh start.sh
-
-# 生产环境通常使用 .env.docker，一个容器内同时托管 API 和定时任务进程
-ENV_FILE=.env.docker sh start.sh
-
-# 如需改成宿主机其他端口，可显式覆盖
-HOST_PORT=18000 sh start.sh
-
-# 连接到已有或自动创建的 Docker network
-NETWORK_NAME=backend sh start.sh
-
-# 指定镜像名、容器名和日志目录
-IMAGE_NAME=ai-paper-api:prod CONTAINER_NAME=ai-paper-api-prod HOST_LOG_DIR=/data/ai-paper-api/logs sh start.sh
-
-# 指定宿主机 public 目录；生产 .env.docker 默认已设置为 /data/server/ai-paper-api/public
-HOST_PUBLIC_DIR=/data/server/ai-paper-api/public ENV_FILE=.env.docker sh start.sh
-
-# 如需临时只启动 API 或只启动 scheduler，可显式覆盖 APP_ROLE
-APP_ROLE=api ENV_FILE=.env.docker sh start.sh
-APP_ROLE=scheduler ENV_FILE=.env.docker sh start.sh
-```
-
-脚本默认会把宿主机 `./logs` 挂载到容器内 `/app/logs`，与 `.env` 中默认的 `LOG_FILE=logs/app.log` 对齐。
-脚本也会确保宿主机 public 目录下存在 `output/thesis` 子目录，避免论文生成时缺少本地兜底输出目录。
-为了避免日志目录权限不匹配，`start.sh` 默认使用当前宿主机用户的 UID/GID 启动容器；如果你希望使用镜像内置的 `app` 用户，可设置 `RUN_AS_HOST_USER=false`。
-
-### 3. worker 与连接数
-
-生产环境建议设置：
+生产建议配置：
 
 ```env
 APP_DEBUG=false
-WEB_CONCURRENCY=2
+WEB_CONCURRENCY=4
+APP_ROLE=auto
+SCHEDULER_ENABLED=true
+HOST_PUBLIC_DIR=/data/server/ai-paper-api/public
+HOST_LOG_DIR=/data/server/ai-paper-api/logs
 ```
 
-MySQL 和 Redis 的连接上限按 worker 数放大：
+`APP_ROLE=auto` 会在生产环境解析为 `all`：同一个容器内启动 API 进程和一个独立 scheduler/worker 进程。API 可以多 worker，scheduler/worker 仍只有一份，避免定时任务重复执行。
+
+更多部署细节见 [启动与部署](doc/startup-and-deployment.md)。
+
+## 论文生成入口
+
+对外论文接口统一挂载在：
 
 ```text
-MySQL 理论最大连接数 = WEB_CONCURRENCY * MYSQL_POOL_MAX
-Redis 理论最大连接数 = WEB_CONCURRENCY * REDIS_MAX_CONNECTIONS
+/api/v1/thesis
 ```
 
-如果还有多台机器或多个容器副本，还需要继续乘以实例数。
+两种调用形态：
 
-### 4. 定时任务与多 worker
+1. 直连接口：适合业务系统直接调用。
+   - `POST /api/v1/thesis/outline`
+   - `POST /api/v1/thesis/generate`
+   - `GET /api/v1/thesis/status/{task_id}`
+   - `GET /api/v1/thesis/download/{task_id}`
 
-本模板使用 APScheduler 作为进程内定时任务调度器。Uvicorn 多 worker 会启动多个独立进程，如果生产 API worker 都在 lifespan 中启动 APScheduler，同一个任务会重复执行。
+2. 订单接口：适合 Web 用户使用。
+   - `POST /api/v1/thesis/outlines`
+   - `POST /api/v1/thesis/orders`
+   - `POST /api/v1/thesis/orders/pay`
+   - `GET /api/v1/thesis/orders/status`
+   - `GET /api/v1/thesis/orders/events`
+   - `GET /api/v1/thesis/orders/download-url`
+   - `GET /api/v1/thesis/orders`
+   - `GET /api/v1/thesis/orders/detail`
 
-因此项目采用两套启动路径：
+认证方式：
 
-- 开发环境：`APP_DEBUG=true` 时，`main.py` 固定只启动 1 个 worker，`app.py` 的 lifespan 会同时启动 APScheduler，方便本地调试。
-- 生产环境：`APP_DEBUG=false` 时，API worker 不启动 APScheduler；定时任务由 `tasks.runner` 作为独立进程启动。
+```http
+Authorization: Bearer <JWT 或 API Token>
+```
 
-定时任务独立入口：
+外部业务系统应使用 `Idempotency-Key` 请求头传入本地业务订单号，避免 HTTP 重试导致重复扣费或重复生成。
+
+更多请求字段和状态说明见 [接口对接](doc/api-integration.md)。
+
+## AI 模型配置
+
+模型 API Key、Base URL 和模型名不放在 `.env`，统一在管理后台“模型配置”页面维护，并保存到 `model_configs` 表。
+
+用途说明：
+
+| 用途 | 说明 |
+| --- | --- |
+| `outline` | 大纲生成、摘要/致谢、参考文献关键词提取等短文本任务。 |
+| `fulltext` | 论文正文长文本生成。 |
+| `figure` | AI 插图生成。 |
+| `default` | 文本模型兜底配置。 |
+
+支持的文本协议：
+
+- `openai` 或 OpenAI Chat Completions 兼容协议。
+- `anthropic` / `claude` / `claude-messages`。
+- `gemini` / `gemini-generate-content` / `google-generate-content`。
+
+支持的图片协议：
+
+- `gemini-generate-content` / `google-generate-content`。
+- `openai-image-generations`。
+
+更多配置示例见 [AI 模型配置](doc/ai-model-config.md)。
+
+## 参考文献来源
+
+参考文献通过环境变量选择来源：
+
+```env
+REFERENCE_PROVIDER_MODE=wfapi
+```
+
+可选值：
+
+| 模式 | 说明 |
+| --- | --- |
+| `wfapi` | 中英文参考文献都使用万方开放平台。默认模式，成本更可控。 |
+| `serpapi` | 中英文参考文献都使用 SerpAPI Google Scholar，并通过 CrossRef 补全。 |
+| `mixed` | 中文使用万方，英文使用 SerpAPI。 |
+
+## 文件存储
+
+论文文件先生成到：
+
+```text
+public/output/thesis/{task_id}
+```
+
+然后按 `STORAGE_PROVIDER` 上传远端：
+
+```env
+STORAGE_PROVIDER=local   # local / qiniu / minio / cos
+```
+
+远端上传失败不会让论文任务失败，系统会降级使用本地文件下载链接。更多说明见 [存储配置](doc/storage-config.md)。
+
+## 常用验证命令
 
 ```bash
-uv run python -m tasks.runner
+uv run ruff check .
+uv run pytest tests/ -q
+uv run python main.py
 ```
 
-Docker 部署默认使用一个容器托管两个进程：
+Docker 部署后健康检查：
 
 ```bash
-# APP_DEBUG=false 时，start.sh 自动启动 API 进程和 scheduler 进程
-ENV_FILE=.env.docker sh start.sh
+curl http://127.0.0.1:10462/api/v1/health
+docker logs -f ai-paper-api
 ```
 
-容器内的启动脚本会同时启动 `python main.py` 和 `python -m tasks.runner`：API 进程可按 `WEB_CONCURRENCY` 多 worker 运行，scheduler 始终只有一个独立进程。如果任一进程退出，容器会整体退出，交给 Docker 重启策略处理。
+## 重要约定
 
-当前默认部署方式的边界：
-
-- 只启动一个应用容器副本时，可以使用默认的 `APP_ROLE=auto`，由 `start.sh` 在一个容器内同时托管 API 和 scheduler。
-- 如果未来需要启动多个应用容器副本，不要让每个副本都运行 `APP_ROLE=all`，否则每个副本都会启动一份 scheduler，定时任务会重复执行。
-- 多副本部署时，建议多个 API 容器使用 `APP_ROLE=api`，并且只保留一个 scheduler 容器使用 `APP_ROLE=scheduler`。
-- 如果必须多个 scheduler 实例同时存在，需要给具体任务增加 Redis/MySQL 分布式锁，或改用外部调度系统。
-
-## 新增业务模块流程
-
-1. `models/` 下新建模型文件，在 `core/config.py` 的 `TORTOISE_ORM.apps.models.models` 列表里注册
-2. `schemas/` 下新建对应的 Schema（请求/响应体）
-3. `services/` 下新建业务逻辑实现
-4. `api/v1/` 下新建路由文件
-5. 在 `api/v1/__init__.py` 里 `include_router`
-6. 执行 `uv run aerich migrate && uv run aerich upgrade` 同步数据库
-
-## 关键设计决策
-
-| 问题                             | 决策                                                                                                    |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| MySQL/Redis 连接对象在哪初始化？ | `core/database.py` 和 `core/redis.py` 声明，由 `app.py` lifespan 或 `tasks.runner` 统一 init/close      |
-| MySQL/Redis 连接失败怎么办？     | 启动阶段只打印 warning 并继续运行；健康检查会返回 degraded，依赖数据库/缓存的接口在调用时再暴露具体错误 |
-| 定时任务写在哪？                 | `tasks/scheduler.py` 写任务和注册函数；开发环境由 `app.py` 启动，生产环境由 `tasks.runner` 独立进程启动 |
-| 环境变量怎么管理？               | `core/config.py` 用 pydantic-settings 读取，全项目只 import `settings` 对象                             |
-| 接口统一响应格式？               | `schemas/common.py` 的 `Response[T]` 泛型包装                                                           |
-| 数据库迁移？                     | aerich（Tortoise-ORM 官方迁移工具）                                                                     |
+- `.env`、`.env.docker`、真实 API Key、数据库密码、对象存储密钥不得提交。
+- 当前初始阶段统一维护 `sql/init.sql`，不要再新增补丁式 SQL 文件。
+- 修改模型字段后，需要同步 ORM 模型、`sql/init.sql` 和实际数据库。
+- 前端构建产物可以放到 `public/`，生产也可以通过 `HOST_PUBLIC_DIR` 挂载宿主机目录到容器 `/app/public`。
+- 生产多副本部署时，只能有一个 scheduler/worker 实例；多个 API 实例应使用 `APP_ROLE=api`，单独保留一个 `APP_ROLE=scheduler`。
