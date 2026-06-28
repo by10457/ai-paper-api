@@ -83,6 +83,15 @@ uv run python main.py
 - OpenAPI 文档：`http://localhost:10462/docs`
 - 前端静态页：`http://localhost:10462/index.html`
 
+`sql/init.sql` 会初始化两个默认用户：
+
+| 用户名 | 角色 | 默认密码 |
+| --- | --- | --- |
+| `admin` | 管理员 | `demo123456` |
+| `by10457` | 普通用户 | `demo123456` |
+
+这些密码只用于本地初始化和测试环境。生产环境导入初始化 SQL 后，应立即在管理后台或数据库中重置默认密码。
+
 本地开发常用配置：
 
 ```env
