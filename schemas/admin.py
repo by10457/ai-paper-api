@@ -28,7 +28,7 @@ class AdminOverviewResponse(BaseModel):
 class AdminUserCreateRequest(BaseModel):
     username: str = Field(..., min_length=2, max_length=64)
     password: str = Field(..., min_length=8, max_length=72)
-    email: EmailStr
+    email: EmailStr | None = None
     nickname: str | None = Field(None, max_length=64)
     avatar: str | None = Field(None, max_length=512)
     initial_points: int = Field(default=0, ge=0)

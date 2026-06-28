@@ -1,6 +1,10 @@
 """管理端用户服务。"""
 
+import re
+import secrets
+
 from fastapi import HTTPException, status
+from tortoise import timezone
 from tortoise.expressions import F, Q
 
 from core.security import hash_password
@@ -19,6 +23,8 @@ from schemas.user import PointLedgerResponse, UserResponse
 from services.admin.audit import write_audit_log
 from services.admin.helpers import get_user_or_404
 from services.admin.utils import mask_secret
+
+AUTO_EMAIL_DOMAIN = "auto.ai-paper.local"
 
 
 class AdminUserService:
@@ -48,16 +54,18 @@ class AdminUserService:
 
         if await User.filter(username=data.username).exists():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
-        if await User.filter(email=str(data.email)).exists():
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已存在")
+        email = await AdminUserService._resolve_create_email(data)
         user = await User.create(
             username=data.username,
             hashed_password=hash_password(data.password),
-            email=str(data.email),
+            email=email,
             nickname=data.nickname,
             avatar=data.avatar,
             points=data.initial_points,
             role=data.role,
+            api_token=secrets.token_urlsafe(32),
+            api_token_created_at=timezone.now(),
+            api_token_call_count=0,
         )
         if data.initial_points:
             await PointLedger.create(
@@ -78,6 +86,23 @@ class AdminUserService:
             ip_address=ip_address,
         )
         return UserResponse.model_validate(user)
+
+    @staticmethod
+    async def _resolve_create_email(data: AdminUserCreateRequest) -> str:
+        """解析创建用户邮箱；未填写时生成内部占位邮箱以满足唯一约束。"""
+
+        if data.email is not None:
+            email = str(data.email)
+            if await User.filter(email=email).exists():
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="邮箱已存在")
+            return email
+
+        safe_username = re.sub(r"[^a-z0-9]+", "-", data.username.lower()).strip("-") or "user"
+        for _ in range(5):
+            email = f"{safe_username}.{secrets.token_hex(4)}@{AUTO_EMAIL_DOMAIN}"
+            if not await User.filter(email=email).exists():
+                return email
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="自动邮箱生成冲突，请重试")
 
     @staticmethod
     async def get_user_detail(user_id: int) -> AdminUserDetailResponse:
