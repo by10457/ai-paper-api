@@ -17,10 +17,10 @@ shutdown（反序）:
 import asyncio
 import os
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, MutableMapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,7 +57,7 @@ _IMMUTABLE_STATIC_EXTS = {
 class SPAStaticFiles(StaticFiles):
     """支持 Vue Router history 模式的静态文件服务。"""
 
-    async def get_response(self, path: str, scope: dict) -> Response:
+    async def get_response(self, path: str, scope: MutableMapping[str, Any]) -> Response:
         try:
             return await super().get_response(path, scope)
         except StarletteHTTPException as exc:
@@ -160,7 +160,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 生产环境改为具体域名
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

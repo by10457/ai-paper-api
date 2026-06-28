@@ -1,25 +1,28 @@
 import asyncio
+from collections.abc import Generator
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
+from models.paper import PaperOrder
 from services.thesis.business import order_workflow
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client() -> Generator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
 
 
 def test_paper_order_routes_are_registered() -> None:
-    routes = {route.path for route in app.routes}
+    routes = {str(getattr(route, "path", "")) for route in app.routes}
     assert "/api/v1/users/apiToken" in routes
     assert "/api/v1/users/points" in routes
     assert "/api/v1/thesis/price" in routes
@@ -134,23 +137,73 @@ def test_qiniu_private_download_url_uses_configured_domain(
 
 def test_order_list_item_does_not_expose_download_url() -> None:
     item = order_workflow._paper_order_list_item(
-        SimpleNamespace(
-            id=1,
-            order_sn="AP001",
-            title="测试论文",
-            status="completed",
-            cost_points=200,
-            paid_points=200,
-            refunded_points=0,
-            last_error="",
-            created_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:45:43+08:00"),
-            paid_at=None,
-            completed_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:49:18+08:00"),
+        cast(
+            PaperOrder,
+            SimpleNamespace(
+                id=1,
+                order_sn="AP001",
+                title="测试论文",
+                status="completed",
+                cost_points=200,
+                paid_points=200,
+                refunded_points=0,
+                last_error="",
+                created_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:45:43+08:00"),
+                paid_at=None,
+                completed_at=SimpleNamespace(isoformat=lambda: "2026-06-04T13:49:18+08:00"),
+            ),
         )
     )
 
     assert item.has_file == 1
     assert item.download_url is None
+
+
+def test_normalize_generate_input_preserves_direct_cover_fields() -> None:
+    order = cast(
+        PaperOrder,
+        SimpleNamespace(
+            title="测试论文",
+            outline_json=[
+                {
+                    "chapter": "绪论",
+                    "sections": [
+                        {"name": "研究背景", "abstract": "背景"},
+                    ],
+                }
+            ],
+            config_form={
+                "target_word_count": 12_000,
+                "codetype": "Python",
+                "wxquote": "标注",
+                "language": "是",
+                "wxnum": 35,
+                "author": "张三",
+                "advisor": "李四 教授",
+                "degree_type": "硕士",
+                "major": "软件工程",
+                "school": "计算机学院",
+                "year_month": "2026年06月",
+                "student_id": "20260001",
+                "student_class": "软件工程1班",
+            },
+        ),
+    )
+
+    normalized = PaperOrderService.normalize_generate_input(order)
+
+    assert normalized.target_word_count == 12_000
+    assert normalized.codetype == "Python"
+    assert normalized.language == "是"
+    assert normalized.wxnum == 35
+    assert normalized.author == "张三"
+    assert normalized.advisor == "李四 教授"
+    assert normalized.degree_type == "硕士"
+    assert normalized.major == "软件工程"
+    assert normalized.school == "计算机学院"
+    assert normalized.year_month == "2026年06月"
+    assert normalized.student_id == "20260001"
+    assert normalized.student_class == "软件工程1班"
 
 
 def test_run_paid_paper_order_delegates_to_generation_task(
@@ -186,7 +239,7 @@ def test_provider_failure_refunds_order_with_sanitized_message(
     message: str,
 ) -> None:
     refund_calls: list[tuple[int, str, str]] = []
-    order = SimpleNamespace(id=7)
+    order = cast(PaperOrder, SimpleNamespace(id=7))
 
     async def fake_refund_failed_order_points(
         order_id: int,
@@ -218,7 +271,7 @@ def test_generation_failure_schedules_retry_before_final_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     retry_calls: list[tuple[int, str]] = []
-    order = SimpleNamespace(id=7)
+    order = cast(PaperOrder, SimpleNamespace(id=7))
     retried_order = SimpleNamespace(id=7, status="paid", last_error="生成失败，将自动重试 1/2")
 
     async def fake_schedule_order_retry_if_possible(order_id: int, data: dict) -> SimpleNamespace:
@@ -246,7 +299,7 @@ def test_generation_failure_refunds_order_after_retry_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     refund_calls: list[tuple[int, str, str]] = []
-    order = SimpleNamespace(id=7)
+    order = cast(PaperOrder, SimpleNamespace(id=7))
 
     async def fake_schedule_order_retry_if_possible(order_id: int, data: dict) -> None:
         assert order_id == 7

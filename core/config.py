@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     APP_RELOAD: bool = False
     APP_HOST: str = "0.0.0.0"
     APP_PORT: int = 10462
+    BACKEND_CORS_ORIGINS: str = "*"
     WEB_CONCURRENCY: int | None = Field(default=None, ge=1)
     SCHEDULER_ENABLED: bool = True
     SECRET_KEY: str = "change-me-in-production"
@@ -59,6 +60,15 @@ class Settings(BaseSettings):
         if self.REDIS_PASSWORD:
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """解析允许跨域访问的前端来源，多个域名用英文逗号分隔。"""
+
+        value = self.BACKEND_CORS_ORIGINS.strip()
+        if not value or value == "*":
+            return ["*"]
+        return [origin.strip() for origin in value.split(",") if origin.strip()]
 
     # ── 日志 ──────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"

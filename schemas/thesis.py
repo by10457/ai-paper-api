@@ -264,6 +264,14 @@ class NormalizedPaperOrder(BaseModel):
     wxquote: str
     language: str
     wxnum: int
+    author: str = "作者姓名"
+    advisor: str = "指导教师"
+    degree_type: str = "学士"
+    major: str = "专业名称"
+    school: str = "XX大学XX学院"
+    year_month: str = ""
+    student_id: str = ""
+    student_class: str = ""
 
 
 class MermaidFigure(BaseModel):

@@ -155,9 +155,15 @@ async def get_user_order_detail(user: User, order_sn: str) -> PaperOrderDetailRe
         task_id=order.task_id,
         task_stage=generation_task.current_stage if generation_task else None,
         task_progress=generation_task.progress if generation_task else 0,
-        process_events=generation_task.process_events if generation_task and isinstance(generation_task.process_events, list) else [],
-        process_metadata=generation_task.process_metadata if generation_task and isinstance(generation_task.process_metadata, dict) else None,
-        result_summary=generation_task.result_summary if generation_task and isinstance(generation_task.result_summary, dict) else None,
+        process_events=generation_task.process_events
+        if generation_task and isinstance(generation_task.process_events, list)
+        else [],
+        process_metadata=generation_task.process_metadata
+        if generation_task and isinstance(generation_task.process_metadata, dict)
+        else None,
+        result_summary=generation_task.result_summary
+        if generation_task and isinstance(generation_task.result_summary, dict)
+        else None,
         file_key=order.file_key,
         storage_provider=order.storage_provider,
         local_file_key=order.local_file_key,

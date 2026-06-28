@@ -57,7 +57,7 @@ INSERT INTO `users` (
     '$2b$12$T6tvgYbTutEE.rqtqABWG.zvVgEgGVjBKgfmO/T4odiLbNNOcFQjm',
     'by10457',
     'by10457@example.com',
-    100,
+    10000,
     'DErHvM6T5QX7UdyzNNuR0neWtLdhRiSuRAnlwosug7Q',
     CURRENT_TIMESTAMP(6),
     0,

@@ -493,15 +493,28 @@ class PaperOrderService:
         config = order.config_form if isinstance(order.config_form, dict) else {}
         form_params = config.get("form_params")
         if isinstance(form_params, dict):
-            config = form_params
+            generation_params = form_params
+        else:
+            generation_params = config
         return NormalizedPaperOrder(
             title=order.title,
             outline_json=PaperOrderService._normalize_outline(order.outline_json),
-            target_word_count=PaperOrderService._to_int(config.get("lengthnum") or config.get("target_word_count"), 8000),
-            codetype=PaperOrderService._to_text(config.get("codetype"), "否"),
-            wxquote=PaperOrderService._to_text(config.get("wxquote"), "标注"),
-            language=PaperOrderService._to_text(config.get("language"), "否"),
-            wxnum=PaperOrderService._to_int(config.get("wxnum"), 25),
+            target_word_count=PaperOrderService._to_int(
+                generation_params.get("lengthnum") or generation_params.get("target_word_count"),
+                8000,
+            ),
+            codetype=PaperOrderService._to_text(generation_params.get("codetype"), "否"),
+            wxquote=PaperOrderService._to_text(generation_params.get("wxquote"), "标注"),
+            language=PaperOrderService._to_text(generation_params.get("language"), "否"),
+            wxnum=PaperOrderService._to_int(generation_params.get("wxnum"), 25),
+            author=PaperOrderService._to_text(config.get("author"), "作者姓名"),
+            advisor=PaperOrderService._to_text(config.get("advisor"), "指导教师"),
+            degree_type=PaperOrderService._to_text(config.get("degree_type"), "学士"),
+            major=PaperOrderService._to_text(config.get("major"), "专业名称"),
+            school=PaperOrderService._to_text(config.get("school"), "XX大学XX学院"),
+            year_month=PaperOrderService._to_text(config.get("year_month"), ""),
+            student_id=PaperOrderService._to_text(config.get("student_id"), ""),
+            student_class=PaperOrderService._to_text(config.get("student_class"), ""),
         )
 
     @staticmethod

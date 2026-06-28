@@ -127,6 +127,7 @@ APP_DEBUG=false
 WEB_CONCURRENCY=4
 APP_ROLE=auto
 SCHEDULER_ENABLED=true
+BACKEND_CORS_ORIGINS=https://paper.example.com
 HOST_PUBLIC_DIR=/data/server/ai-paper-api/public
 HOST_LOG_DIR=/data/server/ai-paper-api/logs
 ```
