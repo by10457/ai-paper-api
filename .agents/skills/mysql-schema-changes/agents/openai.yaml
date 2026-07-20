@@ -1,0 +1,4 @@
+interface:
+  display_name: "ai-paper-api MySQL 结构变更"
+  short_description: "同步 Tortoise 模型、初始化 SQL 与本地开发库"
+  default_prompt: "使用 $mysql-schema-changes 安全实现并验证 ai-paper-api 的 MySQL 结构变更。"
