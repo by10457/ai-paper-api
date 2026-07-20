@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI 编码行为准则"
+  short_description: "约束功能开发、重构、调试与审查中的改动范围和验证方式"
+  default_prompt: "使用 $coding-guidelines 按本项目准则完成代码修改与验证。"

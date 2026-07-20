@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python 代码规范"
+  short_description: "规范项目 Python 分层、类型、注释、异常处理和工具链验证"
+  default_prompt: "使用 $python-code-style 按本项目规范编写或审查 Python 代码。"

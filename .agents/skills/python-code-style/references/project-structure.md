@@ -1,4 +1,4 @@
-# T-FastApi 分层约定
+# edu-sys-spider 分层约定
 
 ## 目录职责
 
@@ -13,7 +13,13 @@
 | `tasks/` | APScheduler 定时任务注册和任务逻辑 |
 | `utils/` | 与业务无关、可复用的通用工具 |
 | `scripts/` | 一次性脚本、数据修复脚本，不作为线上服务入口 |
-| `tests/` | pytest 测试 |
+| `tests/api/` | FastAPI 路由、请求校验和接口契约测试 |
+| `tests/core/` | 配置、数据库、HTTP 和日志等基础设施测试 |
+| `tests/services/` | 公共业务服务、仓储和编排测试 |
+| `tests/schools/` | 跨学校公共解析器和指定学校适配器测试 |
+| `tests/utils/` | 通用工具函数测试 |
+
+新增、移动或删除测试前读取 `.agents/skills/test-guidelines/SKILL.md`，不要把测试重新堆到 `tests/` 根目录。
 
 ## 新增业务模块流程
 
@@ -22,7 +28,7 @@
 3. 在 `services/` 实现业务逻辑，保持可测试，不依赖 FastAPI `Request`。
 4. 在 `api/v1/` 定义路由，只做依赖注入、参数校验、权限检查和调用 service。
 5. 在 `api/v1/__init__.py` 注册路由。
-6. 修改模型后运行 `uv run aerich migrate --name "<change_name>"` 和 `uv run aerich upgrade`。
+6. 修改模型后运行 `rtk uv run aerich migrate --name "<change_name>"` 和 `rtk uv run aerich upgrade`。
 
 ## 路由层规则
 

@@ -1,11 +1,11 @@
 ---
 name: coding-guidelines
-description: T-FastApi 项目的 AI 编码行为准则，用于减少常见 LLM 编码错误。当编写 FastAPI 后端功能、重构 Python 代码、修复 bug、review/调试代码或调整项目配置时触发，引导模型保持小步改动、避免过度工程化、明确验证目标。
+description: edu-sys-spider 项目的 AI 编码行为准则。编写功能、重构代码、修复 bug、调试或审查代码、迁移旧实现、调整项目配置时必须使用，用于保持小步改动、避免过度工程化并明确验证目标。
 ---
 
 # AI 编码行为准则
 
-减少常见 LLM 编码错误的行为指南。这个 skill 约束“怎么做事”；具体 Python 风格、注释、Ruff/Mypy 和 FastAPI 分层细则，读取 `python-code-style` skill。
+减少常见 LLM 编码错误的行为指南。这个 skill 约束“怎么做事”；涉及 Python 时必须同时读取 `python-code-style` skill，以获取注释、类型、Ruff/Mypy 和 FastAPI 分层细则。
 
 > **权衡说明**：这些指南偏向谨慎而非速度。对于琐碎任务，灵活使用判断力。
 
@@ -95,8 +95,8 @@ description: T-FastApi 项目的 AI 编码行为准则，用于减少常见 LLM 
 ## 验证优先级
 
 - 只改文档或 skill：检查 frontmatter、目录结构和内容是否与项目一致。
-- 改单个 Python 文件：优先运行 `uv run ruff check <path>`。
-- 改类型签名、schema、service 或 model：加跑 `uv run mypy <changed-paths>`；如果导入链继续暴露相关错误，顺手修到当前改动闭环通过。
+- 改单个 Python 文件：优先运行 `rtk uv run ruff check <path>`。
+- 改类型签名、schema、service 或 model：加跑 `rtk uv run mypy <changed-paths>`；如果导入链继续暴露相关错误，顺手修到当前改动闭环通过。
 - 改接口行为、数据库逻辑或定时任务：加跑相关 pytest。
 - 批量迁移或生成代码：先跑 touched files 的 Ruff/Mypy，再根据影响范围跑相关 pytest；最终回复中必须说明检查结果。
 - 无法运行验证时，在最终说明中明确原因和残余风险。

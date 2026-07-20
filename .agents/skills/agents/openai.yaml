@@ -1,0 +1,4 @@
+interface:
+  display_name: "项目 Skills 索引"
+  short_description: "指导 AI 按任务类型发现并加载本仓库的具体开发规范"
+  default_prompt: "使用 $edu-sys-spider-skills 确认当前任务需要加载哪些项目 skills。"

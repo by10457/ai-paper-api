@@ -1,51 +1,66 @@
 ---
 name: python-code-style
-description: T-FastApi 项目的 Python 代码风格、中文注释、类型标注、Ruff/Mypy 校验、FastAPI 分层与文档规范。用于编写或审查本项目代码、调整 lint/type-check 配置、补充 docstring、制定项目代码约定时。
+description: edu-sys-spider 项目的 Python/FastAPI/Tortoise/Pydantic 代码规范。编写、修改、重构、调试或审查任何 Python 文件，调整 schema/model/service/api 分层，修复 Ruff/Mypy，迁移旧爬虫代码或补充测试时必须使用；加载后必须继续读取 references/code-style.md。
 ---
 
-# T-FastApi Python 代码规范
+# edu-sys-spider Python 代码规范
 
-这个 skill 面向当前仓库的 FastAPI 后端模板，而不是通用 Python 项目模板。执行代码编写、重构、审查或规范配置时，优先遵循本仓库已有约定。
+这个 skill 面向当前 `edu-sys-spider` 仓库，不是通用 FastAPI 模板。只要要编写、修改、审查 Python 代码，都必须遵循本 skill 和引用文件。
 
-## 当前项目约束
+## 必读流程
 
-- Python 版本：`>=3.13`，Ruff `target-version = "py313"`，Mypy `python_version = "3.13"`。
-- 依赖管理：使用 `uv`，不要新增 `pip install ...` 作为项目标准流程。
-- 主要栈：FastAPI、Tortoise-ORM、Pydantic Settings、Redis asyncio、APScheduler、Loguru、Aerich。
-- 代码校验：使用 `uv run ruff check .`、`uv run ruff format .`、`uv run mypy .`、`uv run pytest`。
-- 行宽：`120`，由 Ruff 配置统一处理。
-- 注释和新增文档：项目内优先使用中文；代码标识符仍使用英文。
+1. **先读本文件。**
+2. **再读 `references/code-style.md`。这是强制步骤，不是可选参考。**
+3. 按任务需要读取：
+   - `references/project-structure.md`：新增模块、调整分层、判断代码放在哪里。
+   - `references/tooling.md`：运行 Ruff、Mypy、pytest、Aerich 或解释工具链约定。
 
-## 使用流程
+如果没有读取 `references/code-style.md`，不要开始写 Python 代码。
 
-1. 先查看当前文件所在层级，按 `api`、`schemas`、`services`、`models`、`core`、`tasks`、`utils` 的职责边界落代码。
-2. 写代码前检查 `pyproject.toml` 中已有 Ruff/Mypy 配置，不要用通用模板覆盖项目配置。
-3. 新增或修改公开函数、类、方法时，补齐类型标注和必要 docstring。
-4. 对关键业务逻辑添加中文注释，解释原因和边界条件；避免逐行解释显而易见的代码。
-5. 修改完成后按影响范围运行校验，至少运行对应文件或模块的 Ruff；触及类型、接口或业务流程时加跑 Mypy/pytest。
+## 当前项目基线
 
-## 何时读取引用文件
+- Python：`>=3.13`
+- 依赖管理：`uv`
+- Web 框架：FastAPI
+- ORM：Tortoise-ORM
+- Schema：Pydantic
+- Redis：`redis.asyncio`
+- 日志：Loguru
+- 校验：Ruff、Mypy、pytest
+- 命令执行：本仓库命令使用 `rtk` 前缀，例如 `rtk uv run pytest`
 
-- 需要具体命名、注释、函数拆分、异常处理、类型注解规则时，读取 [references/code-style.md](references/code-style.md)。
-- 需要按本项目 FastAPI 分层落代码、判断文件放置位置或新增业务模块时，读取 [references/project-structure.md](references/project-structure.md)。
-- 需要调整 Ruff、Mypy、pytest、uv 命令或解释配置取舍时，读取 [references/tooling.md](references/tooling.md)。
+## 核心要求
 
-## 核心规则
+- 路由层保持薄层，业务逻辑放在 `services/`。
+- API 输入输出放在 `schemas/`，不要直接暴露 ORM model。
+- ORM model 放在 `models/`，新增模型后同步检查 `core/config.py` 注册。
+- 通用基础设施放在 `core/`，业务无关工具放在 `utils/`。
+- 所有函数参数和返回值都写类型注解。
+- 每个函数上方写一行中文注释，便于编辑器折叠后仍能识别函数用途。
+- 每个函数内部写中文 docstring；有参数时必须说明参数，必要时说明返回值和业务边界。
+- 模块内函数遵循先定义再调用：被入口函数调用的辅助函数写在入口函数上方。
+- 优先让一个文件围绕一个核心功能展开，避免把主流程拆成大量小函数。
+- 捕获具体异常，必要时 `raise ... from exc` 保留异常链。
+- 不用 `Any` 或 `# type: ignore` 掩盖类型问题，除非边界处无法避免且有明确原因。
 
-- 函数和变量使用 `snake_case`，类使用 `PascalCase`，常量使用 `UPPER_SNAKE_CASE`，私有成员使用 `_` 前缀。
-- 所有函数参数和返回值都应写类型注解；公共 API、复杂业务函数和类应写 docstring。
-- 外部库、HTTP JSON、LLM chain、Pydantic `model_dump()` 等返回 `Any` 的边界处，先用 `cast`、Pydantic schema、dataclass 或明确类型别名收窄；业务内部不要让 `Any` 扩散。
-- 调用第三方库构造函数时优先显式传参，不用 `dict[str, object]` 再 `**kwargs`，避免 Mypy 无法匹配重载签名。
-- 函数职责保持单一，但不要把一两行简单逻辑过度拆成大量小函数。
-- 模块组织顺序：模块说明、import、常量、底层工具函数、中层业务函数、高层入口函数、`if __name__ == "__main__"`。
-- 捕获具体异常类型，不使用裸 `except:`；捕获后记录日志或重新抛出，不静默吞错。
-- FastAPI 路由层只处理参数、依赖、权限和响应组装；核心业务放到 `services/`。
-- ORM 模型放 `models/`，Pydantic 请求/响应结构放 `schemas/`，跨模块基础设施放 `core/`。
+## AI 常见漏项
 
-## 不适用于本项目的内容
+这些问题在本项目中必须主动避免：
 
-- 不使用 Python 3.10/3.12 作为新代码示例基线。
-- 不把 `pip install ruff mypy` 作为项目内安装指令；本项目使用 `uv sync` 和依赖组。
-- 不引入 Black、isort、flake8 作为独立标准工具；本项目用 Ruff 统一 lint、format、import 排序。
-- 不要求所有函数都必须额外写“函数上方单行注释”；只有复杂逻辑、折叠后难以识别的函数才需要。
-- 不在 skill 中维护 README、CHANGELOG 等通用文档模板；只保留对代码规范有直接帮助的内容。
+- 没读 `references/code-style.md` 就开始写代码。
+- 迁移旧项目代码时把 `dict` 响应、旧工具函数、旧依赖原样搬进来。
+- 在 FastAPI 路由里堆业务逻辑。
+- 为局部细节拆过多函数，导致一个文件读起来像小框架。
+- 入口函数写在辅助函数前面，导致阅读时先看到未定义调用。
+- 只写函数内 docstring，没有在函数上方写编辑器折叠时可见的中文说明。
+- docstring 只写一句话，没有说明参数、返回值或业务边界。
+- 捕获 `Exception` 后静默吞掉异常。
+- 改 schema/service 后只跑 Ruff，不跑 Mypy 或相关测试。
+
+## 验证要求
+
+- 改 Python 文件：至少运行对应文件 Ruff。
+- 改 schema、service、model、类型签名：加跑 Mypy。
+- 改业务流程、路由、数据库或爬虫解析：加跑相关 pytest。
+- 迁移旧项目代码：先跑 touched files 的 Ruff/Mypy，再跑相关测试。
+- 最终回复说明实际运行过的命令和结果。

@@ -1,51 +1,59 @@
 # 工具链约定
 
+本文件只记录 `edu-sys-spider` 当前实际使用的工具链和校验方式。
+
 ## 项目基线
 
 - Python：`>=3.13`
 - 依赖管理：`uv`
-- Lint、格式化、import 排序：Ruff
+- Lint、import 排序：Ruff
 - 类型检查：Mypy
 - 测试：pytest、pytest-asyncio
 - 数据库迁移：Aerich
+- 命令前缀：在本仓库执行命令时使用 `rtk`
 
 ## 常用命令
 
 ```bash
-uv sync
-uv run ruff check .
-uv run ruff format .
-uv run mypy .
-uv run pytest
+rtk uv sync
+rtk uv run ruff check api core models schemas services tests utils app.py main.py
+rtk uv run mypy api core models schemas services utils app.py main.py tests
+rtk uv run pytest
 ```
 
 按需缩小范围：
 
 ```bash
-uv run ruff check services/user_service.py
-uv run mypy services/user_service.py
-uv run pytest tests/test_user_service.py -v
+rtk uv run ruff check services/spider/repositories.py
+rtk uv run mypy services/spider/repositories.py
+rtk uv run pytest tests/schools/v1_0052/test_business_parsers.py
 ```
 
-## Ruff 配置取舍
+OpenAPI 生成检查：
 
-项目已在 `pyproject.toml` 中配置：
+```bash
+rtk uv run python -c "from app import app; app.openapi(); print('openapi ok')"
+```
+
+## Ruff 配置
+
+以 `pyproject.toml` 为准，不要用通用模板覆盖：
 
 - `target-version = "py313"`
 - `line-length = 120`
 - `select = ["E", "F", "I", "UP", "B", "N"]`
 - `ignore = ["E501", "B008", "N802", "UP046"]`
 
-不要用通用配置替换这些项目约定。几个忽略项的含义：
+说明：
 
-- `E501`：行宽由 Ruff formatter 和 `line-length` 统一处理。
+- `E501`：行宽由项目统一配置处理，不为它做局部绕行。
 - `B008`：FastAPI `Depends()` 写在参数默认值中是框架约定。
-- `N802`：配置类中部分大写 property 是有意设计。
-- `UP046`：Pydantic 对 PEP 695 新泛型语法支持仍需谨慎。
+- `N802`：配置类中大写 property 是项目约定。
+- `UP046`：Pydantic 与新泛型语法兼容性需要谨慎。
 
 ## Mypy 约定
 
-项目已启用：
+以 `pyproject.toml` 为准：
 
 - `python_version = "3.13"`
 - `ignore_missing_imports = true`
@@ -53,20 +61,20 @@ uv run pytest tests/test_user_service.py -v
 - `warn_return_any = true`
 - `warn_unused_ignores = true`
 
-新增业务代码时，不要用 `Any` 或 `# type: ignore` 逃避类型问题。确实需要忽略时，在同一行说明原因，并优先缩小忽略范围。
+新增业务代码不要用 `Any` 或 `# type: ignore` 逃避类型问题。确实无法避免时，限制在边界处，并说明原因。
 
 ## 校验策略
 
-- 只改注释或 skill 文档：检查 Markdown/frontmatter 结构即可。
-- 改 Python 文件：至少运行 `uv run ruff check <path>`。
-- 改 import、格式或批量风格：运行 `uv run ruff check .` 和 `uv run ruff format .`。
-- 改公开函数签名、schema、service、model：加跑 `uv run mypy <changed-paths>`；如果 Mypy 跟随导入暴露当前业务链路中的错误，继续修到该链路通过。
-- 改业务流程、路由、数据库行为：加跑相关 pytest；必要时补测试。
-- 迁移外部项目代码或 AI 大段生成代码：先对 touched files 运行 Ruff/Mypy，再跑相关测试；不能只凭 IDE 没有红线判断完成。
-- 最终回复必须列出实际运行过的校验命令和结果；若未运行，明确说明原因和残余风险。
+- 只改 skill/Markdown：检查 frontmatter、标题、链接和内容是否与项目一致。
+- 改 Python 文件：运行 touched files 的 Ruff。
+- 改 import、格式或批量风格：运行相关范围 Ruff；需要时再运行全量 Ruff。
+- 改 schema、service、model、公开函数签名：加跑 Mypy。
+- 改业务流程、路由、数据库、Redis、爬虫解析：加跑相关 pytest。
+- 改 FastAPI 路由或 schema：加跑 OpenAPI 生成检查。
+- 迁移旧项目代码：必须运行 Ruff、Mypy、相关 pytest，不能只看 IDE。
 
-## 不采用的通用工具建议
+## 不采用
 
-- 不把 Black、isort、flake8 作为独立工具引入；Ruff 已覆盖当前需求。
-- 不在 README 或 skill 中推荐 `pip install` 作为本项目开发流程。
-- 不把 Python 3.12 示例配置迁入项目；当前项目是 Python 3.13。
+- 不引入 Black、isort、flake8；当前项目用 Ruff。
+- 不推荐 `pip install` 作为开发流程；当前项目用 `uv`。
+- 不迁入 Python 3.12 或通用 FastAPI 模板配置。

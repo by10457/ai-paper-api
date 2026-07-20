@@ -1,0 +1,4 @@
+interface:
+  display_name: "测试开发规范"
+  short_description: "规范测试目录归类、数据脱敏、隔离策略、删除判断与验证流程"
+  default_prompt: "使用 $test-guidelines 为本项目新增、整理或审查测试。"

@@ -1,49 +1,32 @@
 ---
-name: ai-paper-api-skills
-description: AI Paper API 后端项目的 skill 总入口。凡是修改、审查、调试或解释 ai-paper-api 代码，尤其是 services、api、schemas、models、core、tasks 中的 Python 代码时，都应先读取本入口，再按需引入 coding-guidelines 与 python-code-style。
+name: edu-sys-spider-skills
+description: edu-sys-spider 项目的 skills 路由入口。在仓库内开始功能开发、代码修改、重构、调试、审查、配置或测试任务时必须使用，用于确定并加载当前任务需要遵循的具体规范。
 ---
 
-# AI Paper API Skill 总入口
+# edu-sys-spider 技能入口
 
-这个文件是 `/home/by/wxy/ai-paper-api` 的根级 skill 索引，用于避免只依赖零散子目录 skill，导致 AI 编程时遗漏项目规范。
+本文件是 `.agents/skills/` 的总入口。修改本仓库代码时，必须按下面的技能职责加载具体 skill，不要只读这个索引就开始编码。
 
-## 使用顺序
+## 技能列表
 
-处理本项目后端代码时，按以下顺序读取规范：
+| 技能 | 路径 | 使用场景 |
+| --- | --- | --- |
+| AI 编码行为准则 | `.agents/skills/coding-guidelines/SKILL.md` | 做功能开发、重构、修 bug、review、迁移旧项目代码时使用，约束工作方式、改动范围和验证习惯。 |
+| Python 代码风格 | `.agents/skills/python-code-style/SKILL.md` | 编写或审查 Python/FastAPI/Tortoise/Pydantic 代码时使用，约束代码风格、分层、类型和工具链。 |
+| 测试开发规范 | `.agents/skills/test-guidelines/SKILL.md` | 新增、修改、迁移、归类、审查或删除 pytest 测试与 fixture 时使用，约束目录、隔离、脱敏、生命周期和验证流程。 |
 
-1. `coding-guidelines/SKILL.md`
-   - 约束 AI 编码行为：先确认现状、小步改动、避免过度工程化、保护用户已有改动。
-   - 适用于所有修复、重构、review、配置调整和测试补充。
+## 强制加载顺序
 
-2. `python-code-style/SKILL.md`
-   - 约束 Python 代码风格：中文注释、类型标注、docstring、FastAPI 分层、Ruff/Mypy/pytest 验证。
-   - 修改 Python 文件时必须遵循。
+1. 涉及代码实现、重构或 bug 修复时，先读 `coding-guidelines/SKILL.md`。
+2. 涉及 Python 代码时，再读 `python-code-style/SKILL.md`。
+3. 只要要写 Python 代码，必须继续读取 `python-code-style/references/code-style.md`，不要只依赖 `python-code-style/SKILL.md` 的摘要。
+4. 涉及测试或 fixture 时，再读 `test-guidelines/SKILL.md`；删除测试前必须按其中的证据要求审计。
 
-3. `python-code-style/references/code-style.md`
-   - 当任务涉及注释、docstring、函数拆分、变量命名、类型注解或异常处理时读取。
+## 强制提醒
 
-4. `python-code-style/references/project-structure.md`
-   - 当任务涉及新增模块、跨层调用、服务边界、API/schema/model/service 放置位置时读取。
-
-5. `python-code-style/references/tooling.md`
-   - 当任务涉及 Ruff、Mypy、pytest、uv、依赖管理或验证命令时读取。
-
-## services 目录重点规范
-
-`services/` 是本项目业务核心。修改这里时尤其注意：
-
-- 文件顶部应有中文模块 docstring，说明该文件的业务职责和边界。
-- 公共函数、复杂业务函数、跨模块调用入口应写中文 docstring。
-- 函数参数和返回值应写明确类型标注，不让 `Any` 在业务内部扩散。
-- 变量命名应体现业务含义，避免 `data`、`res`、`tmp` 这类含义不清的名称长期存在。
-- 注释解释“为什么这样做”和业务约束，不逐行复述代码。
-- 不在 `services/` 中混入路由层职责；路由层只做参数、依赖、权限和响应组装。
-- 外部接口、LLM、存储、数据库、Redis 等边界处要记录必要日志，并收窄返回类型。
-- 涉及支付、扣积分、生成任务、回调、队列、状态恢复等流程时，优先保留幂等和补偿语义。
-
-## 验证要求
-
-- 只改 skill 或文档：检查 frontmatter、路径和描述是否与项目一致。
-- 改 Python 文件：至少运行 `uv run ruff check <changed-files>`。
-- 改类型签名、schema、核心 service：加跑相关 pytest；必要时运行 Mypy。
-- 无法运行验证时，最终回复必须说明原因和残余风险。
+- `python-code-style/references/code-style.md` 是本项目代码风格的细则来源，AI 经常遗漏的命名、异常、类型、函数拆分、模块组织规则都在这里。
+- 本项目偏好“核心流程集中、少量函数讲清楚一个功能”，不要把一个业务工具拆成大量小函数。
+- Python 函数上方需要中文单行说明；函数内部 docstring 需要说明参数、返回值和业务边界。
+- 测试必须按 API、基础设施、服务、学校和工具分类；真实响应 fixture 入库前必须脱敏。
+- 如果规则冲突，以任务范围内更具体的文件为准：测试任务遵循 `test-guidelines/SKILL.md`，Python 风格遵循 `code-style.md`，通用流程遵循 `coding-guidelines/SKILL.md`；具体 skill 均优先于本索引。
+- 执行本仓库命令时遵循项目环境要求，命令前使用 `rtk` 前缀，例如 `rtk uv run pytest`。
