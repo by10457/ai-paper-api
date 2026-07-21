@@ -30,7 +30,9 @@ NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 ADD_HOST_GATEWAY="${ADD_HOST_GATEWAY:-true}"
 RUN_AS_HOST_USER="${RUN_AS_HOST_USER:-true}"
 SANITIZED_ENV_FILE=""
+FRONTEND_TEMP_DIR=""
 RESOLVED_APP_ROLE=""
+FRONTEND_ARCHIVE_PATH="$PROJECT_DIR/public/dist.zip"
 
 log() {
   printf '[start.sh] %s\n' "$*"
@@ -78,6 +80,10 @@ Optional environment variables:
   NPM_REGISTRY      npm/pnpm registry (default: https://registry.npmmirror.com)
   ADD_HOST_GATEWAY  true/1 to add host.docker.internal mapping (default: true)
   RUN_AS_HOST_USER  true/1 to run container as current host UID:GID for writable bind mounts (default: true)
+
+Frontend deployment:
+  public/dist.zip is extracted into HOST_PUBLIC_DIR after the Docker image build succeeds.
+  The deployment host must provide the unzip command. public/output and public/uploads are preserved.
 
 Middleware connection examples:
   1. MySQL/Redis installed on host:
@@ -183,6 +189,9 @@ cleanup() {
   if [ -n "$SANITIZED_ENV_FILE" ] && [ -f "$SANITIZED_ENV_FILE" ]; then
     rm -f "$SANITIZED_ENV_FILE"
   fi
+  if [ -n "$FRONTEND_TEMP_DIR" ] && [ -d "$FRONTEND_TEMP_DIR" ]; then
+    rm -rf "$FRONTEND_TEMP_DIR"
+  fi
 }
 
 trap cleanup EXIT INT TERM
@@ -278,6 +287,28 @@ build_images() {
       fail "Unsupported BUILD_MODE=$BUILD_MODE. Use fast, full, deps or none."
       ;;
   esac
+}
+
+deploy_frontend_assets() {
+  command -v unzip >/dev/null 2>&1 || fail "unzip is required to deploy public/dist.zip."
+  [ -s "$FRONTEND_ARCHIVE_PATH" ] || fail "Frontend archive not found: $FRONTEND_ARCHIVE_PATH"
+  [ "$HOST_PUBLIC_PATH" != "/" ] || fail "HOST_PUBLIC_DIR must not resolve to /."
+
+  log "Validating frontend archive: $FRONTEND_ARCHIVE_PATH"
+  unzip -tq "$FRONTEND_ARCHIVE_PATH" >/dev/null || fail "Invalid frontend archive: $FRONTEND_ARCHIVE_PATH"
+
+  FRONTEND_TEMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ai-paper-frontend.XXXXXX")
+  unzip -q "$FRONTEND_ARCHIVE_PATH" -d "$FRONTEND_TEMP_DIR"
+  [ -f "$FRONTEND_TEMP_DIR/index.html" ] || fail "Frontend archive is missing index.html."
+  [ -d "$FRONTEND_TEMP_DIR/js" ] || fail "Frontend archive is missing js/."
+  [ -d "$FRONTEND_TEMP_DIR/css" ] || fail "Frontend archive is missing css/."
+
+  mkdir -p "$HOST_PUBLIC_PATH"
+  rm -rf "$HOST_PUBLIC_PATH/css" "$HOST_PUBLIC_PATH/js" "$HOST_PUBLIC_PATH/jse" "$HOST_PUBLIC_PATH/assets"
+  rm -f "$HOST_PUBLIC_PATH/_app.config.js" "$HOST_PUBLIC_PATH/favicon.ico" "$HOST_PUBLIC_PATH/index.html"
+  cp -R "$FRONTEND_TEMP_DIR/." "$HOST_PUBLIC_PATH/"
+
+  log "Frontend assets deployed: $FRONTEND_ARCHIVE_PATH -> $HOST_PUBLIC_PATH"
 }
 
 wait_for_container() {
@@ -425,6 +456,7 @@ mkdir -p "$HOST_LOG_PATH"
 mkdir -p "$HOST_PUBLIC_PATH/output/thesis"
 
 build_images
+deploy_frontend_assets
 
 RUN_ARGS="
   -d

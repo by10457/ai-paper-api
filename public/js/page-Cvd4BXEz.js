@@ -1,1 +1,0 @@
-var e={login:`Login`,register:`Register`,codeLogin:`Code Login`,qrcodeLogin:`Qr Code Login`,forgetPassword:`Forget Password`,profile:`Profile`},t={auth:e};export{e as auth,t as default};

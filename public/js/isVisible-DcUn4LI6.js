@@ -1,1 +1,0 @@
-var e=e=>{if(!e)return!1;if(e instanceof Element){if(e.offsetParent)return!0;if(e.getBBox){let{width:t,height:n}=e.getBBox();if(t||n)return!0}if(e.getBoundingClientRect){let{width:t,height:n}=e.getBoundingClientRect();if(t||n)return!0}}return!1};export{e as t};

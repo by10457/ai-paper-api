@@ -1,1 +1,0 @@
-function e(){return{"@media (prefers-reduced-motion: reduce)":{transition:`none`,animation:`none`}}}export{e as t};

@@ -36,5 +36,14 @@ htmlcov/
 public/uploads/
 public/output/
 
+# 前端静态文件由 public/dist.zip 在执行 start.sh 时解压生成
+public/_app.config.js
+public/assets/
+public/css/
+public/favicon.ico
+public/index.html
+public/js/
+public/jse/
+
 # macOS
 .DS_Store
