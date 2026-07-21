@@ -26,8 +26,10 @@ from schemas.thesis import (
     PaperOutlineRecordResponse,
     PaperPriceResponse,
     TaskStatusResponse,
+    TitleRecommendationRequest,
 )
 from services.thesis.business import order_workflow
+from services.thesis.content.title_service import generate_recommended_titles
 from services.thesis.generation import task_service as generation_task
 from services.thesis.generation.runtime_context import use_runtime_context
 from services.thesis.generation.sse import stream_order_status_events
@@ -47,6 +49,34 @@ def _normalize_idempotency_key(value: str | None) -> str | None:
     if len(key) > MAX_IDEMPOTENCY_KEY_LENGTH:
         raise HTTPException(status_code=400, detail="Idempotency-Key 不能超过 128 个字符")
     return key
+
+
+# 根据用户研究描述推荐二十个论文题目。
+@router.post("/titles/recommend", response_model=Response[list[str]], summary="推荐论文题目")
+async def recommend_paper_titles(
+    req: TitleRecommendationRequest,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> Response[list[str]]:
+    """根据用户描述推荐论文题目。
+
+    Args:
+        req: 用户研究描述。
+        current_user: 当前认证用户。
+
+    Returns:
+        二十个互不重复的论文题目。
+
+    Raises:
+        HTTPException: 模型调用失败或返回格式不符合要求。
+    """
+
+    try:
+        with use_runtime_context(user_id=current_user.id, stage="title_recommendation"):
+            titles = await generate_recommended_titles(req.content)
+    except RuntimeError as exc:
+        logger.exception("论文题目推荐失败")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return Response.ok(data=titles)
 
 
 @router.post("/outline", response_model=OutlineResponse)
@@ -134,7 +164,9 @@ async def create_paper_order(
 ) -> Response[PaperOrderCreateResponse]:
     """创建待支付论文订单。"""
 
-    return Response.ok(data=await order_workflow.create_order(current_user, req, _normalize_idempotency_key(idempotency_key)))
+    return Response.ok(
+        data=await order_workflow.create_order(current_user, req, _normalize_idempotency_key(idempotency_key))
+    )
 
 
 @router.post("/orders/pay", response_model=Response[PaperOrderPayResponse], summary="论文订单积分支付")

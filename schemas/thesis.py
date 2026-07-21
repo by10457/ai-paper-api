@@ -1,14 +1,33 @@
 import json
 import logging
 import re
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
 logger = logging.getLogger(__name__)
 
 # 匹配 <<FIGURE>> ... <</FIGURE>> 占位块，支持跨行内容。
 FIGURE_BLOCK_PATTERN = re.compile(r"<<FIGURE>>\s*(.*?)\s*<</FIGURE>>", re.DOTALL)
+
+# 用户研究描述在去除首尾空白后必须包含足够的选题信息。
+TitleRecommendationContent = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=5000)]
+# 单个论文题目的接口长度边界。
+RecommendedTitle = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=100)]
+
+
+class TitleRecommendationRequest(BaseModel):
+    """论文题目推荐请求。"""
+
+    content: TitleRecommendationContent = Field(description="研究方向、背景、对象、问题或需求描述")
+
+
+class TitleRecommendationPayload(BaseModel):
+    """大模型返回的论文题目推荐载荷。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    titles: list[RecommendedTitle] = Field(min_length=20, max_length=20)
 
 
 class OutlineRequest(BaseModel):
