@@ -4,10 +4,17 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$PROJECT_DIR"
 
+if [ -z "${ENV_FILE:-}" ]; then
+  if [ -f "$PROJECT_DIR/.env.docker" ]; then
+    ENV_FILE=".env.docker"
+  else
+    ENV_FILE=".env"
+  fi
+fi
+
 APP_ROLE="${APP_ROLE:-auto}"
 IMAGE_NAME="${IMAGE_NAME:-ai-paper-api:latest}"
 RUNTIME_BASE_IMAGE="${RUNTIME_BASE_IMAGE:-localhost/ai-paper-api:runtime-base}"
-ENV_FILE="${ENV_FILE:-.env}"
 HOST_PORT="${HOST_PORT:-}"
 CONTAINER_PORT="${CONTAINER_PORT:-}"
 HOST_LOG_DIR="${HOST_LOG_DIR:-logs}"
@@ -62,7 +69,8 @@ Optional environment variables:
                     auto: APP_DEBUG=true or SCHEDULER_ENABLED=false starts api only;
                     otherwise starts api+scheduler.
   CONTAINER_NAME    Docker container name (default: ai-paper-api or ai-paper-api-scheduler)
-  ENV_FILE          Env file path passed to docker run (default: .env)
+  ENV_FILE          Env file path passed to docker run
+                    (default: .env.docker when present, otherwise .env)
   HOST_PORT         Host port exposed outside Docker (default: APP_PORT in env file, fallback 10462)
   CONTAINER_PORT    Container listening port (default: APP_PORT in env file, fallback 10462)
   HOST_LOG_DIR      Host log directory to mount (default: ./logs)
@@ -366,6 +374,7 @@ esac
 
 [ -f "$ENV_FILE" ] || fail "Env file not found: $ENV_FILE"
 [ -f Dockerfile ] || fail "Dockerfile not found in $PROJECT_DIR"
+log "Using env file: $ENV_FILE"
 
 sanitize_env_file
 
