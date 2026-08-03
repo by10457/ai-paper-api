@@ -6,7 +6,7 @@
 
 ### 直连接口
 
-适合 `/home/by/wxy/wxy-server` 等业务系统直接调用。
+适合 `/home/by/wxy/edu-sys-server` 等业务系统直接调用。
 
 流程：
 

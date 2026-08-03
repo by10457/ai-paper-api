@@ -2,7 +2,7 @@
 
 AI Paper API 是一个自研论文生成服务，核心目标是替代不稳定的第三方论文 API，并作为独立服务同时支撑：
 
-- `/home/by/wxy/wxy-server` 等业务后端通过 Token 调用论文生成能力。
+- `/home/by/wxy/edu-sys-server` 等业务后端通过 Token 调用论文生成能力。
 - `/home/by/wxy/ai-paper-web` 管理后台维护用户、积分、订单、模型配置和生成日志。
 - 前端用户通过 Web 页面生成大纲、确认大纲、扣积分并生成 Word 论文。
 
