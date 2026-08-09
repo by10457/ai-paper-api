@@ -18,7 +18,12 @@ from services.writing.generation import (
     _build_schedule,
     _validate_result,
 )
-from services.writing.llm_service import _trim_to_complete_sentences, repair_length_constraints
+from services.writing.llm_service import (
+    LITERATURE_BODY_LENGTH,
+    _literature_body_length,
+    _trim_to_complete_sentences,
+    repair_length_constraints,
+)
 from services.writing.reference_service import (
     _merge_records,
     _select_records,
@@ -138,6 +143,36 @@ def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
     assert len(calls) == 1
     assert len(result["research_purpose"]) == 850
     assert len(result["research_status_and_trends"]) == 1600
+
+
+def test_literature_total_length_is_trimmed_without_regenerating_sections(monkeypatch) -> None:
+    async def unexpected_llm_call(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("完整句裁剪足够时不应调用模型")
+
+    def fixed_length_sentence(prefix: str, fill: str, length: int) -> str:
+        return prefix + fill * (length - len(prefix) - 1) + "。"
+
+    monkeypatch.setattr("services.writing.llm_service._ask_text", unexpected_llm_call)
+    theme = "".join(
+        [fixed_length_sentence("已有做法、观点、优势、不足和小结[1]", "甲", 100)]
+        + [fixed_length_sentence("比较分析", "乙", 100) for _ in range(6)]
+    )
+    result = {
+        "abstract": fixed_length_sentence("摘要", "甲", 300),
+        "introduction": fixed_length_sentence("引言", "甲", 600),
+        "domestic_research": fixed_length_sentence("国内研究", "甲", 800),
+        "foreign_research": fixed_length_sentence("国外研究", "甲", 800),
+        "themes": [{"title": f"主题{index}", "content": theme} for index in range(5)],
+        "method_comparison": fixed_length_sentence("方法比较", "甲", 700),
+        "research_gaps": fixed_length_sentence("研究不足", "甲", 500),
+        "future_trends": fixed_length_sentence("未来趋势", "甲", 500),
+        "conclusion": fixed_length_sentence("结论", "甲", 450),
+    }
+
+    asyncio.run(repair_length_constraints("literature_review", {"title": "测试课题"}, result))
+
+    assert _literature_body_length(result) <= LITERATURE_BODY_LENGTH[1]
+    assert all(500 <= len(item["content"]) <= 700 for item in result["themes"])
 
 
 def test_sentence_trim_preserves_citations_and_required_topics() -> None:

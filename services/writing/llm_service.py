@@ -34,6 +34,16 @@ WRITING_LENGTH_CONSTRAINTS: dict[str, dict[str, tuple[int, int]]] = {
 
 LITERATURE_THEME_LENGTH = (500, 700)
 LITERATURE_BODY_LENGTH = (5500, 7500)
+LITERATURE_BODY_FIELDS = (
+    "abstract",
+    "introduction",
+    "domestic_research",
+    "foreign_research",
+    "method_comparison",
+    "research_gaps",
+    "future_trends",
+    "conclusion",
+)
 
 _FIELD_REQUIREMENTS = {
     "research_purpose": "涵盖行业背景、现实问题、技术背景、研究必要性、应用价值和研究目标。",
@@ -174,6 +184,70 @@ async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# 收敛文献综述总篇幅，优先裁剪主题而不重做已通过章节
+async def _repair_literature_body_length(request: dict[str, Any], result: dict[str, Any]) -> None:
+    """将文献综述正文收敛到总字数上限。
+
+    Args:
+        request: 原始写作请求，用于局部模型修复时保留课题上下文。
+        result: 已通过字段级校验的结构化综述结果。
+
+    Returns:
+        None。仅在总字数超长时更新主题内容，不改变其它章节。
+    """
+
+    body_length = _literature_body_length(result)
+    if body_length <= LITERATURE_BODY_LENGTH[1]:
+        return
+    themes = result.get("themes")
+    if not isinstance(themes, list):
+        raise RuntimeError("文献综述主题结构不合法")
+
+    remaining = body_length - LITERATURE_BODY_LENGTH[1]
+    for index, theme in enumerate(themes):
+        if remaining <= 0 or not isinstance(theme, dict):
+            continue
+        content = str(theme.get("content") or "").strip()
+        current_length = text_length(content)
+        minimum, _ = LITERATURE_THEME_LENGTH
+        target_maximum = max(minimum, current_length - remaining)
+        trimmed = _trim_to_complete_sentences(content, "theme_content", minimum, target_maximum)
+        if trimmed == content and current_length > target_maximum:
+            trimmed = await _repair_length_value(
+                "theme_content",
+                content,
+                minimum,
+                target_maximum,
+                request,
+                result,
+                field_label=f"themes[{index}].content",
+            )
+        theme["content"] = trimmed
+        remaining -= current_length - text_length(trimmed)
+
+
+# 统计文献综述的可验收正文长度
+def _literature_body_length(result: dict[str, Any]) -> int:
+    """统计文献综述正文长度。
+
+    Args:
+        result: 结构化文献综述结果。
+
+    Returns:
+        不包含关键词和参考文献的正文非空白字符数。
+    """
+
+    total = sum(text_length(str(result.get(field) or "")) for field in LITERATURE_BODY_FIELDS)
+    themes = result.get("themes")
+    if isinstance(themes, list):
+        total += sum(
+            text_length(str(theme.get("content") or ""))
+            for theme in themes
+            if isinstance(theme, dict)
+        )
+    return total
+
+
 async def repair_length_constraints(
     document_type: str,
     request: dict[str, Any],
@@ -206,6 +280,7 @@ async def repair_length_constraints(
                 result,
                 field_label=f"themes[{index}].content",
             )
+        await _repair_literature_body_length(request, result)
 
 
 async def _repair_length_value(
