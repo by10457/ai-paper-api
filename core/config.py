@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me-in-production"
     DEFAULT_USER_POINTS: int = 0
     PAPER_GENERATE_POINTS: int = 200
+    PROPOSAL_REPORT_POINTS: int = 20
+    LITERATURE_REVIEW_POINTS: int = 20
+    TASK_BOOK_POINTS: int = 20
 
     # ── MySQL ─────────────────────────────────────────────
     MYSQL_HOST: str = "127.0.0.1"
@@ -76,6 +79,7 @@ class Settings(BaseSettings):
 
     # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
+    WRITING_OUTPUT_ROOT: str = "public/output/writing"
     PUBLIC_BASE_URL: str = ""
     PUPPETEER_EXECUTABLE_PATH: str = ""
     TEXT_LONG_CONCURRENCY: int = Field(default=16, ge=1)

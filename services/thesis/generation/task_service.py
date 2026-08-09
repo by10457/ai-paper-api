@@ -143,6 +143,9 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
     order = await PaperOrder.filter(id=generation_task.order_id).first()
     if order is None:
         raise RuntimeError("论文订单不存在")
+    if generation_task.document_type != "thesis":
+        await _run_writing_generation_task(generation_task, order)
+        return
     normalized = PaperOrderService.normalize_generate_input(order)
     if not normalized.outline_json:
         raise RuntimeError("大纲不能为空")
@@ -177,6 +180,42 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
         callback_secret=order.callback_secret or "",
         enable_callback=bool(order.callback_url),
     )
+
+
+async def _run_writing_generation_task(generation_task: PaperGenerationTask, order: Any) -> None:
+    """执行开题报告、文献综述或任务书生成任务。"""
+
+    from services.writing.generation import generate_writing_document
+
+    request_payload = order.config_form if isinstance(order.config_form, dict) else {}
+    order.status = "generating"
+    order.task_id = generation_task.task_id
+    order.started_at = generation_task.started_at
+    order.last_error = ""
+    await order.save(update_fields=["status", "task_id", "started_at", "last_error", "updated_at"])
+    try:
+        result = await generate_writing_document(
+            task_id=generation_task.task_id,
+            document_type=generation_task.document_type,
+            request_payload=request_payload,
+        )
+        await _mark_generation_completed(
+            generation_task.task_id,
+            result,
+            generation_task.id,
+            order.callback_url or "",
+            order.callback_secret or "",
+            bool(order.callback_url),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await _mark_generation_failed(
+            generation_task.task_id,
+            exc,
+            generation_task.id,
+            order.callback_url or "",
+            order.callback_secret or "",
+            bool(order.callback_url),
+        )
 
 
 def get_task_status(task_id: str) -> TaskStatusResponse:
@@ -313,12 +352,23 @@ async def _mark_generation_completed(
     from services.thesis.storage.document_storage import store_document
 
     docx_path = str(_result_value(result, "docx_path", ""))
-    await publish_progress(task_id, "storage", "正在保存论文文件")
+    document_type = str(_result_value(result, "document_type", ""))
+    is_academic_writing = document_type in {"proposal_report", "literature_review", "task_book"}
+    document_label = {
+        "proposal_report": "开题报告",
+        "literature_review": "文献综述",
+        "task_book": "任务书",
+    }.get(document_type, "论文")
+    await publish_progress(
+        task_id,
+        "uploading" if is_academic_writing else "storage",
+        f"正在保存{document_label}文件",
+    )
     stored = await store_document(docx_path, task_id)
     await publish_progress(
         task_id,
         "completed",
-        "论文生成完成",
+        f"{document_label}生成完成",
         status="completed",
         storage_provider=stored.storage_provider,
         file_key=stored.file_key,
@@ -333,6 +383,7 @@ async def _mark_generation_completed(
         fallback_count=_result_value(result, "fallback_count", 0),
         fulltext_char_count=_result_value(result, "fulltext_char_count", 0),
         truncation_warning=_result_value(result, "truncation_warning", False),
+        result_data=_result_value(result, "result_data", None),
     )
     if generation_task_id is not None:
         status_data = await status_store.read_status_async(task_id)

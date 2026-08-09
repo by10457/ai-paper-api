@@ -34,6 +34,7 @@ class PaperOrder(BaseModel):
         description="大纲记录",
     )
     order_sn = fields.CharField(max_length=64, unique=True, description="论文订单号")
+    document_type = fields.CharField(max_length=32, default="thesis", description="文档类型")
     idempotency_key = fields.CharField(max_length=128, null=True, description="请求幂等键")
     title = fields.CharField(max_length=200, description="论文标题")
     outline_json = fields.JSONField(description="用户确认后的大纲")
@@ -79,6 +80,7 @@ class PaperGenerationTask(BaseModel):
     )
     idempotency_key = fields.CharField(max_length=128, null=True, description="请求幂等键")
     task_id = fields.CharField(max_length=64, unique=True, description="生成任务 ID")
+    document_type = fields.CharField(max_length=32, default="thesis", description="文档类型")
     order_sn = fields.CharField(max_length=64, description="论文订单号")
     title = fields.CharField(max_length=200, description="论文标题")
     status = fields.CharField(max_length=32, default="paid", description="任务状态")
@@ -87,6 +89,7 @@ class PaperGenerationTask(BaseModel):
     process_events = fields.JSONField(null=True, description="论文生成过程事件")
     process_metadata = fields.JSONField(null=True, description="论文生成过程关键数据")
     result_summary = fields.JSONField(null=True, description="论文生成结果摘要")
+    result_data = fields.JSONField(null=True, description="结构化文档生成结果")
     storage_provider = fields.CharField(max_length=32, null=True, description="主存储类型")
     file_key = fields.CharField(max_length=512, null=True, description="主存储文件 key")
     local_file_key = fields.CharField(max_length=512, null=True, description="本地兜底文件 key")

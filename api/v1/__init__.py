@@ -7,12 +7,14 @@ from api.v1.auth import router as auth_router
 from api.v1.health import router as health_router
 from api.v1.thesis import router as thesis_router
 from api.v1.user import router as user_router
+from api.v1.writing import router as writing_router
 
 ROUTE_REGISTRY: tuple[tuple[APIRouter, str, tuple[str, ...]], ...] = (
     (health_router, "/health", ("健康检查",)),
     (auth_router, "/auth", ("认证",)),
     (user_router, "/users", ("用户",)),
     (thesis_router, "", ()),
+    (writing_router, "", ()),
     (admin_router, "", ()),
 )
 

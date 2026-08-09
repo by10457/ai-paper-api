@@ -173,7 +173,7 @@ class PaperOrderService:
 
     @staticmethod
     async def create_order_generation_task(order_id: int) -> PaperGenerationTask:
-        """为已支付论文订单创建生成过程任务。"""
+        """为已支付订单创建生成过程任务，并保留产品类型。"""
 
         async with in_transaction() as conn:
             order = await PaperOrder.filter(id=order_id).using_db(conn).select_for_update().first()
@@ -194,6 +194,7 @@ class PaperOrderService:
                 user_id=order.user_id,
                 order=order,
                 task_id=task_id,
+                document_type=order.document_type,
                 order_sn=order.order_sn,
                 title=order.title,
                 status="paid",
@@ -213,6 +214,8 @@ class PaperOrderService:
         title: str,
         request_payload: dict[str, Any],
         idempotency_key: str | None,
+        document_type: str = "thesis",
+        cost_points: int | None = None,
     ) -> tuple[PaperGenerationTask, bool]:
         """创建接口直连论文订单并扣积分，返回生成任务和是否需要启动生成。"""
 
@@ -231,22 +234,24 @@ class PaperOrderService:
                     if existing_task is not None:
                         return existing_task, existing_task.status == "paid"
 
-            if locked_user.points < settings.PAPER_GENERATE_POINTS:
+            resolved_cost_points = settings.PAPER_GENERATE_POINTS if cost_points is None else cost_points
+            if locked_user.points < resolved_cost_points:
                 raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail="积分余额不足")
 
-            locked_user.points -= settings.PAPER_GENERATE_POINTS
+            locked_user.points -= resolved_cost_points
             await locked_user.save(using_db=conn, update_fields=["points", "updated_at"])
             order = await PaperOrder.create(
                 using_db=conn,
                 user=locked_user,
                 outline_record=None,
                 order_sn=PaperOrderService._generate_order_sn(),
+                document_type=document_type,
                 idempotency_key=idempotency_key,
                 title=title,
                 outline_json=request_payload.get("outline_json") or [],
                 config_form=request_payload,
-                cost_points=settings.PAPER_GENERATE_POINTS,
-                paid_points=settings.PAPER_GENERATE_POINTS,
+                cost_points=resolved_cost_points,
+                paid_points=resolved_cost_points,
                 status="paid",
                 callback_url=str(request_payload.get("callback_url") or settings.paper_callback_url or "") or None,
                 callback_secret=str(request_payload.get("callback_secret") or settings.paper_callback_secret or "") or None,
@@ -258,6 +263,7 @@ class PaperOrderService:
                 order=order,
                 idempotency_key=idempotency_key,
                 task_id=task_id,
+                document_type=document_type,
                 order_sn=order.order_sn,
                 title=title,
                 status="paid",
@@ -270,11 +276,16 @@ class PaperOrderService:
                 using_db=conn,
                 user=locked_user,
                 order=order,
-                change_type="paper_api_deduct",
-                delta=-settings.PAPER_GENERATE_POINTS,
+                change_type="writing_api_deduct" if document_type != "thesis" else "paper_api_deduct",
+                delta=-resolved_cost_points,
                 balance_after=locked_user.points,
-                reason=f"论文订单 {order.order_sn} 接口调用积分支付",
-                metadata={"task_id": task_id, "title": title, "idempotency_key": idempotency_key},
+                reason=f"AI写作订单 {order.order_sn} 接口调用积分支付",
+                metadata={
+                    "task_id": task_id,
+                    "title": title,
+                    "document_type": document_type,
+                    "idempotency_key": idempotency_key,
+                },
             )
 
         await user.refresh_from_db()
@@ -340,6 +351,10 @@ class PaperOrderService:
             generation_task.local_file_key = str(data.get("local_file_key") or "")
             generation_task.completed_at = timezone.now()
             generation_task.last_error = ""
+            generation_task.current_stage = str(data.get("stage") or "completed")
+            generation_task.progress = int(data.get("progress") or 100)
+            result_data = data.get("result_data")
+            generation_task.result_data = result_data if isinstance(result_data, dict) else {}
             await generation_task.save(
                 update_fields=[
                     "status",
@@ -348,6 +363,9 @@ class PaperOrderService:
                     "local_file_key",
                     "completed_at",
                     "last_error",
+                    "current_stage",
+                    "progress",
+                    "result_data",
                     "updated_at",
                 ]
             )
