@@ -1,4 +1,5 @@
 import asyncio
+import zipfile
 from pathlib import Path
 
 from docx import Document
@@ -261,5 +262,16 @@ def test_build_three_document_types(tmp_path: Path) -> None:
         )
         paths.append(path)
     assert all(path.exists() for path in paths)
+    for path in paths:
+        with zipfile.ZipFile(path) as package:
+            package_xml = "\n".join(
+                package.read(name).decode("utf-8")
+                for name in ("word/document.xml", "word/styles.xml")
+            )
+        assert "STHeiti" not in package_xml
+        assert 'w:ascii="Times New Roman"' in package_xml
+        assert 'w:hAnsi="Times New Roman"' in package_xml
+        assert 'w:eastAsia="宋体"' in package_xml
+        assert 'w:eastAsia="黑体"' in package_xml
     assert "指导教师意见" in "\n".join(cell.text for table in Document(paths[0]).tables for row in table.rows for cell in row.cells)
     assert "审核意见" in "\n".join(cell.text for table in Document(paths[2]).tables for row in table.rows for cell in row.cells)

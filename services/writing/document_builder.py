@@ -15,10 +15,11 @@ from docx.shared import Cm, Pt
 
 from schemas.writing import ReferenceRecord
 
-# Use a macOS CJK family that is available in Word and the local renderer;
-# users can still substitute their school's required Song/Hei font in Word.
-FONT_CN = "STHeiti"
-FONT_HEADING = "STHeiti"
+# Match the supplied school templates: Chinese body text uses Songti, headings
+# use Heiti, and Latin characters/numbers use Times New Roman.
+FONT_CN = "宋体"
+FONT_HEADING = "黑体"
+FONT_LATIN = "Times New Roman"
 
 
 def build_writing_document(
@@ -55,17 +56,17 @@ def _new_document() -> DocumentObject:
     section.left_margin = Cm(2.5)
     section.right_margin = Cm(2.5)
     normal = doc.styles["Normal"]
-    normal.font.name = FONT_CN
+    normal.font.name = FONT_LATIN
     normal.font.size = Pt(12)
-    normal._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_CN)
+    _set_font_mapping(normal._element.get_or_add_rPr(), FONT_CN)
     normal.paragraph_format.line_spacing_rule = WD_LINE_SPACING.ONE_POINT_FIVE
     normal.paragraph_format.space_after = Pt(0)
     for style_name, size in (("Heading 1", 16), ("Heading 2", 14), ("Heading 3", 12)):
         style = doc.styles[style_name]
-        style.font.name = FONT_HEADING
+        style.font.name = FONT_LATIN
         style.font.size = Pt(size)
         style.font.bold = True
-        style._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_HEADING)
+        _set_font_mapping(style._element.get_or_add_rPr(), FONT_HEADING)
     return doc
 
 
@@ -309,10 +310,23 @@ def _replace_cell_text(cell: Any, text: str, *, bold: bool = False) -> None:
 
 
 def _format_run(run: Any, size: float, *, bold: bool = False, font: str = FONT_CN) -> None:
-    run.font.name = font
+    run.font.name = FONT_LATIN
     run.font.size = Pt(size)
     run.bold = bold
-    run._element.rPr.rFonts.set(qn("w:eastAsia"), font)
+    _set_font_mapping(run._element.get_or_add_rPr(), font)
+
+
+def _set_font_mapping(rpr: Any, east_asia: str) -> None:
+    """Write explicit Word font slots so CJK and Latin text are stable."""
+
+    r_fonts = rpr.rFonts
+    if r_fonts is None:
+        r_fonts = OxmlElement("w:rFonts")
+        rpr.insert(0, r_fonts)
+    r_fonts.set(qn("w:ascii"), FONT_LATIN)
+    r_fonts.set(qn("w:hAnsi"), FONT_LATIN)
+    r_fonts.set(qn("w:cs"), FONT_LATIN)
+    r_fonts.set(qn("w:eastAsia"), east_asia)
 
 
 def _set_cell_margin(cell: Any, value: int) -> None:
