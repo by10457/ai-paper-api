@@ -51,10 +51,14 @@ class PaperOrderService:
         if idempotency_key:
             async with in_transaction() as conn:
                 await User.filter(id=user.id).using_db(conn).select_for_update().first()
-                existing_order = await PaperOrder.filter(
-                    user_id=user.id,
-                    idempotency_key=idempotency_key,
-                ).using_db(conn).first()
+                existing_order = (
+                    await PaperOrder.filter(
+                        user_id=user.id,
+                        idempotency_key=idempotency_key,
+                    )
+                    .using_db(conn)
+                    .first()
+                )
                 if existing_order is not None:
                     return existing_order
 
@@ -85,7 +89,7 @@ class PaperOrderService:
             "order_sn": PaperOrderService._generate_order_sn(),
             "idempotency_key": idempotency_key,
             "title": outline_record.title,
-            "outline_json": req.outline,
+            "outline_json": [chapter.model_dump(mode="json") for chapter in req.outline],
             "config_form": outline_record.request_payload,
             "template_id": req.template_id,
             "selftemp": req.selftemp,
@@ -114,10 +118,7 @@ class PaperOrderService:
 
         async with in_transaction() as conn:
             locked_order = (
-                await PaperOrder.filter(id=order.id, user_id=user.id)
-                .using_db(conn)
-                .select_for_update()
-                .first()
+                await PaperOrder.filter(id=order.id, user_id=user.id).using_db(conn).select_for_update().first()
             )
             if locked_order is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="论文订单不存在")
@@ -225,12 +226,22 @@ class PaperOrderService:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
 
             if idempotency_key:
-                existing_order = await PaperOrder.filter(
-                    user_id=user.id,
-                    idempotency_key=idempotency_key,
-                ).using_db(conn).select_for_update().first()
+                existing_order = (
+                    await PaperOrder.filter(
+                        user_id=user.id,
+                        idempotency_key=idempotency_key,
+                    )
+                    .using_db(conn)
+                    .select_for_update()
+                    .first()
+                )
                 if existing_order is not None:
-                    existing_task = await PaperGenerationTask.filter(order_id=existing_order.id).using_db(conn).order_by("-id").first()
+                    existing_task = (
+                        await PaperGenerationTask.filter(order_id=existing_order.id)
+                        .using_db(conn)
+                        .order_by("-id")
+                        .first()
+                    )
                     if existing_task is not None:
                         return existing_task, existing_task.status == "paid"
 
@@ -254,7 +265,8 @@ class PaperOrderService:
                 paid_points=resolved_cost_points,
                 status="paid",
                 callback_url=str(request_payload.get("callback_url") or settings.paper_callback_url or "") or None,
-                callback_secret=str(request_payload.get("callback_secret") or settings.paper_callback_secret or "") or None,
+                callback_secret=str(request_payload.get("callback_secret") or settings.paper_callback_secret or "")
+                or None,
                 paid_at=timezone.now(),
             )
             generation_task = await PaperGenerationTask.create(
@@ -319,7 +331,9 @@ class PaperOrderService:
         """把接口直连已扣费任务切换到生成中；已被其它任务启动时返回 None。"""
 
         async with in_transaction() as conn:
-            generation_task = await PaperGenerationTask.filter(id=generation_task_id).using_db(conn).select_for_update().first()
+            generation_task = (
+                await PaperGenerationTask.filter(id=generation_task_id).using_db(conn).select_for_update().first()
+            )
             if generation_task is None or generation_task.status != "paid":
                 return None
             if generation_task.next_retry_at and generation_task.next_retry_at > timezone.now():

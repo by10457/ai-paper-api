@@ -11,6 +11,7 @@ from app import app
 from models.paper import PaperOrder
 from services.thesis.business import order_workflow
 from services.thesis.business.order_service import PaperOrderService
+from services.thesis.generation.task_service import json_outline_to_markdown
 from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url
 
 
@@ -112,6 +113,34 @@ def test_paper_order_create_passes_idempotency_key(client: TestClient, monkeypat
     assert response.status_code == 200
     assert response.json()["data"]["order_sn"] == "AP001"
     assert captured_keys == ["wxy-paper-order-1"]
+
+
+def test_json_outline_to_markdown_numbers_all_heading_levels() -> None:
+    """确认用户大纲转换后与正文提示词的标题层级一致。"""
+
+    outline = PaperOrderService._normalize_outline(
+        [
+            {
+                "chapter": "绪论",
+                "sections": [
+                    {"name": "研究背景", "abstract": "说明研究背景。"},
+                    {"name": "研究意义", "abstract": "说明研究意义。"},
+                ],
+            },
+            {
+                "chapter": "总结与展望",
+                "sections": [{"name": "研究总结", "abstract": "总结全文。"}],
+            },
+        ]
+    )
+
+    markdown = json_outline_to_markdown(outline)
+
+    assert "# 1 绪论" in markdown
+    assert "## 1.1 研究背景" in markdown
+    assert "## 1.2 研究意义" in markdown
+    assert "# 2 总结与展望" in markdown
+    assert "## 2.1 研究总结" in markdown
 
 
 def test_qiniu_private_download_url_uses_configured_domain(

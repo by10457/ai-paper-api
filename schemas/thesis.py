@@ -53,6 +53,8 @@ class OutlineSection(BaseModel):
     @model_validator(mode="after")
     def normalize_name(self) -> "OutlineSection":
         self.name = re.sub(r"^\s*\d+(?:\.\d+)*[\.\s、-]*", "", self.name).strip()
+        if not self.name:
+            raise ValueError("小节标题不能为空")
         return self
 
 
@@ -60,12 +62,14 @@ class OutlineChapter(BaseModel):
     """论文大纲章节。"""
 
     chapter: str
-    sections: list[OutlineSection]
+    sections: list[OutlineSection] = Field(min_length=1)
 
     @model_validator(mode="after")
     def normalize_chapter(self) -> "OutlineChapter":
         self.chapter = re.sub(r"^\s*第[一二三四五六七八九十百零\d]+章[\s、:：.-]*", "", self.chapter).strip()
         self.chapter = re.sub(r"^\s*\d+[\.\s、-]*", "", self.chapter).strip()
+        if not self.chapter:
+            raise ValueError("章节标题不能为空")
         return self
 
 
@@ -138,6 +142,7 @@ class TaskStatusResponse(BaseModel):
     ai_image_count: int = Field(default=0, ge=0)
     fallback_count: int = Field(default=0, ge=0)
     fulltext_char_count: int = Field(default=0, ge=0)
+    fulltext_word_count: int = Field(default=0, ge=0, description="按 Word/WPS 口径估算的正文有效字数")
     truncation_warning: bool = False
     docx_path: str = Field(default="")
 
@@ -157,7 +162,7 @@ class PaperOrderCreateRequest(BaseModel):
     """基于大纲记录创建论文订单。"""
 
     record_id: int
-    outline: list[dict[str, Any]]
+    outline: list[OutlineChapter] = Field(min_length=1)
     template_id: int | None = None
     selftemp: int | None = None
     service_ids: list[int] = Field(default_factory=list)
@@ -225,6 +230,9 @@ class PaperOrderStatusResponse(BaseModel):
     stage: str | None = None
     progress: int = 0
     events: list[dict[str, Any]] = Field(default_factory=list)
+    fulltext_char_count: int = Field(default=0, ge=0)
+    fulltext_word_count: int = Field(default=0, ge=0, description="按 Word/WPS 口径估算的正文有效字数")
+    truncation_warning: bool = False
 
 
 class PaperOrderDownloadUrlResponse(BaseModel):

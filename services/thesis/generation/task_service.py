@@ -62,10 +62,10 @@ def json_outline_to_markdown(outline: list[OutlineChapter]) -> str:
     """将结构化大纲转换为正文生成服务需要的 Markdown。"""
 
     lines: list[str] = []
-    for chapter in outline:
-        lines.append(f"## {chapter.chapter}")
-        for section in chapter.sections:
-            lines.append(f"### {section.name}")
+    for chapter_index, chapter in enumerate(outline, start=1):
+        lines.append(f"# {chapter_index} {chapter.chapter}")
+        for section_index, section in enumerate(chapter.sections, start=1):
+            lines.append(f"## {chapter_index}.{section_index} {section.name}")
             if section.abstract:
                 lines.append(section.abstract.strip())
         lines.append("")
@@ -105,10 +105,10 @@ async def submit_generate_request(
         request_payload=req.model_dump(mode="json"),
         idempotency_key=idempotency_key,
     )
-    if (
-        await status_store.read_status_async(generation_task.task_id) is None
-        and generation_task.status in {"paid", "generating"}
-    ):
+    if await status_store.read_status_async(generation_task.task_id) is None and generation_task.status in {
+        "paid",
+        "generating",
+    }:
         await publish_progress(generation_task.task_id, "queued", "论文生成任务已进入队列")
     if should_start:
         await enqueue_generation_task(generation_task.id)
@@ -329,7 +329,8 @@ def _generation_task_status_response(generation_task: PaperGenerationTask) -> Ta
     return TaskStatusResponse(
         task_id=generation_task.task_id,
         status=cast(Any, status),
-        message=generation_task.last_error or ("论文生成完成" if generation_task.status == "completed" else "正在生成论文..."),
+        message=generation_task.last_error
+        or ("论文生成完成" if generation_task.status == "completed" else "正在生成论文..."),
         stage=generation_task.current_stage or "",
         progress=generation_task.progress,
         events=cast(list[dict[str, Any]], generation_task.process_events or []),
@@ -382,6 +383,7 @@ async def _mark_generation_completed(
         ai_image_count=_result_value(result, "ai_image_count", 0),
         fallback_count=_result_value(result, "fallback_count", 0),
         fulltext_char_count=_result_value(result, "fulltext_char_count", 0),
+        fulltext_word_count=_result_value(result, "fulltext_word_count", 0),
         truncation_warning=_result_value(result, "truncation_warning", False),
         result_data=_result_value(result, "result_data", None),
     )

@@ -2,7 +2,7 @@ from typing import Any
 
 import httpx
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from llm.client import GeminiGenerateContentChatModel, LLMProviderConfigError, LLMProviderQuotaError
 
@@ -19,7 +19,19 @@ async def test_gemini_generate_content_model_uses_async_request(
     ) -> dict[str, Any]:
         del self
         captured_payload.update(payload)
-        return {"candidates": [{"content": {"parts": [{"text": "异步响应"}]}}]}
+        return {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "异步响应"}]},
+                    "finishReason": "MAX_TOKENS",
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 12,
+                "candidatesTokenCount": 34,
+                "totalTokenCount": 46,
+            },
+        }
 
     monkeypatch.setattr(GeminiGenerateContentChatModel, "_arequest_generate_content", fake_request)
 
@@ -38,7 +50,15 @@ async def test_gemini_generate_content_model_uses_async_request(
         stop=["END"],
     )
 
-    assert result.generations[0].message.content == "异步响应"
+    message = result.generations[0].message
+    assert isinstance(message, AIMessage)
+    assert message.content == "异步响应"
+    assert message.response_metadata["finish_reason"] == "MAX_TOKENS"
+    assert message.usage_metadata == {
+        "input_tokens": 12,
+        "output_tokens": 34,
+        "total_tokens": 46,
+    }
     assert captured_payload["systemInstruction"]["parts"][0]["text"] == "你是论文助手"
     assert captured_payload["contents"] == [{"role": "user", "parts": [{"text": "生成摘要"}]}]
     assert captured_payload["generationConfig"] == {

@@ -79,6 +79,8 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
     assert "to_thread" in calls
     assert ("build", references_text) in calls
     assert result.docx_path == "/tmp/fake.docx"
+    assert result.fulltext_char_count > result.fulltext_word_count > 0
+    assert result.truncation_warning is True
 
 
 def test_generate_thesis_document_degrades_when_references_fail(monkeypatch) -> None:

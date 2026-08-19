@@ -213,6 +213,9 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         stage=str(status_data.get("stage") or "") if status_data else None,
         progress=int(status_data.get("progress") or (100 if order.status == "completed" else 0)) if status_data else 0,
         events=status_data.get("events", []) if status_data else [],
+        fulltext_char_count=int(status_data.get("fulltext_char_count") or 0) if status_data else 0,
+        fulltext_word_count=int(status_data.get("fulltext_word_count") or 0) if status_data else 0,
+        truncation_warning=bool(status_data.get("truncation_warning")) if status_data else False,
     )
 
 

@@ -28,7 +28,13 @@ from services.thesis.document.sections import (
     _setup_front_matter_section,
 )
 from services.thesis.document.styles import _init_styles, _setup_page
-from services.thesis.document.toc import FIGURE_BLOCK_PATTERN, _add_bookmark, _add_toc_page, _pre_scan_headings
+from services.thesis.document.toc import (
+    FIGURE_BLOCK_PATTERN,
+    _add_bookmark,
+    _add_toc_page,
+    _parse_markdown_heading,
+    _pre_scan_headings,
+)
 
 
 def build_word_document(
@@ -101,6 +107,7 @@ def build_word_document(
     # 目录条目迭代器，用于在正文标题上打 bookmark
     _toc_iter = iter(toc_entries)
     _next_toc = next(_toc_iter, None)
+    is_code_block = False
 
     for segment in segments:
         lines = [line.strip() for line in segment.strip().split("\n")]
@@ -108,7 +115,20 @@ def build_word_document(
         while i < len(lines):
             line = lines[i]
 
+            if line.startswith("```"):
+                is_code_block = not is_code_block
+                i += 1
+                continue
+
             if not line:
+                i += 1
+                continue
+
+            if is_code_block:
+                paragraph = document.add_paragraph()
+                paragraph.paragraph_format.first_line_indent = Pt(0)
+                run = paragraph.add_run(line)
+                _set_run_font(run, zh_font="宋体", en_font="Consolas", size_pt=9)
                 i += 1
                 continue
 
@@ -134,29 +154,14 @@ def build_word_document(
                 i += 1
                 continue
 
-            if line.startswith("### "):
-                heading_text = line[4:]
-                paragraph = document.add_heading(heading_text, level=3)
+            heading = _parse_markdown_heading(line)
+            if heading is not None:
+                heading_level, heading_text = heading
+                paragraph = document.add_heading(heading_text, level=heading_level)
                 paragraph.paragraph_format.first_line_indent = Pt(0)
-                if _next_toc and _next_toc["text"] == heading_text.strip() and _next_toc["level"] == 3:
+                if _next_toc and _next_toc["text"] == heading_text.strip() and _next_toc["level"] == heading_level:
                     _add_bookmark(paragraph, str(_next_toc["bookmark"]), _toc_int(_next_toc["bookmark_id"]))
                     _next_toc = next(_toc_iter, None)
-            elif line.startswith("## "):
-                heading_text = line[3:]
-                paragraph = document.add_heading(heading_text, level=2)
-                paragraph.paragraph_format.first_line_indent = Pt(0)
-                if _next_toc and _next_toc["text"] == heading_text.strip() and _next_toc["level"] == 2:
-                    _add_bookmark(paragraph, str(_next_toc["bookmark"]), _toc_int(_next_toc["bookmark_id"]))
-                    _next_toc = next(_toc_iter, None)
-            elif line.startswith("# "):
-                heading_text = line[2:]
-                paragraph = document.add_heading(heading_text, level=1)
-                paragraph.paragraph_format.first_line_indent = Pt(0)
-                if _next_toc and _next_toc["text"] == heading_text.strip() and _next_toc["level"] == 1:
-                    _add_bookmark(paragraph, str(_next_toc["bookmark"]), _toc_int(_next_toc["bookmark_id"]))
-                    _next_toc = next(_toc_iter, None)
-            elif line.startswith("```"):
-                pass
             elif line.startswith("- "):
                 paragraph = document.add_paragraph(style="List Bullet")
                 paragraph.paragraph_format.first_line_indent = Pt(0)

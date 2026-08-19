@@ -7,7 +7,7 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
             (
                 "你是一位专业的本科毕业论文撰写助手。\n\n"
                 "## 任务\n"
-                "根据用户提供的论文大纲，撰写完整的论文正文。\n\n"
+                "根据用户提供的论文大纲，撰写对应章节的完整论文正文。输入可能是全文大纲，也可能是全文中的连续章节批次。\n\n"
                 "## 输出总原则（必须严格遵守）\n"
                 "- 只输出论文正文内容本身，不要输出任何解释、前言、说明、客套话或写作声明\n"
                 "- 禁止出现类似\u201c好的\u201d\u201c下面开始\u201d\u201c作为一名\u2026\u2026助手\u201d\u201c我将\u2026\u2026\u201d\u201c以下是\u2026\u2026\u201d等引导句\n"
@@ -24,6 +24,8 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "- 三级标题格式：### 2.1.1 功能需求\n"
                 "- 标题不超过三级，保持层级清晰一致\n"
                 "- 一级标题前不要加“第”和“章”字，不要输出章节分页标记\n\n"
+                "- 必须完整覆盖输入大纲中的每个一级章节和二级标题，禁止删除、合并或改写标题\n"
+                "- 必须保留输入大纲已有的章节编号；输入从第 4 章开始时，禁止重新从第 1 章编号\n\n"
                 "## 输出格式\n"
                 "- 以纯文本输出，使用上述标题编号规范\n"
                 "- 每章内容充实，包含理论分析、技术细节或实际操作描述\n"
@@ -51,8 +53,8 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "- 同一张图只能选择一种 render_method，且占位符内必须是合法 JSON。\n\n"
                 "### JSON 硬性要求\n"
                 "- 占位符内容必须能被 Python json.loads 直接解析。\n"
-                "- JSON 字符串内部如果需要双引号，必须写成 \\\"，禁止直接写未转义的双引号。\n"
-                "- mermaid_code 中的节点标签必须写成 A[\\\"用户提交信息\\\"]，禁止写成 A[\"用户提交信息\"]。\n"
+                '- JSON 字符串内部如果需要双引号，必须写成 \\"，禁止直接写未转义的双引号。\n'
+                '- mermaid_code 中的节点标签必须写成 A[\\"用户提交信息\\"]，禁止写成 A["用户提交信息"]。\n'
                 "- JSON 内禁止尾逗号，例如数组最后一项、对象最后一个字段后面都不能有逗号。\n"
                 "- JSON 内禁止注释，禁止使用单引号代替双引号。\n\n"
                 "### 选择方案 A：关系图 / 流程图 → render_method: mermaid\n"
@@ -69,10 +71,10 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "- Mermaid 默认只使用 flowchart 稳定语法，禁止使用 usecaseDiagram、classDiagram、erDiagram、journey、gantt。\n"
                 "- Mermaid 代码中禁止出现 actor、package、usecase 语法；参与者和用例也必须写成普通 flowchart 节点。\n"
                 "- 节点必须使用安全 ID，例如 A、B、C、M1、Step1；不要用中文作为节点 ID。\n"
-                "- 节点文字必须写在引号中，例如 A[\"用户提交论文信息\"]、B{{\"是否通过校验\"}}。\n"
-                "- 连线文字必须使用 -->|\"文字\"| 写法，禁止使用 A --> B : 文字 这种冒号写法。\n"
+                '- 节点文字必须写在引号中，例如 A["用户提交论文信息"]、B{{"是否通过校验"}}。\n'
+                '- 连线文字必须使用 -->|"文字"| 写法，禁止使用 A --> B : 文字 这种冒号写法。\n'
                 "- 节点数量尽量控制在 4-10 个以内，文字标签保持简洁。\n"
-                "- mermaid_code 中换行用 \\n 表示，引号用 \\\" 转义。\n\n"
+                '- mermaid_code 中换行用 \\n 表示，引号用 \\" 转义。\n\n'
                 "### 选择方案 B：标准数据图 → render_method: chart\n"
                 "占位符格式示例：\n"
                 "<<FIGURE>>\n"
@@ -137,7 +139,7 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "论文大纲如下：\n\n"
                 "{outline}\n\n"
                 "{codetype_instruction}\n"
-                "请根据以上大纲，撰写完整论文正文。\n"
+                "请根据以上大纲，撰写本次所列全部章节的完整论文正文。\n"
                 "再次强调：直接输出论文正文，不要写任何开场白、说明、任务复述或结尾说明。\n"
                 "字数硬性要求：全文正文总字数必须在 {target_word_count} 至 {target_word_count_max} 字之间，严禁超出。"
             ),

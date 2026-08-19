@@ -103,11 +103,7 @@ async def get_enabled_model_config(config_type: str, *, allow_default: bool = Tr
 
 async def _get_enabled_config_by_type(config_type: str) -> ModelConfig | None:
     """按用途读取一条启用的模型配置，默认配置优先。"""
-    return (
-        await ModelConfig.filter(config_type=config_type, is_enabled=True)
-        .order_by("-is_default", "-id")
-        .first()
-    )
+    return await ModelConfig.filter(config_type=config_type, is_enabled=True).order_by("-is_default", "-id").first()
 
 
 def _create_openai_compatible_llm(
@@ -221,10 +217,25 @@ class GeminiGenerateContentChatModel(BaseChatModel):
         """把 Gemini 响应字典转换为 LangChain ChatResult。"""
 
         text = self._extract_text(data)
+        candidates = data.get("candidates") or []
+        first_candidate = cast(dict[str, Any], candidates[0]) if candidates else {}
+        raw_usage = data.get("usageMetadata")
+        usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
+        input_tokens = int(usage.get("promptTokenCount") or 0)
+        output_tokens = int(usage.get("candidatesTokenCount") or 0)
+        total_tokens = int(usage.get("totalTokenCount") or input_tokens + output_tokens)
         return ChatResult(
             generations=[
                 ChatGeneration(
-                    message=AIMessage(content=text),
+                    message=AIMessage(
+                        content=text,
+                        response_metadata={"finish_reason": str(first_candidate.get("finishReason") or "")},
+                        usage_metadata={
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": total_tokens,
+                        },
+                    ),
                     generation_info={"model": self.model_name},
                 )
             ],
@@ -407,6 +418,7 @@ class LoggingChatModel(BaseChatModel):
         try:
             message = self.wrapped.invoke(messages, stop=stop, **kwargs)
             output_text = _message_text(message)
+            input_tokens, output_tokens, metadata = _message_observability(message)
             _schedule_model_call_log(
                 config_type=self.config_type,
                 provider=self.provider,
@@ -415,7 +427,10 @@ class LoggingChatModel(BaseChatModel):
                 model_config_id=self.model_config_id,
                 prompt_chars=prompt_chars,
                 response_chars=len(output_text),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 latency_ms=_elapsed_ms(started),
+                metadata=metadata,
                 started_at=started_at,
                 completed_at=timezone.now(),
             )
@@ -451,6 +466,7 @@ class LoggingChatModel(BaseChatModel):
         try:
             message = await self.wrapped.ainvoke(messages, stop=stop, **kwargs)
             output_text = _message_text(message)
+            input_tokens, output_tokens, metadata = _message_observability(message)
             await record_model_call(
                 config_type=self.config_type,
                 provider=self.provider,
@@ -459,7 +475,10 @@ class LoggingChatModel(BaseChatModel):
                 model_config_id=self.model_config_id,
                 prompt_chars=prompt_chars,
                 response_chars=len(output_text),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
                 latency_ms=_elapsed_ms(started),
+                metadata=metadata,
                 started_at=started_at,
                 completed_at=timezone.now(),
             )
@@ -483,10 +502,11 @@ class LoggingChatModel(BaseChatModel):
 def _message_to_chat_result(message: BaseMessage, model_name: str) -> ChatResult:
     """把单条 AIMessage 转换为 ChatResult。"""
 
+    output_message = message if isinstance(message, AIMessage) else AIMessage(content=_message_text(message))
     return ChatResult(
         generations=[
             ChatGeneration(
-                message=AIMessage(content=_message_text(message)),
+                message=output_message,
                 generation_info={"model": model_name},
             )
         ],
@@ -513,6 +533,35 @@ def _messages_chars(messages: list[BaseMessage]) -> int:
     """统计输入消息字符数。"""
 
     return sum(len(_message_text(message)) for message in messages)
+
+
+# 提取模型 token 用量和结束原因用于调用日志
+def _message_observability(message: BaseMessage) -> tuple[int, int, dict[str, Any] | None]:
+    """提取模型响应的 token 用量与结束原因。
+
+    Args:
+        message: 模型返回的 LangChain 消息。
+
+    Returns:
+        输入 token、输出 token 和可序列化元数据。
+    """
+
+    usage = message.usage_metadata if isinstance(message, AIMessage) else None
+    response_metadata = message.response_metadata if isinstance(message.response_metadata, dict) else {}
+    raw_token_usage = response_metadata.get("token_usage")
+    if not isinstance(raw_token_usage, dict):
+        raw_token_usage = response_metadata.get("usage")
+    token_usage: dict[str, Any] = raw_token_usage if isinstance(raw_token_usage, dict) else {}
+    usage_input_tokens = usage.get("input_tokens") if usage is not None else 0
+    usage_output_tokens = usage.get("output_tokens") if usage is not None else 0
+
+    input_tokens = int(usage_input_tokens or token_usage.get("prompt_tokens") or token_usage.get("input_tokens") or 0)
+    output_tokens = int(
+        usage_output_tokens or token_usage.get("completion_tokens") or token_usage.get("output_tokens") or 0
+    )
+    finish_reason = str(response_metadata.get("finish_reason") or response_metadata.get("stop_reason") or "").strip()
+    metadata = {"finish_reason": finish_reason} if finish_reason else None
+    return input_tokens, output_tokens, metadata
 
 
 def _elapsed_ms(started: float) -> int:

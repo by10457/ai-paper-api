@@ -11,6 +11,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
+from docx import Document as DocumentFactory
 
 from services.thesis.document.docx_builder import (
     _pre_scan_headings,
@@ -204,3 +205,58 @@ class TestBlacklist:
         assert entries[1]["text"] == "1.1 研究背景"
         assert entries[-2]["text"] == "参考文献"
         assert entries[-1]["text"] == "致谢"
+
+    def test_headings_without_markdown_space_are_kept(self) -> None:
+        """模型省略井号后的空格时仍应识别目录标题。"""
+
+        body = "#1 绪论\n##1.1 研究背景\n###1.1.1 研究对象\n正文\n"
+
+        entries = _pre_scan_headings(body, title="某论文", include_back_matter=False)
+
+        assert [(entry["level"], entry["text"]) for entry in entries] == [
+            (1, "1 绪论"),
+            (2, "1.1 研究背景"),
+            (3, "1.1.1 研究对象"),
+        ]
+
+
+def test_headings_inside_code_fences_are_excluded(tmp_path: Path) -> None:
+    """代码注释不能污染预扫描目录或 Word 正文标题。"""
+
+    body = """\
+# 1 绪论
+正文内容。
+```python
+# 数据加载
+## 缺失值处理
+print("hello")
+```
+# 2 系统实现
+正文内容。
+"""
+
+    entries = _pre_scan_headings(body, include_back_matter=False)
+    assert [(entry["level"], entry["text"]) for entry in entries] == [
+        (1, "1 绪论"),
+        (1, "2 系统实现"),
+    ]
+
+    output_path = tmp_path / "code-fence.docx"
+    build_word_document(
+        title="代码块目录测试",
+        full_text=body,
+        output_path=str(output_path),
+        placeholders=[],
+        image_paths={},
+    )
+    document = DocumentFactory(output_path)
+    heading_texts = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if paragraph.style.name.startswith("Heading")
+    ]
+    assert "1 绪论" in heading_texts
+    assert "2 系统实现" in heading_texts
+    assert "数据加载" not in heading_texts
+    assert "缺失值处理" not in heading_texts
+    assert any(paragraph.text == "# 数据加载" for paragraph in document.paragraphs)

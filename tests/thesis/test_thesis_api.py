@@ -141,6 +141,7 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
         ai_image_count=1,
         fallback_count=0,
         fulltext_char_count=8200,
+        fulltext_word_count=7900,
         truncation_warning=False,
     )
     completed = client.get(f"/api/v1/thesis/status/{task_id}")
@@ -151,6 +152,8 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
     assert payload["mermaid_count"] == 2
     assert payload["chart_count"] == 1
     assert payload["ai_image_count"] == 1
+    assert payload["fulltext_char_count"] == 8200
+    assert payload["fulltext_word_count"] == 7900
 
 
 def test_generate_reuses_idempotent_generation_task(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

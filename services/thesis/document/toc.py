@@ -12,6 +12,25 @@ from docx.shared import Cm, Pt
 from services.thesis.document.formatting import _apply_fixed_line_spacing, _set_run_font, _toc_int
 
 FIGURE_BLOCK_PATTERN = r"<<FIGURE>>\s*.*?\s*<</FIGURE>>"
+# 兼容模型省略井号后空格的 1-3 级 Markdown 标题。
+MARKDOWN_HEADING_PATTERN = re.compile(r"^(#{1,3})(?!#)[ \t]*(\S.*)$")
+
+
+# 解析 1-3 级 Markdown 标题
+def _parse_markdown_heading(line: str) -> tuple[int, str] | None:
+    """解析模型正文中的 Markdown 标题。
+
+    Args:
+        line: 去除首尾空白前后的正文行。
+
+    Returns:
+        标题层级与文本；不是合法标题时返回 None。
+    """
+
+    match = MARKDOWN_HEADING_PATTERN.match(line.strip())
+    if match is None:
+        return None
+    return len(match.group(1)), match.group(2).strip()
 
 
 def _pre_scan_headings(
@@ -34,24 +53,21 @@ def _pre_scan_headings(
         "参考文献",
     }
 
+    is_code_block = False
     for line in clean_text.split("\n"):
         line = line.strip()
+        if line.startswith("```"):
+            is_code_block = not is_code_block
+            continue
+        if is_code_block:
+            continue
         if not line or line == "---pagebreak---":
             continue
 
-        level = 0
-        text = ""
-        if line.startswith("### "):
-            level, text = 3, line[4:]
-        elif line.startswith("## "):
-            level, text = 2, line[3:]
-        elif line.startswith("# "):
-            level, text = 1, line[2:]
-
-        if level == 0:
+        heading = _parse_markdown_heading(line)
+        if heading is None:
             continue
-
-        text = text.strip()
+        level, text = heading
         if title and text == title.strip():
             continue
         if text.lower() in non_body_headings:
@@ -144,6 +160,7 @@ def _add_pageref_field(paragraph: Any, bookmark_name: str, cached_page: str = "?
     fld_end.set(qn("w:fldCharType"), "end")
     run_end._element.append(fld_end)
 
+
 def _estimate_page_numbers(
     full_text: str,
     toc_entries: list[dict[str, object]],
@@ -171,9 +188,14 @@ def _estimate_page_numbers(
 
     heading_queue: list[dict[str, object]] = list(toc_entries)
     hq_idx = 0
+    is_code_block = False
 
     for line in text_with_markers.split("\n"):
         stripped = line.strip()
+
+        if stripped.startswith("```"):
+            is_code_block = not is_code_block
+            continue
 
         if stripped == "---pagebreak---":
             if line_count > 0:
@@ -195,18 +217,11 @@ def _estimate_page_numbers(
         text = ""
         added_lines = 1
 
-        if stripped.startswith("### "):
-            level, text = 3, stripped[4:].strip()
-            added_lines = 2
-        elif stripped.startswith("## "):
-            level, text = 2, stripped[3:].strip()
-            added_lines = 2
-        elif stripped.startswith("# "):
-            level, text = 1, stripped[2:].strip()
-            added_lines = 3
+        heading = None if is_code_block else _parse_markdown_heading(stripped)
+        if heading is not None:
+            level, text = heading
+            added_lines = 3 if level == 1 else 2
         elif stripped.startswith("|"):
-            added_lines = 1
-        elif stripped.startswith("```"):
             added_lines = 1
         else:
             added_lines = max(1, (len(stripped) + 2 + chars_per_line - 1) // chars_per_line)

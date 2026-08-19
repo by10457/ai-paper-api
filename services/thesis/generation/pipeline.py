@@ -11,7 +11,7 @@ from services.thesis.content.abstract_service import (
     generate_abstracts,
     generate_acknowledgment,
 )
-from services.thesis.content.fulltext_service import generate_fulltext
+from services.thesis.content.fulltext_service import count_visible_words, generate_fulltext
 from services.thesis.content.reference_service import generate_references
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.document.placeholder import (
@@ -53,6 +53,7 @@ class ThesisResult:
     ai_image_count: int = 0
     fallback_count: int = 0
     fulltext_char_count: int = 0
+    fulltext_word_count: int = 0
     truncation_warning: bool = False
 
 
@@ -114,10 +115,16 @@ async def generate_thesis_document(
         )
 
     char_count = len(full_text)
+    word_count = count_visible_words(full_text)
     truncation_warning = False
     truncation_threshold = int(target_word_count * 0.75)
-    if char_count < truncation_threshold:
-        logger.warning("全文仅 %d 字（低于目标 %d 字的 75%%），可能存在截断", char_count, target_word_count)
+    if word_count < truncation_threshold:
+        logger.warning(
+            "全文有效字数约 %d（原始字符 %d，低于目标 %d 的 75%%），可能存在内容不足",
+            word_count,
+            char_count,
+            target_word_count,
+        )
         truncation_warning = True
 
     default_abstract = {
@@ -180,6 +187,7 @@ async def generate_thesis_document(
         ai_image_count=len(ai_image_list),
         fallback_count=len(fallback_list),
         fulltext_char_count=char_count,
+        fulltext_word_count=word_count,
         truncation_warning=truncation_warning,
     )
 
@@ -191,6 +199,10 @@ async def _create_image_generator() -> ImageGenerator:
         image_config = await get_enabled_model_config("figure", allow_default=False)
     except Exception as exc:  # noqa: BLE001
         logger.warning("读取图片模型配置失败，使用占位图生成器。原因: %s", exc)
+        return PlaceholderImageGenerator()
+
+    if image_config is None:
+        logger.warning("未配置可用的图片模型，使用占位图生成器")
         return PlaceholderImageGenerator()
 
     image_model_protocol = image_config.provider.lower()
