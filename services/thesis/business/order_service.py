@@ -16,6 +16,7 @@ from schemas.thesis import (
     NormalizedPaperOrder,
     OutlineChapter,
     OutlineSection,
+    OutlineSubsection,
     PaperOrderCreateRequest,
     PaperOutlineCreateRequest,
 )
@@ -566,10 +567,26 @@ class PaperOrderService:
                     name = section_item.get("name") or section_item.get("section") or ""
                     if not str(name).strip():
                         continue
+                    subsections: list[OutlineSubsection] = []
+                    raw_subsections = section_item.get("subsections")
+                    if isinstance(raw_subsections, list):
+                        for subsection_item in raw_subsections:
+                            if not isinstance(subsection_item, dict):
+                                continue
+                            subsection_name = subsection_item.get("name") or subsection_item.get("section") or ""
+                            if not str(subsection_name).strip():
+                                continue
+                            subsections.append(
+                                OutlineSubsection(
+                                    name=str(subsection_name).strip(),
+                                    abstract=str(subsection_item.get("abstract") or ""),
+                                )
+                            )
                     sections.append(
                         OutlineSection(
                             name=str(name).strip(),
                             abstract=str(section_item.get("abstract") or ""),
+                            subsections=subsections,
                         )
                     )
             chapter = str(chapter_item.get("chapter") or "").strip()

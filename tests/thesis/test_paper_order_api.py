@@ -123,7 +123,14 @@ def test_json_outline_to_markdown_numbers_all_heading_levels() -> None:
             {
                 "chapter": "绪论",
                 "sections": [
-                    {"name": "研究背景", "abstract": "说明研究背景。"},
+                    {
+                        "name": "研究背景",
+                        "abstract": "说明研究背景。",
+                        "subsections": [
+                            {"name": "行业背景", "abstract": "说明行业背景。"},
+                            {"name": "技术背景", "abstract": "说明技术背景。"},
+                        ],
+                    },
                     {"name": "研究意义", "abstract": "说明研究意义。"},
                 ],
             },
@@ -138,6 +145,8 @@ def test_json_outline_to_markdown_numbers_all_heading_levels() -> None:
 
     assert "# 1 绪论" in markdown
     assert "## 1.1 研究背景" in markdown
+    assert "### 1.1.1 行业背景" in markdown
+    assert "### 1.1.2 技术背景" in markdown
     assert "## 1.2 研究意义" in markdown
     assert "# 2 总结与展望" in markdown
     assert "## 2.1 研究总结" in markdown

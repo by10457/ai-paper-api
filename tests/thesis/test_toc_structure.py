@@ -7,6 +7,7 @@ and inspects the raw word/document.xml to verify the OOXML structure.
 import re
 import tempfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -75,8 +76,31 @@ def _read_document_xml(docx_path: Path) -> str:
         return zf.read("word/document.xml").decode("utf-8")
 
 
+# 读取目录 PAGEREF 域当前保存的缓存页码
+def _read_cached_pageref_pages(document_xml: str) -> dict[str, int]:
+    """读取目录字段在 Word 首次排版前显示的缓存页码。
+
+    Args:
+        document_xml: DOCX 中的 ``word/document.xml`` 内容。
+
+    Returns:
+        以书签名为键、缓存页码为值的映射。
+    """
+    pages: dict[str, int] = {}
+    tree = ET.fromstring(document_xml)
+    for paragraph in tree.findall(".//w:p", NS):
+        instruction = "".join(node.text or "" for node in paragraph.findall(".//w:instrText", NS))
+        match = re.search(r"PAGEREF\s+(_toc_\d+)", instruction)
+        if match is None:
+            continue
+        result_nodes = paragraph.findall(".//w:t", NS)
+        if result_nodes and (result_nodes[-1].text or "").isdigit():
+            pages[match.group(1)] = int(result_nodes[-1].text or "0")
+    return pages
+
+
 @pytest.fixture(scope="module")
-def generated_docx() -> Path:
+def generated_docx() -> Iterator[Path]:
     """Module-scoped fixture: generate once, reuse across tests."""
     path = _build_sample_docx()
     yield path
@@ -84,7 +108,7 @@ def generated_docx() -> Path:
 
 
 @pytest.fixture(scope="module")
-def document_xml(generated_docx) -> str:
+def document_xml(generated_docx: Path) -> str:
     return _read_document_xml(generated_docx)
 
 
@@ -92,15 +116,16 @@ def document_xml(generated_docx) -> str:
 # 1. No legacy TOC field code
 # ---------------------------------------------------------------------------
 
+
 class TestNoLegacyTOC:
     """Ensure the old TOC \\o field and hint text are gone."""
 
-    def test_no_toc_field_instruction(self, document_xml):
+    def test_no_toc_field_instruction(self, document_xml: str) -> None:
         """document.xml must NOT contain 'TOC \\o' field instruction."""
-        assert 'TOC \\o' not in document_xml
+        assert "TOC \\o" not in document_xml
         assert "TOC \\\\o" not in document_xml
 
-    def test_no_hint_text(self, document_xml):
+    def test_no_hint_text(self, document_xml: str) -> None:
         """The old '目录生成完毕' prompt text must be absent."""
         assert "目录生成完毕" not in document_xml
         assert "按 F9 更新" not in document_xml
@@ -110,61 +135,94 @@ class TestNoLegacyTOC:
 # 2. Bookmarks on body headings
 # ---------------------------------------------------------------------------
 
+
 class TestBookmarks:
     """Bookmarks _toc_0, _toc_1, ... must exist on body headings."""
 
-    def test_bookmarks_present(self, document_xml):
+    def test_bookmarks_present(self, document_xml: str) -> None:
         tree = ET.fromstring(document_xml)
         bookmarks = tree.findall(".//w:bookmarkStart", NS)
         toc_bookmarks = [
-            bm.get(f"{{{NS['w']}}}name")
-            for bm in bookmarks
-            if (bm.get(f"{{{NS['w']}}}name") or "").startswith("_toc_")
+            bm.get(f"{{{NS['w']}}}name") for bm in bookmarks if (bm.get(f"{{{NS['w']}}}name") or "").startswith("_toc_")
         ]
         assert len(toc_bookmarks) > 0, "No _toc_* bookmarks found"
 
-    def test_bookmark_count_matches_headings(self, document_xml):
+    def test_bookmark_count_matches_headings(self, document_xml: str) -> None:
         """Number of _toc_* bookmarks should equal number of TOC entries."""
         expected = _pre_scan_headings(SAMPLE_BODY, title=SAMPLE_TITLE)
 
         tree = ET.fromstring(document_xml)
         bookmarks = tree.findall(".//w:bookmarkStart", NS)
-        toc_bookmarks = [
-            bm for bm in bookmarks
-            if (bm.get(f"{{{NS['w']}}}name") or "").startswith("_toc_")
-        ]
-        assert len(toc_bookmarks) == len(expected), (
-            f"Expected {len(expected)} bookmarks, got {len(toc_bookmarks)}"
-        )
+        toc_bookmarks = [bm for bm in bookmarks if (bm.get(f"{{{NS['w']}}}name") or "").startswith("_toc_")]
+        assert len(toc_bookmarks) == len(expected), f"Expected {len(expected)} bookmarks, got {len(toc_bookmarks)}"
 
 
 # ---------------------------------------------------------------------------
 # 3. PAGEREF fields in TOC page
 # ---------------------------------------------------------------------------
 
+
 class TestPagerefFields:
     """PAGEREF _toc_N \\h fields must exist in the document."""
 
-    def test_pageref_present(self, document_xml):
+    def test_pageref_present(self, document_xml: str) -> None:
         matches = re.findall(r"PAGEREF\s+_toc_\d+", document_xml)
         assert len(matches) > 0, "No PAGEREF _toc_* fields found"
 
-    def test_pageref_count_matches_entries(self, document_xml):
+    def test_pageref_count_matches_entries(self, document_xml: str) -> None:
         expected = _pre_scan_headings(SAMPLE_BODY, title=SAMPLE_TITLE)
         matches = re.findall(r"PAGEREF\s+_toc_\d+", document_xml)
-        assert len(matches) == len(expected), (
-            f"Expected {len(expected)} PAGEREF fields, got {len(matches)}"
+        assert len(matches) == len(expected), f"Expected {len(expected)} PAGEREF fields, got {len(matches)}"
+
+    def test_back_matter_cached_pages_follow_body(self, document_xml: str) -> None:
+        """参考文献和致谢的缓存页码应位于正文之后并保持先后顺序。"""
+        entries = _pre_scan_headings(SAMPLE_BODY, title=SAMPLE_TITLE)
+        bookmarks = {str(entry["text"]): str(entry["bookmark"]) for entry in entries}
+        cached_pages = _read_cached_pageref_pages(document_xml)
+
+        reference_page = cached_pages[bookmarks["参考文献"]]
+        acknowledgment_page = cached_pages[bookmarks["致谢"]]
+
+        assert reference_page > 1
+        assert acknowledgment_page > reference_page
+
+    def test_long_references_push_acknowledgment_to_later_page(self, tmp_path: Path) -> None:
+        """多页参考文献应继续推后致谢的目录缓存页码。"""
+        references = "\n".join(
+            f"[{index}] 测试作者.乡村数字治理与公共服务协同机制研究的虚构参考文献条目"
+            "及其应用成效分析[J].测试学报,2026,12(3):100-120."
+            for index in range(1, 21)
         )
+        output_path = tmp_path / "long-references.docx"
+        build_word_document(
+            title=SAMPLE_TITLE,
+            full_text=SAMPLE_BODY,
+            output_path=str(output_path),
+            acknowledgment="感谢所有提供帮助的老师和同学。",
+            references=references,
+            placeholders=[],
+            image_paths={},
+        )
+        document_xml = _read_document_xml(output_path)
+        entries = _pre_scan_headings(SAMPLE_BODY, title=SAMPLE_TITLE)
+        bookmarks = {str(entry["text"]): str(entry["bookmark"]) for entry in entries}
+        cached_pages = _read_cached_pageref_pages(document_xml)
+
+        reference_page = cached_pages[bookmarks["参考文献"]]
+        acknowledgment_page = cached_pages[bookmarks["致谢"]]
+
+        assert acknowledgment_page >= reference_page + 2
 
 
 # ---------------------------------------------------------------------------
 # 4. TOC entry count matches body heading count
 # ---------------------------------------------------------------------------
 
+
 class TestTocEntryCount:
     """The visible TOC should have exactly as many entries as body headings."""
 
-    def test_entry_count(self, document_xml):
+    def test_entry_count(self, document_xml: str) -> None:
         expected = _pre_scan_headings(SAMPLE_BODY, title=SAMPLE_TITLE)
         # Each TOC entry has a tab character followed by PAGEREF
         # Count PAGEREF occurrences as proxy for visible entries
@@ -176,28 +234,37 @@ class TestTocEntryCount:
 # 5. Non-body heading blacklist
 # ---------------------------------------------------------------------------
 
+
 class TestBlacklist:
     """_pre_scan_headings must filter out non-body headings."""
 
-    @pytest.mark.parametrize("heading", [
-        "摘要", "摘 要", "中文摘要",
-        "Abstract", "abstract", "ABSTRACT",
-        "致谢", "致 谢",
-        "参考文献",
-    ])
-    def test_blacklisted_headings_excluded(self, heading):
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "摘要",
+            "摘 要",
+            "中文摘要",
+            "Abstract",
+            "abstract",
+            "ABSTRACT",
+            "致谢",
+            "致 谢",
+            "参考文献",
+        ],
+    )
+    def test_blacklisted_headings_excluded(self, heading: str) -> None:
         body = f"# {heading}\n正文内容\n# 第一章 绪论\n正文\n"
         entries = _pre_scan_headings(body, title="某论文题目", include_back_matter=False)
         texts = [e["text"] for e in entries]
         assert heading not in texts, f"'{heading}' should be filtered out"
 
-    def test_title_excluded(self):
+    def test_title_excluded(self) -> None:
         body = "# 我的毕业论文\n# 第一章 绪论\n正文\n"
         entries = _pre_scan_headings(body, title="我的毕业论文")
         texts = [e["text"] for e in entries]
         assert "我的毕业论文" not in texts
 
-    def test_normal_headings_kept(self):
+    def test_normal_headings_kept(self) -> None:
         body = "# 1 绪论\n## 1.1 研究背景\n正文\n"
         entries = _pre_scan_headings(body, title="某论文")
         assert len(entries) == 4
@@ -249,11 +316,11 @@ print("hello")
         placeholders=[],
         image_paths={},
     )
-    document = DocumentFactory(output_path)
+    document = DocumentFactory(str(output_path))
     heading_texts = [
         paragraph.text
         for paragraph in document.paragraphs
-        if paragraph.style.name.startswith("Heading")
+        if (paragraph.style.name if paragraph.style is not None else "").startswith("Heading")
     ]
     assert "1 绪论" in heading_texts
     assert "2 系统实现" in heading_texts

@@ -68,6 +68,10 @@ def json_outline_to_markdown(outline: list[OutlineChapter]) -> str:
             lines.append(f"## {chapter_index}.{section_index} {section.name}")
             if section.abstract:
                 lines.append(section.abstract.strip())
+            for subsection_index, subsection in enumerate(section.subsections, start=1):
+                lines.append(f"### {chapter_index}.{section_index}.{subsection_index} {subsection.name}")
+                if subsection.abstract:
+                    lines.append(subsection.abstract.strip())
         lines.append("")
     return "\n".join(lines).strip()
 

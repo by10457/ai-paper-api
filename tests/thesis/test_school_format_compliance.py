@@ -1,5 +1,6 @@
 import tempfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -24,7 +25,7 @@ SAMPLE_BODY = """\
 
 
 @pytest.fixture(scope="module")
-def generated_docx() -> Path:
+def generated_docx() -> Iterator[Path]:
     out = Path(tempfile.mktemp(suffix=".docx"))
     build_word_document(
         title="校途系统设计与实现",
@@ -57,7 +58,7 @@ def document_xml(generated_docx: Path) -> str:
         return zf.read("word/document.xml").decode("utf-8")
 
 
-def _section_properties(document_xml: str):
+def _section_properties(document_xml: str) -> list[ET.Element]:
     root = ET.fromstring(document_xml)
     return root.findall(".//w:sectPr", NS)
 
@@ -104,14 +105,22 @@ def test_references_use_18pt_spacing_and_hanging_indent(document_xml: str) -> No
 
 
 def test_section_page_numbering_rules(document_xml: str) -> None:
+    """前置页必须使用新页分节，保证 LibreOffice 正确重启罗马页码。"""
     sect_prs = _section_properties(document_xml)
     assert len(sect_prs) >= 5
 
     first_pg_num = sect_prs[0].find("w:pgNumType", NS)
     assert first_pg_num is None
 
+    front_matter_section_types = [section.find("w:type", NS) for section in sect_prs[1:4]]
+    assert all(
+        section_type is None or section_type.get(f"{{{NS['w']}}}val") == "nextPage"
+        for section_type in front_matter_section_types
+    )
+
     roman_start = [
-        pg for sect in sect_prs
+        pg
+        for sect in sect_prs
         if (pg := sect.find("w:pgNumType", NS)) is not None
         and pg.get(f"{{{NS['w']}}}fmt") == "upperRoman"
         and pg.get(f"{{{NS['w']}}}start") == "1"
@@ -119,7 +128,8 @@ def test_section_page_numbering_rules(document_xml: str) -> None:
     assert len(roman_start) == 1
 
     roman_continue = [
-        pg for sect in sect_prs
+        pg
+        for sect in sect_prs
         if (pg := sect.find("w:pgNumType", NS)) is not None
         and pg.get(f"{{{NS['w']}}}fmt") == "upperRoman"
         and pg.get(f"{{{NS['w']}}}start") is None
@@ -127,7 +137,8 @@ def test_section_page_numbering_rules(document_xml: str) -> None:
     assert len(roman_continue) >= 2
 
     body_start = [
-        pg for sect in sect_prs
+        pg
+        for sect in sect_prs
         if (pg := sect.find("w:pgNumType", NS)) is not None
         and pg.get(f"{{{NS['w']}}}fmt") is None
         and pg.get(f"{{{NS['w']}}}start") == "1"

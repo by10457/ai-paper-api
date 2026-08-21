@@ -248,21 +248,26 @@ def _add_toc_page(
     document: DocxDocument,
     toc_entries: list[dict[str, object]],
     full_text: str = "",
+    references: str = "",
+    acknowledgment: str = "",
 ) -> None:
-    """Generate a visible TOC page with PAGEREF dynamic page numbers.
+    """生成带 PAGEREF 动态页码和可读缓存页码的目录页。
 
-    Each entry is a normal paragraph structured as::
-
-        Heading text .................. page_number
-
-    Page numbers use PAGEREF fields referencing bookmarks on body headings,
-    so WPS/Word calculates the correct page on open.  Pre-estimated page
-    numbers are written as cached values so the TOC is immediately readable
-    even when the application does not auto-update fields.
+    Args:
+        document: 待写入目录的 Word 文档。
+        toc_entries: 正文及后置章节的目录条目。
+        full_text: 正文 Markdown。
+        references: 参考文献文本，用于计算参考文献和致谢的起始页。
+        acknowledgment: 致谢文本，用于保持完整的分页模拟输入。
     """
     # body section restarts page numbering from 1
     body_start_page = 1
-    page_map = _estimate_page_numbers(full_text, toc_entries, body_start_page)
+    pagination_text = (
+        f"{full_text.rstrip()}\n"
+        f"---pagebreak---\n# 参考文献\n{references.strip()}\n"
+        f"---pagebreak---\n# 致谢\n{acknowledgment.strip()}"
+    )
+    page_map = _estimate_page_numbers(pagination_text, toc_entries, body_start_page)
 
     # ---- TOC title ----
     p_title = document.add_paragraph()

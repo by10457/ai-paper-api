@@ -87,6 +87,35 @@ PAPER_GENERATION_CONCURRENCY=20
 9. 回写订单和任务状态。
 10. 回调业务系统。
 
+## 结构化大纲协议
+
+大纲在生成、前端编辑和正文任务提交阶段统一使用三级嵌套结构：
+
+```json
+[
+  {
+    "chapter": "绪论",
+    "sections": [
+      {
+        "name": "研究背景",
+        "abstract": "说明二级小节的写作要点。",
+        "subsections": [
+          {
+            "name": "行业背景",
+            "abstract": "说明三级小节的写作要点。"
+          }
+        ]
+      }
+    ]
+  }
+]
+```
+
+- `three_level=true` 时，大纲模型会为每个二级小节生成 2-3 个 `subsections`，调用方应允许用户继续编辑三级标题和写作要点。
+- `three_level=false` 时，`subsections` 返回空数组。
+- 为兼容旧客户端，请求省略 `subsections` 时按空数组处理。
+- 用户确认后的 `subsections` 会转换为 Markdown `###` 标题并进入正文生成；调用链不得在转发或保存大纲时丢弃该字段。
+
 ## 参考文献
 
 入口：`services/thesis/content/reference_service.py`
@@ -184,6 +213,7 @@ Mermaid 渲染失败时，会自动转 AI 插图兜底，避免 Word 中完全�
 - 封面和基本信息。
 - 中英文摘要、关键词。
 - 目录、页码、章节样式。
+- 目录缓存页码会同时估算正文、参考文献和致谢；参考文献跨页时，致谢页码随实际内容长度顺延。
 - 正文段落。
 - Markdown 表格转 Word 表格。
 - 图片插入和图题。
@@ -196,6 +226,21 @@ asyncio.to_thread(build_word_document, ...)
 ```
 
 放到线程中执行，避免阻塞 FastAPI 事件循环。
+
+### WSL 中的 DOCX 像素级检查
+
+本地 WSL Ubuntu 使用 `/usr/bin/soffice` 将 DOCX 转换为 PDF，再使用
+`/usr/bin/pdftoppm` 将 PDF 的每一页渲染为 PNG 逐页检查。开发环境需要安装：
+
+```bash
+sudo apt-get install libreoffice-writer poppler-utils fonts-noto-cjk
+/usr/bin/soffice --version
+/usr/bin/pdftoppm -v
+```
+
+结构测试只能验证 DOCX 的 OOXML 语义；修改分节、页码、目录、页眉页脚、字体或图表布局后，
+还需要用上述 WSL 工具完成实际渲染检查。摘要和目录必须使用新页分节，避免 LibreOffice
+忽略连续分节上的罗马页码重启设置。
 
 ## 存储和回调
 

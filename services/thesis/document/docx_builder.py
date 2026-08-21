@@ -80,12 +80,13 @@ def build_word_document(
     _add_copyright_page(document, title, author, advisor, major, school, student_id, student_class)
 
     # Section 2：中文摘要，从罗马页码 I 开始。
-    zh_section = _make_blank_section(document, WD_SECTION.CONTINUOUS)
+    # LibreOffice 会忽略连续分节上的页码重启，摘要必须使用真正的新页分节。
+    zh_section = _make_blank_section(document, WD_SECTION.NEW_PAGE)
     _setup_front_matter_section(zh_section, start=1)
     _add_abstract_zh_page(document, abstract_zh, keywords_zh)
 
     # Section 3：英文摘要，罗马页码自然延续。
-    en_section = _make_blank_section(document, WD_SECTION.CONTINUOUS)
+    en_section = _make_blank_section(document, WD_SECTION.NEW_PAGE)
     _setup_front_matter_section(en_section)
     _add_abstract_en_page(document, abstract_en, keywords_en)
 
@@ -95,7 +96,13 @@ def build_word_document(
     # Section 4：目录（可见条目 + PAGEREF 动态页码），罗马页码自然延续。
     toc_section = _make_blank_section(document)
     _setup_front_matter_section(toc_section)
-    _add_toc_page(document, toc_entries, full_text=full_text)
+    _add_toc_page(
+        document,
+        toc_entries,
+        full_text=full_text,
+        references=references,
+        acknowledgment=acknowledgment,
+    )
 
     # Section 5：正文 + 参考文献 + 致谢，阿拉伯页码从 1 起。
     _make_blank_section(document)

@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.thesis import (
+    OutlinePayload,
     PaperOrderCreateRequest,
     extract_figure_placeholders,
     split_by_render_method,
@@ -11,13 +12,59 @@ from schemas.thesis import (
 )
 
 
+def test_outline_payload_preserves_third_level_subsections() -> None:
+    """三级大纲应保留并规范化二级章节下的三级小节。"""
+
+    payload = OutlinePayload.model_validate(
+        {
+            "outline": [
+                {
+                    "chapter": "1 绪论",
+                    "sections": [
+                        {
+                            "name": "1.1 研究背景",
+                            "abstract": "介绍研究背景。",
+                            "subsections": [
+                                {
+                                    "name": "1.1.1 行业背景",
+                                    "abstract": "介绍行业发展情况。",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+
+    section = payload.outline[0].sections[0]
+    assert section.name == "研究背景"
+    assert len(section.subsections) == 1
+    assert section.subsections[0].name == "行业背景"
+
+
+def test_outline_payload_defaults_subsections_for_legacy_clients() -> None:
+    """旧版两级大纲缺少 subsections 时应继续通过校验。"""
+
+    payload = OutlinePayload.model_validate(
+        {
+            "outline": [
+                {
+                    "chapter": "绪论",
+                    "sections": [{"name": "研究背景", "abstract": "介绍研究背景。"}],
+                }
+            ]
+        }
+    )
+
+    assert payload.outline[0].sections[0].subsections == []
+
+
 def test_paper_order_create_rejects_chapter_without_sections() -> None:
     """订单大纲应拒绝没有有效小节的章节。"""
 
     with pytest.raises(ValidationError):
-        PaperOrderCreateRequest.model_validate(
-            {"record_id": 1, "outline": [{"chapter": "绪论", "sections": []}]}
-        )
+        PaperOrderCreateRequest.model_validate({"record_id": 1, "outline": [{"chapter": "绪论", "sections": []}]})
 
 
 def _figure_block(payload: dict) -> str:

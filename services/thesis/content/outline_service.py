@@ -16,7 +16,7 @@ async def _build_outline_chain() -> Any:
     llm = await create_configured_llm(
         "outline",
         temperature=0.4,
-        max_tokens=2048,
+        max_tokens=8192,
     )
     return THESIS_OUTLINE_PROMPT | llm | StrOutputParser()
 
@@ -48,7 +48,9 @@ def _build_outline_instructions(
         ),
         "language_instruction": ("需要考虑外文文献综述内容" if language == "是" else "不强制要求外文文献综述内容"),
         "three_level_instruction": (
-            "每个二级章节下需要拆分出 2-3 个三级小节" if three_level else "保持常规二级章节结构即可"
+            "每个二级章节的 subsections 必须包含 2-3 个三级小节"
+            if three_level
+            else "保持常规二级章节结构，每个二级章节的 subsections 必须为空数组"
         ),
         "aboutmsg_instruction": (
             f"写作方向补充说明：{aboutmsg.strip()}" if aboutmsg and aboutmsg.strip() else "无额外写作方向补充说明"

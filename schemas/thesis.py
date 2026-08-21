@@ -44,11 +44,26 @@ class OutlineRequest(BaseModel):
     aboutmsg: str = Field(default="", max_length=1000, description="写作方向补充说明")
 
 
-class OutlineSection(BaseModel):
-    """论文大纲小节。"""
+class OutlineSubsection(BaseModel):
+    """论文大纲三级小节。"""
 
     name: str
     abstract: str
+
+    @model_validator(mode="after")
+    def normalize_name(self) -> "OutlineSubsection":
+        self.name = re.sub(r"^\s*\d+(?:\.\d+)*[\.\s、-]*", "", self.name).strip()
+        if not self.name:
+            raise ValueError("三级小节标题不能为空")
+        return self
+
+
+class OutlineSection(BaseModel):
+    """论文大纲二级小节。"""
+
+    name: str
+    abstract: str
+    subsections: list[OutlineSubsection] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def normalize_name(self) -> "OutlineSection":
@@ -539,6 +554,7 @@ __all__ = [
     "OutlineRequest",
     "OutlineResponse",
     "OutlineSection",
+    "OutlineSubsection",
     "NormalizedPaperOrder",
     "PaperOrderCreateResponse",
     "PaperOrderCreateRequest",
