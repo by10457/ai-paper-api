@@ -79,7 +79,7 @@ class Settings(BaseSettings):
 
     # ── 论文生成运行配置 ─────────────────────────────────
     THESIS_OUTPUT_ROOT: str = "public/output/thesis"
-    WRITING_OUTPUT_ROOT: str = "public/output/writing"
+    THESIS_MATERIAL_OUTPUT_ROOT: str = "public/output/thesis-materials"
     PUBLIC_BASE_URL: str = ""
     PUPPETEER_EXECUTABLE_PATH: str = ""
     TEXT_LONG_CONCURRENCY: int = Field(default=16, ge=1)
@@ -215,7 +215,13 @@ class Settings(BaseSettings):
             "apps": {
                 "models": {
                     # 把所有 models 模块路径注册在这里
-                    "models": ["models.user", "models.paper", "models.admin", "aerich.models"],
+                    "models": [
+                        "models.user",
+                        "models.paper",
+                        "models.paper_material",
+                        "models.admin",
+                        "aerich.models",
+                    ],
                     "default_connection": "default",
                 }
             },

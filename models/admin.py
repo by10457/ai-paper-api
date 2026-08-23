@@ -8,6 +8,7 @@ from models.base import BaseModel
 
 if TYPE_CHECKING:
     from models.paper import PaperGenerationTask, PaperOrder
+    from models.paper_material import ThesisMaterialGenerationTask, ThesisMaterialOrder
     from models.user import User
 
 
@@ -17,9 +18,11 @@ class PointLedger(BaseModel):
     user: fields.ForeignKeyRelation[User]
     operator: fields.ForeignKeyNullableRelation[User]
     order: fields.ForeignKeyNullableRelation[PaperOrder]
+    thesis_material_order: fields.ForeignKeyNullableRelation[ThesisMaterialOrder]
     user_id: int
     operator_id: int | None
     order_id: int | None
+    thesis_material_order_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="point_ledgers", description="积分所属用户")
     operator = fields.ForeignKeyField(
         "models.User",
@@ -28,6 +31,13 @@ class PointLedger(BaseModel):
         description="操作人，系统动作可为空",
     )
     order = fields.ForeignKeyField("models.PaperOrder", related_name="point_ledgers", null=True, description="关联订单")
+    thesis_material_order = fields.ForeignKeyField(
+        "models.ThesisMaterialOrder",
+        related_name="point_ledgers",
+        null=True,
+        source_field="paper_material_order_id",
+        description="关联论文材料订单",
+    )
     change_type = fields.CharField(max_length=32, description="流水类型")
     delta = fields.IntField(description="积分变化，正数增加，负数扣减")
     balance_after = fields.IntField(description="变更后余额")
@@ -62,10 +72,14 @@ class ModelCallLog(BaseModel):
     user: fields.ForeignKeyNullableRelation[User]
     order: fields.ForeignKeyNullableRelation[PaperOrder]
     generation_task: fields.ForeignKeyNullableRelation[PaperGenerationTask]
+    thesis_material_order: fields.ForeignKeyNullableRelation[ThesisMaterialOrder]
+    thesis_material_generation_task: fields.ForeignKeyNullableRelation[ThesisMaterialGenerationTask]
     model_config: fields.ForeignKeyNullableRelation[ModelConfig]
     user_id: int | None
     order_id: int | None
     generation_task_id: int | None
+    thesis_material_order_id: int | None
+    thesis_material_generation_task_id: int | None
     model_config_id: int | None
     user = fields.ForeignKeyField("models.User", related_name="model_call_logs", null=True, description="用户")
     order = fields.ForeignKeyField("models.PaperOrder", related_name="model_call_logs", null=True, description="订单")
@@ -74,6 +88,20 @@ class ModelCallLog(BaseModel):
         related_name="model_call_logs",
         null=True,
         description="论文生成任务",
+    )
+    thesis_material_order = fields.ForeignKeyField(
+        "models.ThesisMaterialOrder",
+        related_name="model_call_logs",
+        null=True,
+        source_field="paper_material_order_id",
+        description="论文材料订单",
+    )
+    thesis_material_generation_task = fields.ForeignKeyField(
+        "models.ThesisMaterialGenerationTask",
+        related_name="model_call_logs",
+        null=True,
+        source_field="paper_material_generation_task_id",
+        description="论文材料生成任务",
     )
     model_config = fields.ForeignKeyField(
         "models.ModelConfig",

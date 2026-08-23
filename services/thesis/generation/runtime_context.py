@@ -15,11 +15,13 @@ from typing import cast
 
 @dataclass(frozen=True)
 class GenerationRuntimeContext:
-    """当前论文生成调用链的审计上下文。"""
+    """当前论文正文或论文材料生成调用链的审计上下文。"""
 
     user_id: int | None = None
     order_id: int | None = None
     generation_task_id: int | None = None
+    thesis_material_order_id: int | None = None
+    thesis_material_generation_task_id: int | None = None
     task_id: str | None = None
     stage: str | None = None
 
@@ -51,6 +53,8 @@ def use_runtime_context(
     user_id: int | None | object = _UNSET,
     order_id: int | None | object = _UNSET,
     generation_task_id: int | None | object = _UNSET,
+    thesis_material_order_id: int | None | object = _UNSET,
+    thesis_material_generation_task_id: int | None | object = _UNSET,
     task_id: str | None | object = _UNSET,
     stage: str | None | object = _UNSET,
 ) -> Iterator[GenerationRuntimeContext]:
@@ -61,6 +65,11 @@ def use_runtime_context(
         user_id=_resolve_context_value(user_id, current.user_id),
         order_id=_resolve_context_value(order_id, current.order_id),
         generation_task_id=_resolve_context_value(generation_task_id, current.generation_task_id),
+        thesis_material_order_id=_resolve_context_value(thesis_material_order_id, current.thesis_material_order_id),
+        thesis_material_generation_task_id=_resolve_context_value(
+            thesis_material_generation_task_id,
+            current.thesis_material_generation_task_id,
+        ),
         task_id=_resolve_context_value(task_id, current.task_id),
         stage=_resolve_context_value(stage, current.stage),
     )

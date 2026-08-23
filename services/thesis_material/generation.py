@@ -1,4 +1,4 @@
-"""通用学术材料生成管线。"""
+"""通用论文材料生成管线。"""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from typing import Any
 
 from core.config import get_settings
 from services.thesis.generation.progress import publish_progress, stage_context
-from services.writing.document_builder import build_writing_document
-from services.writing.llm_service import (
+from services.thesis_material.document_builder import build_thesis_material_document
+from services.thesis_material.llm_service import (
     LITERATURE_BODY_LENGTH,
     LITERATURE_THEME_LENGTH,
     WRITING_LENGTH_CONSTRAINTS,
@@ -21,7 +21,7 @@ from services.writing.llm_service import (
     repair_reference_coverage,
     text_length,
 )
-from services.writing.reference_service import retrieve_reference_records
+from services.thesis_material.reference_service import retrieve_reference_records
 
 _CITATION = re.compile(r"\[(\d+)\]")
 
@@ -46,7 +46,7 @@ TASK_BOOK_SCHEDULE = (
 )
 
 
-async def generate_writing_document(
+async def generate_thesis_material_document(
     *,
     task_id: str,
     document_type: str,
@@ -58,13 +58,16 @@ async def generate_writing_document(
     if not title:
         raise RuntimeError("文档标题不能为空")
     references = []
-    if document_type in {"proposal_report", "literature_review"}:
+    if document_type in {"proposal_report", "literature_review", "task_book"}:
         await publish_progress(task_id, "retrieving_references", "正在检索和整理真实参考文献", progress=12)
         options = request_payload.get("reference_options") or {}
-        target = int(options.get("target_count") or (15 if document_type == "proposal_report" else 20))
-        minimum = 8 if document_type == "proposal_report" else 12
-        minimum_chinese = 6 if document_type == "proposal_report" else 8
-        minimum_english = 2 if document_type == "proposal_report" else 4
+        defaults = {
+            "proposal_report": (15, 8, 6, 2),
+            "literature_review": (20, 12, 8, 4),
+            "task_book": (10, 5, 5, 0),
+        }
+        default_target, minimum, minimum_chinese, minimum_english = defaults[document_type]
+        target = int(options.get("target_count") or default_target)
         with stage_context("retrieving_references"):
             references = await retrieve_reference_records(
                 title,
@@ -97,24 +100,25 @@ async def generate_writing_document(
     result["references"] = [item.model_dump(mode="json") for item in references]
 
     await publish_progress(task_id, "validating", "正在校验结构、引用和个人信息", progress=72)
-    await repair_length_constraints(document_type, request_payload, result)
-    for _ in range(2):
-        missing_reference_indexes = _missing_reference_indexes(result, len(references))
-        if not missing_reference_indexes:
-            break
-        await repair_reference_coverage(
-            document_type,
-            request_payload,
-            result,
-            [item for item in references if item.index in missing_reference_indexes],
-        )
+    with stage_context("validating"):
         await repair_length_constraints(document_type, request_payload, result)
+        for _ in range(1 if document_type in {"proposal_report", "literature_review"} else 0):
+            missing_reference_indexes = _missing_reference_indexes(document_type, result, len(references))
+            if not missing_reference_indexes:
+                break
+            await repair_reference_coverage(
+                document_type,
+                request_payload,
+                result,
+                [item for item in references if item.index in missing_reference_indexes],
+            )
+            await repair_length_constraints(document_type, request_payload, result)
     _validate_result(document_type, result, len(references))
     await publish_progress(task_id, "rendering_docx", "正在生成Word文档", progress=84)
-    output_root = Path(get_settings().WRITING_OUTPUT_ROOT) / task_id
+    output_root = Path(get_settings().THESIS_MATERIAL_OUTPUT_ROOT) / task_id
     output_path = output_root / f"{_safe_filename(title)}-{document_type}.docx"
     with stage_context("rendering_docx"):
-        build_writing_document(
+        build_thesis_material_document(
             document_type=document_type,
             title=title,
             request=request_payload,
@@ -187,9 +191,9 @@ def _validate_result(document_type: str, result: dict[str, Any], reference_count
             raise RuntimeError(f"正文包含无效参考文献编号: {invalid}")
         if not citations:
             raise RuntimeError("正文没有引用真实参考文献")
-        missing = sorted(set(range(1, reference_count + 1)) - citations)
-        if missing:
-            raise RuntimeError(f"文末参考文献未在正文引用: {missing}")
+        required_coverage = _required_reference_coverage(document_type, reference_count)
+        if len(citations) < required_coverage:
+            raise RuntimeError(f"正文引用参考文献不足: {len(citations)}/{required_coverage}")
     for field, (minimum, maximum) in WRITING_LENGTH_CONSTRAINTS.get(document_type, {}).items():
         length = text_length(str(result.get(field) or ""))
         if not minimum <= length <= maximum:
@@ -211,14 +215,36 @@ def _validate_result(document_type: str, result: dict[str, Any], reference_count
             raise RuntimeError("任务书设计目标数量不合法")
         if len(result.get("module_tasks", [])) not in range(4, 9):
             raise RuntimeError("任务书模块任务数量不合法")
+        if len(result.get("main_indicators", [])) not in range(4, 9):
+            raise RuntimeError("任务书主要指标数量不合法")
+    if document_type == "proposal_report":
+        outline = result.get("writing_outline")
+        if not isinstance(outline, list) or not 5 <= len(outline) <= 8:
+            raise RuntimeError("开题报告写作提纲数量不合法")
 
 
-def _missing_reference_indexes(result: dict[str, Any], reference_count: int) -> list[int]:
+def _missing_reference_indexes(
+    document_type: str,
+    result: dict[str, Any],
+    reference_count: int,
+) -> list[int]:
     if reference_count <= 0:
         return []
     text_parts = _collect_text(result, ignored_keys={"references", "student_profile", "approval"})
     citations = {int(value) for value in _CITATION.findall("\n".join(text_parts))}
-    return sorted(set(range(1, reference_count + 1)) - citations)
+    required_coverage = _required_reference_coverage(document_type, reference_count)
+    needed = max(required_coverage - len(citations), 0)
+    return sorted(set(range(1, reference_count + 1)) - citations)[:needed]
+
+
+def _required_reference_coverage(document_type: str, reference_count: int) -> int:
+    """计算不同材料正文需要实际引用的最低文献数量。"""
+
+    if document_type == "proposal_report":
+        return min(reference_count, 8)
+    if document_type == "literature_review":
+        return min(reference_count, max(12, (reference_count * 4 + 4) // 5))
+    return 0
 
 
 def _collect_text(value: Any, *, ignored_keys: set[str]) -> list[str]:
@@ -263,7 +289,7 @@ def _parse_date(value: Any) -> date | None:
 
 def _safe_filename(title: str) -> str:
     value = re.sub(r"[\\/:*?\"<>|]", "_", title).strip(" .")
-    return value[:80] or "academic-writing"
+    return value[:80] or "thesis-material"
 
 
 def _result_char_count(result: dict[str, Any]) -> int:
@@ -292,4 +318,4 @@ def _literature_body_char_count(result: dict[str, Any]) -> int:
     return total
 
 
-__all__ = ["generate_writing_document"]
+__all__ = ["generate_thesis_material_document"]

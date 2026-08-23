@@ -139,3 +139,10 @@ def test_paper_queue_moves_due_delayed_job(monkeypatch: pytest.MonkeyPatch) -> N
         assert job == paper_queue.PaperQueueJob("task", 11)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("legacy_kind", ["paper_material_task", "writing_task"])
+def test_paper_queue_accepts_legacy_material_task_payload(legacy_kind: str) -> None:
+    job = paper_queue._decode_job(f"{legacy_kind}:13")
+
+    assert job == paper_queue.PaperQueueJob("thesis_material_task", 13)

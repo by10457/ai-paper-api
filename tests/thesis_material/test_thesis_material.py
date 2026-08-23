@@ -6,26 +6,31 @@ from docx import Document
 from pydantic import ValidationError
 
 from app import app
-from schemas.writing import (
+from schemas.thesis_material import (
     LiteratureReviewRequest,
     ProposalReportRequest,
     ReferenceRecord,
     TaskBookRequest,
 )
-from services.writing.document_builder import build_writing_document
-from services.writing.generation import (
+from services.thesis_material.document_builder import (
+    _normalize_generated_text,
+    _outline_text,
+    build_thesis_material_document,
+)
+from services.thesis_material.generation import (
     PROPOSAL_SCHEDULE,
     TASK_BOOK_SCHEDULE,
     _build_schedule,
     _validate_result,
 )
-from services.writing.llm_service import (
+from services.thesis_material.llm_service import (
     LITERATURE_BODY_LENGTH,
     _literature_body_length,
     _trim_to_complete_sentences,
     repair_length_constraints,
 )
-from services.writing.reference_service import (
+from services.thesis_material.order_service import ThesisMaterialOrderService
+from services.thesis_material.reference_service import (
     _merge_records,
     _select_records,
     _target_language_quota,
@@ -33,8 +38,23 @@ from services.writing.reference_service import (
 )
 
 
-def test_writing_routes_are_registered() -> None:
+def test_thesis_material_routes_are_registered() -> None:
     routes = {route.path for route in app.routes}
+    assert "/api/v1/thesis-materials/products" in routes
+    assert "/api/v1/thesis-materials/proposal-reports" in routes
+    assert "/api/v1/thesis-materials/literature-reviews" in routes
+    assert "/api/v1/thesis-materials/task-books" in routes
+    assert "/api/v1/thesis-materials/tasks/{task_id}" in routes
+    assert "/api/v1/thesis-materials/tasks/{task_id}/events" in routes
+    assert "/api/v1/thesis-materials/tasks/{task_id}/download" in routes
+    assert "/api/v1/admin/thesis-material-orders" in routes
+    assert "/api/v1/admin/thesis-material-orders/{order_id}" in routes
+
+    # 旧版调用方升级前仍能访问隐藏兼容路由。
+    assert "/api/v1/paper-materials/products" in routes
+    assert "/api/v1/paper-materials/tasks/{task_id}" in routes
+    assert "/api/v1/admin/paper-material-orders" in routes
+    assert "/api/v1/admin/paper-material-orders/{order_id}" in routes
     assert "/api/v1/writing/products" in routes
     assert "/api/v1/writing/proposal-reports" in routes
     assert "/api/v1/writing/literature-reviews" in routes
@@ -42,6 +62,42 @@ def test_writing_routes_are_registered() -> None:
     assert "/api/v1/writing/tasks/{task_id}" in routes
     assert "/api/v1/writing/tasks/{task_id}/events" in routes
     assert "/api/v1/writing/tasks/{task_id}/download" in routes
+    assert "/api/v1/admin/writing-orders" in routes
+    assert "/api/v1/admin/writing-orders/{order_id}" in routes
+
+
+def test_thesis_material_openapi_only_exposes_canonical_routes() -> None:
+    paths = app.openapi()["paths"]
+    assert "/api/v1/thesis-materials/products" in paths
+    assert "/api/v1/admin/thesis-material-orders" in paths
+    assert "/api/v1/paper-materials/products" not in paths
+    assert "/api/v1/admin/paper-material-orders" not in paths
+    assert "/api/v1/writing/products" not in paths
+    assert "/api/v1/admin/writing-orders" not in paths
+
+
+def test_outline_text_rebuilds_numbering_without_duplicates() -> None:
+    outline = [
+        {
+            "title": "第1章 绪论",
+            "sections": [
+                {
+                    "title": "1.1 研究背景",
+                    "subsections": ["1.1.1 现实问题", "1.1.2 研究价值"],
+                }
+            ],
+        }
+    ]
+    assert _outline_text(outline).splitlines() == [
+        "1 绪论",
+        "1.1 研究背景",
+        "1.1.1 现实问题",
+        "1.1.2 研究价值",
+    ]
+
+
+def test_generated_text_normalizes_chinese_punctuation() -> None:
+    assert _normalize_generated_text("模块 A ；边界： 不处理。 ；完成") == "模块 A；边界： 不处理；完成"
 
 
 def test_title_is_only_required_request_field() -> None:
@@ -50,7 +106,13 @@ def test_title_is_only_required_request_field() -> None:
     task_book = TaskBookRequest(title="校园饭卡管理系统的设计与实现")
     assert proposal.reference_options.target_count == 15
     assert review.reference_options.target_count == 20
+    assert task_book.reference_options.target_count == 10
+    assert task_book.reference_options.include_foreign is False
     assert task_book.student_profile.name is None
+
+
+def test_thesis_material_order_number_uses_domain_prefix() -> None:
+    assert ThesisMaterialOrderService.generate_order_sn().startswith("TM")
 
 
 def test_schedule_rejects_reversed_dates() -> None:
@@ -108,7 +170,7 @@ def test_reference_language_quota_and_selection() -> None:
     assert [item.index for item in selected] == list(range(1, 16))
 
 
-def test_reference_validation_requires_every_reference_to_be_cited() -> None:
+def test_reference_validation_requires_minimum_coverage() -> None:
     result = {
         "abstract": "摘" * 220,
         "introduction": "已有研究[1]。",
@@ -117,9 +179,9 @@ def test_reference_validation_requires_every_reference_to_be_cited() -> None:
     try:
         _validate_result("literature_review", result, 2)
     except RuntimeError as exc:
-        assert "未在正文引用" in str(exc)
+        assert "正文引用参考文献不足" in str(exc)
     else:
-        raise AssertionError("未引用全部文献时应校验失败")
+        raise AssertionError("正文引用量不足时应校验失败")
 
 
 def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
@@ -130,7 +192,7 @@ def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
         calls.append(prompt)
         return "修" * 850
 
-    monkeypatch.setattr("services.writing.llm_service._ask_text", fake_ask_text)
+    monkeypatch.setattr("services.thesis_material.llm_service._ask_text", fake_ask_text)
     result = {
         "research_purpose": "长" * 1200,
         "research_status_and_trends": "现" * 1600,
@@ -153,7 +215,7 @@ def test_literature_total_length_is_trimmed_without_regenerating_sections(monkey
     def fixed_length_sentence(prefix: str, fill: str, length: int) -> str:
         return prefix + fill * (length - len(prefix) - 1) + "。"
 
-    monkeypatch.setattr("services.writing.llm_service._ask_text", unexpected_llm_call)
+    monkeypatch.setattr("services.thesis_material.llm_service._ask_text", unexpected_llm_call)
     theme = "".join(
         [fixed_length_sentence("已有做法、观点、优势、不足和小结[1]", "甲", 100)]
         + [fixed_length_sentence("比较分析", "乙", 100) for _ in range(6)]
@@ -252,7 +314,7 @@ def test_build_three_document_types(tmp_path: Path) -> None:
         ("task_book", task_result),
     ):
         path = tmp_path / f"{document_type}.docx"
-        build_writing_document(
+        build_thesis_material_document(
             document_type=document_type,
             title="测试课题",
             request=request,

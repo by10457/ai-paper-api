@@ -1,4 +1,4 @@
-"""三类学术材料的结构化大模型生成。"""
+"""三类论文材料的结构化大模型生成。"""
 
 from __future__ import annotations
 
@@ -9,15 +9,17 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm.client import create_configured_llm
-from schemas.writing import ReferenceRecord
+from schemas.thesis_material import ReferenceRecord
 
 WRITING_LENGTH_CONSTRAINTS: dict[str, dict[str, tuple[int, int]]] = {
     "proposal_report": {
         "research_purpose": (700, 1000),
         "research_status_and_trends": (1400, 2000),
+        "research_content": (600, 900),
         "key_points": (300, 500),
         "difficulties": (300, 500),
         "research_methods": (400, 600),
+        "feasibility_and_innovation": (300, 500),
     },
     "literature_review": {
         "abstract": (200, 300),
@@ -48,9 +50,11 @@ LITERATURE_BODY_FIELDS = (
 _FIELD_REQUIREMENTS = {
     "research_purpose": "涵盖行业背景、现实问题、技术背景、研究必要性、应用价值和研究目标。",
     "research_status_and_trends": "涵盖传统方案、国内外研究、主流技术、应用场景、架构演进、现有不足和未来趋势，并形成比较评价。",
+    "research_content": "说明研究对象、主要内容、预期解决的问题以及各部分之间的逻辑关系。",
     "key_points": "说明系统架构、核心功能、数据设计和关键业务。",
     "difficulties": "说明性能、并发、数据一致性、安全、交互或算法难点。",
     "research_methods": "说明技术路线、框架、数据库、接口、测试和问题解决手段。",
+    "feasibility_and_innovation": "从资料、技术、数据、时间和实施条件论证可行性，并提出审慎且可验证的创新点。",
     "abstract": "概括研究背景、综述范围、主要研究脉络、不足和本文切入点。",
     "introduction": "说明研究背景、综述目的、检索范围和组织思路。",
     "domestic_research": "综合比较国内代表性研究、主要方法、成果和局限，不得逐篇堆砌摘要。",
@@ -75,9 +79,11 @@ _FIELD_KEYWORD_GROUPS = {
         ("不足", "局限"),
         ("趋势", "未来"),
     ),
+    "research_content": (("对象", "课题"), ("内容",), ("问题",), ("关系", "逻辑")),
     "key_points": (("架构",), ("功能",), ("数据",), ("业务",)),
     "difficulties": (("性能", "并发"), ("一致性",), ("安全",), ("交互", "算法")),
     "research_methods": (("技术路线",), ("框架",), ("数据库",), ("接口",), ("测试",)),
+    "feasibility_and_innovation": (("可行",), ("资料", "数据"), ("技术",), ("时间",), ("创新",)),
     "abstract": (("背景",), ("范围",), ("研究",), ("不足", "局限"), ("切入", "方向")),
     "introduction": (("背景",), ("目的",), ("范围",), ("结构", "组织")),
     "domestic_research": (("国内",), ("方法",), ("成果",), ("不足", "局限")),
@@ -106,19 +112,28 @@ async def generate_proposal_content(
         f"课题：{request['title']}\n补充信息：{context}\n写700-1000字研究目的，必须包括行业背景、现实问题、技术背景、必要性、应用价值和研究目标。可引用[1]-[2]。\n真实文献：\n{reference_text}",
     )
     status = await _ask_text(
-        "你是严谨的学术文献综述作者。不得虚构文献，只能使用给定编号。只输出连续正文。",
+        "你是严谨的学术文献综述作者。不得虚构文献，只能使用给定编号。"
+        "引用必须紧跟其支撑的具体论述，每句最多引用2篇，禁止在段末集中罗列连续编号。只输出连续正文。",
         f"课题：{request['title']}\n补充信息：{context}\n围绕传统方案、国内外研究、主流技术、应用场景、架构演进、现有不足和未来趋势写1400-2000字。引用至少8篇给定文献。\n真实文献：\n{reference_text}",
     )
     analysis = await _ask_json(
         "你是毕业设计技术方案专家。严格输出JSON对象，不要Markdown。",
-        f"课题：{request['title']}\n补充信息：{context}\n生成以下字段：key_points 300-500字；difficulties 300-500字；research_methods 400-600字。内容必须具体且互不重复。JSON键只能是key_points、difficulties、research_methods。",
+        f"课题：{request['title']}\n补充信息：{context}\n生成以下字段：research_content 600-900字；"
+        "key_points 300-500字；difficulties 300-500字；research_methods 400-600字；"
+        "feasibility_and_innovation 300-500字；writing_outline数组，包含5-8个一级章节，每项严格为"
+        "{title,sections}，sections为2-5项数组，每项严格为{title,subsections}，subsections为0-4个三级标题字符串；"
+        "至少一个二级标题必须包含三级标题。title与subsections中禁止自带数字、中文序号或章节编号。"
+        "内容必须具体且互不重复。",
     )
     return {
         "research_purpose": purpose,
         "research_status_and_trends": status,
+        "research_content": _required_text(analysis, "research_content"),
         "key_points": _required_text(analysis, "key_points"),
         "difficulties": _required_text(analysis, "difficulties"),
         "research_methods": _required_text(analysis, "research_methods"),
+        "feasibility_and_innovation": _required_text(analysis, "feasibility_and_innovation"),
+        "writing_outline": _required_outline(analysis.get("writing_outline")),
     }
 
 
@@ -134,7 +149,8 @@ async def generate_literature_review_content(
         "你是学术文献综述作者。严格输出JSON对象，不得虚构文献编号。",
         f"课题：{request['title']}\n补充信息：{context}\n真实文献：\n{reference_text}\n"
         "生成abstract(200-300字)、keywords(3-6个字符串)、introduction(400-600字)、"
-        "domestic_research(600-800字)、foreign_research(600-800字)。国内外研究必须综合比较并引用给定编号。",
+        "domestic_research(600-800字)、foreign_research(600-800字)。国内外研究必须综合比较并引用给定编号；"
+        "引用必须紧跟具体观点，每句最多2篇，禁止在段末集中罗列连续编号。",
     )
     analysis = await _ask_json(
         "你是学术综述评审专家。严格输出JSON对象，不要Markdown，不得虚构文献。",
@@ -167,12 +183,16 @@ async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
 
     result = await _ask_json(
         "你是高职和本科毕业设计任务书编制专家。严格输出JSON对象，不要填写姓名、学校、导师、签名、审核意见或日期。",
-        f"课题：{request['title']}\n补充信息：{_request_context(request)}\n选题类型：{request.get('topic_type', '其他')}\n生成design_background(100-200字)、technology_stack(字符串数组)、design_goals(5-10个可验收目标)、module_tasks(4-8项，每项含name、role、responsibilities、boundary)、deliverable_forms(2-5项)、deliverable_requirements(2-5项)。设计目标与模块任务不得重复。",
+        f"课题：{request['title']}\n补充信息：{_request_context(request)}\n选题类型：{request.get('topic_type', '其他')}\n"
+        "生成design_background(100-200字)、technology_stack(字符串数组)、design_goals(5-10个可验收目标)、"
+        "main_indicators(4-8个可测量或可核验的主要技术/质量指标)、module_tasks(4-8项，每项含name、role、responsibilities、boundary)、"
+        "deliverable_forms(2-5项)、deliverable_requirements(2-5项)。设计目标、主要指标与模块任务不得重复。",
     )
     goals = result.get("design_goals")
     tasks = result.get("module_tasks")
     forms = result.get("deliverable_forms")
     requirements = result.get("deliverable_requirements")
+    indicators = result.get("main_indicators")
     if not isinstance(goals, list) or not 5 <= len(goals) <= 10:
         raise RuntimeError("任务书设计目标数量不合法")
     if not isinstance(tasks, list) or not 4 <= len(tasks) <= 8:
@@ -181,7 +201,34 @@ async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("任务书成果形式数量不合法")
     if not isinstance(requirements, list) or not 2 <= len(requirements) <= 5:
         raise RuntimeError("任务书成果要求数量不合法")
+    if not isinstance(indicators, list) or not 4 <= len(indicators) <= 8:
+        raise RuntimeError("任务书主要指标数量不合法")
     return result
+
+
+def _required_outline(value: Any) -> list[dict[str, Any]]:
+    """校验开题报告至少包含一个三级层级的写作提纲。"""
+
+    if not isinstance(value, list) or not 5 <= len(value) <= 8:
+        raise RuntimeError("开题报告写作提纲结构不合法")
+    normalized = [item for item in value if isinstance(item, dict) and str(item.get("title") or "").strip()]
+    if len(normalized) != len(value):
+        raise RuntimeError("开题报告写作提纲章节不完整")
+    has_third_level = False
+    for chapter in normalized:
+        sections = chapter.get("sections")
+        if not isinstance(sections, list) or not 2 <= len(sections) <= 5:
+            raise RuntimeError("开题报告写作提纲二级标题结构不合法")
+        for section in sections:
+            if not isinstance(section, dict) or not str(section.get("title") or "").strip():
+                raise RuntimeError("开题报告写作提纲二级标题不完整")
+            subsections = section.get("subsections")
+            if not isinstance(subsections, list):
+                raise RuntimeError("开题报告写作提纲三级标题结构不合法")
+            has_third_level = has_third_level or bool(subsections)
+    if not has_third_level:
+        raise RuntimeError("开题报告写作提纲缺少三级标题")
+    return normalized
 
 
 # 收敛文献综述总篇幅，优先裁剪主题而不重做已通过章节
@@ -204,13 +251,15 @@ async def _repair_literature_body_length(request: dict[str, Any], result: dict[s
         raise RuntimeError("文献综述主题结构不合法")
 
     remaining = body_length - LITERATURE_BODY_LENGTH[1]
+    remaining_themes = sum(1 for theme in themes if isinstance(theme, dict))
     for index, theme in enumerate(themes):
         if remaining <= 0 or not isinstance(theme, dict):
             continue
         content = str(theme.get("content") or "").strip()
         current_length = text_length(content)
         minimum, _ = LITERATURE_THEME_LENGTH
-        target_maximum = max(minimum, current_length - remaining)
+        reduction = max(1, (remaining + remaining_themes - 1) // remaining_themes)
+        target_maximum = max(minimum + 50, current_length - reduction)
         trimmed = _trim_to_complete_sentences(content, "theme_content", minimum, target_maximum)
         if trimmed == content and current_length > target_maximum:
             trimmed = await _repair_length_value(
@@ -224,6 +273,7 @@ async def _repair_literature_body_length(request: dict[str, Any], result: dict[s
             )
         theme["content"] = trimmed
         remaining -= current_length - text_length(trimmed)
+        remaining_themes -= 1
 
 
 # 统计文献综述的可验收正文长度
@@ -257,6 +307,8 @@ async def repair_length_constraints(
 
     constraints = WRITING_LENGTH_CONSTRAINTS.get(document_type, {})
     for field, (minimum, maximum) in constraints.items():
+        if field not in result:
+            continue
         result[field] = await _repair_length_value(
             field,
             str(result.get(field) or "").strip(),
@@ -360,6 +412,7 @@ async def repair_reference_coverage(
             f"下列真实文献尚未在正文引用：\n{reference_text}\n"
             "在保留原文主要论证和已有引用的前提下完成修订。逐篇结合标题和元数据说明与课题的关系，"
             "形成比较、评价或趋势判断，并准确使用每个给定编号；不得增加不存在的文献。"
+            "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。"
             "修订后的全文必须保持在1400-2000字。",
             max_tokens=3000,
         )
@@ -373,7 +426,8 @@ async def repair_reference_coverage(
             f"课题：{request['title']}\n尚未引用的真实文献：\n{reference_text}\n"
             "写一个综合比较主题，必须逐篇使用给定编号，说明已有做法、不同观点、优缺点和小结。"
             "只能依据题名、作者、年份和来源做审慎归纳，不得虚构论文结论。"
-            "每个给定编号都必须原样、独立出现在正文中，例如分别写[1]和[2]；禁止合并写成[1-2]、[1,2]或其他形式。",
+            "每个给定编号都必须原样、独立出现在正文中，例如分别写[1]和[2]；禁止合并写成[1-2]、[1,2]或其他形式。"
+            "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。",
         )
         new_theme = {"title": "补充文献的综合比较", "content": supplemental}
         if len(themes) < 6:

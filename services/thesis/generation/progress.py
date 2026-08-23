@@ -14,6 +14,7 @@ from tortoise import timezone
 
 from core.logger import logger
 from models.paper import PaperGenerationTask
+from models.paper_material import ThesisMaterialGenerationTask
 from services.thesis.generation import status_store
 from services.thesis.generation.runtime_context import (
     GenerationRuntimeContext,
@@ -60,7 +61,8 @@ async def publish_progress(
         **extra,
     }
     await status_store.write_status_async(task_id, status, **payload)
-    if get_runtime_context().generation_task_id is not None:
+    runtime_context = get_runtime_context()
+    if runtime_context.generation_task_id is not None or runtime_context.thesis_material_generation_task_id is not None:
         try:
             await _update_generation_task(task_id, stage, resolved_progress, events, status, message, extra)
         except Exception as exc:  # noqa: BLE001
@@ -84,7 +86,7 @@ async def record_process_detail(stage: str, message: str, **details: Any) -> Non
     }
     await status_store.write_status_async(ctx.task_id, status, **payload)
 
-    if ctx.generation_task_id is not None:
+    if ctx.generation_task_id is not None or ctx.thesis_material_generation_task_id is not None:
         try:
             await _update_generation_task(ctx.task_id, stage, progress, events, status, message, details)
         except Exception as exc:  # noqa: BLE001
@@ -163,7 +165,18 @@ async def _update_generation_task(
     message: str,
     extra: dict[str, Any],
 ) -> None:
-    generation_task = await PaperGenerationTask.filter(task_id=task_id).first()
+    runtime_context = get_runtime_context()
+    is_thesis_material_task = runtime_context.thesis_material_generation_task_id is not None
+    if is_thesis_material_task:
+        generation_task: PaperGenerationTask | ThesisMaterialGenerationTask | None = await ThesisMaterialGenerationTask.filter(
+            id=runtime_context.thesis_material_generation_task_id,
+            task_id=task_id,
+        ).first()
+    else:
+        generation_task = await PaperGenerationTask.filter(
+            id=runtime_context.generation_task_id,
+            task_id=task_id,
+        ).first()
     if generation_task is None:
         return
 
@@ -188,8 +201,12 @@ async def _update_generation_task(
         update_data["status"] = status
         update_data["completed_at"] = timezone.now()
         update_data["last_error"] = "" if status == "completed" else message[:500]
-        update_data["result_summary"] = extra or None
-    await PaperGenerationTask.filter(id=generation_task.id).update(**update_data)
+        if not is_thesis_material_task:
+            update_data["result_summary"] = extra or None
+    if is_thesis_material_task:
+        await ThesisMaterialGenerationTask.filter(id=generation_task.id).update(**update_data)
+    else:
+        await PaperGenerationTask.filter(id=generation_task.id).update(**update_data)
 
 
 __all__ = ["publish_progress", "record_process_detail", "stage_context"]

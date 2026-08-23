@@ -1,7 +1,8 @@
-"""三类学术材料的通用 DOCX 构建器。"""
+"""三类论文材料的通用 DOCX 构建器。"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +12,9 @@ from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Cm, Pt
+from docx.shared import Cm, Pt, RGBColor
 
-from schemas.writing import ReferenceRecord
+from schemas.thesis_material import ReferenceRecord
 
 # Match the supplied school templates: Chinese body text uses Songti, headings
 # use Heiti, and Latin characters/numbers use Times New Roman.
@@ -22,7 +23,7 @@ FONT_HEADING = "黑体"
 FONT_LATIN = "Times New Roman"
 
 
-def build_writing_document(
+def build_thesis_material_document(
     *,
     document_type: str,
     title: str,
@@ -39,7 +40,7 @@ def build_writing_document(
     elif document_type == "literature_review":
         doc = _build_literature_review(title, request, result, references)
     elif document_type == "task_book":
-        doc = _build_task_book(title, request, result)
+        doc = _build_task_book(title, request, result, references)
     else:
         raise ValueError(f"不支持的文档类型: {document_type}")
     doc.save(str(output_path))
@@ -66,6 +67,7 @@ def _new_document() -> DocumentObject:
         style.font.name = FONT_LATIN
         style.font.size = Pt(size)
         style.font.bold = True
+        style.font.color.rgb = RGBColor(0, 0, 0)
         _set_font_mapping(style._element.get_or_add_rPr(), FONT_HEADING)
     return doc
 
@@ -77,17 +79,17 @@ def _build_proposal(
     references: list[ReferenceRecord],
 ) -> DocumentObject:
     doc = _new_document()
-    profile = request.get("student_profile") or {}
+    profile = _profile_with_placeholders(request)
     context = request.get("research_context") or {}
-    _cover_title(doc, profile.get("school") or "", "毕业设计（论文）开题报告", title)
+    _cover_title(doc, profile["school"], "毕业设计（论文）开题报告", title)
     cover_fields = [
-        ("课题类别", context.get("topic_category") or ""),
-        ("学生姓名", profile.get("name") or ""),
-        ("学号", profile.get("student_no") or ""),
-        ("班级", profile.get("class_name") or ""),
-        ("专业", profile.get("major") or ""),
-        ("指导教师", profile.get("internal_advisor") or ""),
-        ("年月", profile.get("year_month") or ""),
+        ("课题类别", context.get("topic_category") or "某某类"),
+        ("学生姓名", profile["name"]),
+        ("学号", profile["student_no"]),
+        ("班级", profile["class_name"]),
+        ("专业", profile["major"]),
+        ("指导教师", profile["internal_advisor"]),
+        ("年月", profile["year_month"]),
     ]
     for label, value in cover_fields:
         paragraph = doc.add_paragraph()
@@ -98,14 +100,18 @@ def _build_proposal(
     doc.add_page_break()
 
     table = doc.add_table(rows=0, cols=1)
+    table.style = "Table Grid"
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
     table.autofit = False
     for heading, body in (
         ("一、本课题设计（研究）的目的", result["research_purpose"]),
         ("二、设计（研究）现状和发展趋势（文献综述）", result["research_status_and_trends"]),
-        ("三、设计（研究）的重点与难点，拟采用的途径（研究手段）", _proposal_methods(result)),
-        ("四、设计（研究）进度计划", _schedule_text(result.get("schedule", []))),
-        ("五、参考文献", "\n".join(item.formatted for item in references)),
+        ("三、设计（研究）的主要内容", str(result.get("research_content") or "")),
+        ("四、设计（研究）的重点与难点，拟采用的途径（研究手段）", _proposal_methods(result)),
+        ("五、可行性分析与创新点", str(result.get("feasibility_and_innovation") or "")),
+        ("六、论文（设计）写作提纲", _outline_text(result.get("writing_outline", []))),
+        ("七、设计（研究）进度计划", _schedule_text(result.get("schedule", []))),
+        ("八、参考文献", "\n".join(item.formatted for item in references)),
         ("指导教师意见", "\n\n\n签名：________________    年____月____日"),
         ("教研室（学术小组）意见", "\n\n\n负责人（签章）：________________    年____月____日"),
     ):
@@ -154,16 +160,21 @@ def _build_literature_review(
     return doc
 
 
-def _build_task_book(title: str, request: dict[str, Any], result: dict[str, Any]) -> DocumentObject:
+def _build_task_book(
+    title: str,
+    request: dict[str, Any],
+    result: dict[str, Any],
+    references: list[ReferenceRecord],
+) -> DocumentObject:
     doc = _new_document()
-    profile = request.get("student_profile") or {}
-    _cover_title(doc, profile.get("school") or "", "毕业设计任务书", "")
+    profile = _profile_with_placeholders(request)
+    _cover_title(doc, profile["school"], "毕业设计任务书", "")
     info = doc.add_table(rows=6, cols=6)
     info.style = "Table Grid"
     info.alignment = WD_TABLE_ALIGNMENT.CENTER
     info_rows = [
-        ("二级学院", profile.get("college") or "", "姓名", profile.get("name") or "", "校内指导教师", profile.get("internal_advisor") or ""),
-        ("班级名称", profile.get("class_name") or "", "学号", profile.get("student_no") or "", "企业指导教师", profile.get("enterprise_advisor") or ""),
+        ("二级学院", profile["college"], "姓名", profile["name"], "校内指导教师", profile["internal_advisor"]),
+        ("班级名称", profile["class_name"], "学号", profile["student_no"], "企业指导教师", profile["enterprise_advisor"]),
     ]
     for row_index, row_values in enumerate(info_rows):
         for column, value in enumerate(row_values):
@@ -181,7 +192,6 @@ def _build_task_book(title: str, request: dict[str, Any], result: dict[str, Any]
         )
     _merge_labeled_row(info, 5, "设计任务", "\n".join(task_lines))
 
-    doc.add_page_break()
     schedule_items = result.get("schedule_items", [])
     schedule = doc.add_table(rows=1, cols=5)
     schedule.style = "Table Grid"
@@ -200,7 +210,11 @@ def _build_task_book(title: str, request: dict[str, Any], result: dict[str, Any]
         for column, value in enumerate(schedule_values):
             _replace_cell_text(cells[column], value)
 
-    outcome = doc.add_table(rows=4, cols=2)
+    indicators = "\n".join(
+        f"（{index}）{value}" for index, value in enumerate(result.get("main_indicators", []), start=1)
+    )
+    references_text = "\n".join(item.formatted for item in references)
+    outcome = doc.add_table(rows=6, cols=2)
     outcome.style = "Table Grid"
     outcome.alignment = WD_TABLE_ALIGNMENT.CENTER
     _replace_cell_text(outcome.cell(0, 0), "预期成果", bold=True)
@@ -209,7 +223,11 @@ def _build_task_book(title: str, request: dict[str, Any], result: dict[str, Any]
         f"（{index}）{value}" for index, value in enumerate(result.get("deliverable_requirements", []), start=1)
     )
     _replace_cell_text(outcome.cell(0, 1), f"成果表现形式\n{forms}\n成果要求\n{requirements}")
-    for row, label in ((1, "指导教师"), (2, "教研室审核意见"), (3, "二级学院审核意见")):
+    _replace_cell_text(outcome.cell(1, 0), "主要指标", bold=True)
+    _replace_cell_text(outcome.cell(1, 1), indicators)
+    _replace_cell_text(outcome.cell(2, 0), "主要参考资料", bold=True)
+    _replace_cell_text(outcome.cell(2, 1), references_text)
+    for row, label in ((3, "指导教师"), (4, "教研室审核意见"), (5, "二级学院审核意见")):
         _replace_cell_text(outcome.cell(row, 0), label, bold=True)
         _replace_cell_text(outcome.cell(row, 1), "\n（签名）________________    年____月____日")
     note = doc.add_paragraph("注：⑴ 请双面打印。⑵ 如需附图，请以附件形式提供。")
@@ -246,12 +264,12 @@ def _labeled_paragraph(doc: DocumentObject, label: str, body: str) -> None:
     paragraph = doc.add_paragraph()
     label_run = paragraph.add_run(f"{label}：")
     label_run.bold = True
-    paragraph.add_run(body)
+    paragraph.add_run(_normalize_generated_text(body))
     paragraph.paragraph_format.first_line_indent = Cm(0.74)
 
 
 def _body_paragraph(doc: DocumentObject, body: str) -> None:
-    for block in [item.strip() for item in body.split("\n") if item.strip()]:
+    for block in [item.strip() for item in _normalize_generated_text(body).split("\n") if item.strip()]:
         paragraph = doc.add_paragraph(block)
         paragraph.paragraph_format.first_line_indent = Cm(0.74)
         paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
@@ -274,13 +292,98 @@ def _schedule_text(items: list[dict[str, Any]]) -> str:
     )
 
 
+def _outline_text(items: list[dict[str, Any]]) -> str:
+    """把模型生成的结构化论文提纲转换成三级编号文本。"""
+
+    lines: list[str] = []
+    for chapter_index, item in enumerate(items, start=1):
+        lines.append(f"{chapter_index} {_strip_outline_number(str(item.get('title') or ''))}")
+        seen_section_titles: set[str] = set()
+        raw_sections = item.get("sections")
+        sections: list[Any] = raw_sections if isinstance(raw_sections, list) else []
+        for section_index, section in enumerate(sections, start=1):
+            if isinstance(section, dict):
+                section_title = _strip_outline_number(str(section.get("title") or ""))
+                raw_subsection_items = section.get("subsections")
+                if not isinstance(raw_subsection_items, list):
+                    raw_subsection_items = section.get("items")
+                subsection_items: list[Any] = raw_subsection_items if isinstance(raw_subsection_items, list) else []
+            else:
+                section_title = _strip_outline_number(str(section))
+                subsection_items = []
+            if not section_title or section_title in seen_section_titles:
+                continue
+            seen_section_titles.add(section_title)
+            lines.append(f"{chapter_index}.{section_index} {section_title}")
+            for subsection_index, subsection in enumerate(subsection_items, start=1):
+                lines.append(
+                    f"{chapter_index}.{section_index}.{subsection_index} {_strip_outline_number(str(subsection))}"
+                )
+        raw_subsections = item.get("subsections")
+        subsections: list[Any] = raw_subsections if isinstance(raw_subsections, list) else []
+        for section_index, section in enumerate(subsections, start=len(sections) + 1):
+            if not isinstance(section, dict):
+                continue
+            section_title = _strip_outline_number(str(section.get("title") or ""))
+            if not section_title or section_title in seen_section_titles:
+                continue
+            seen_section_titles.add(section_title)
+            lines.append(
+                f"{chapter_index}.{section_index} {section_title}"
+            )
+            raw_third_level_items = section.get("items")
+            third_level_items: list[Any] = raw_third_level_items if isinstance(raw_third_level_items, list) else []
+            for subsection_index, subsection in enumerate(third_level_items, start=1):
+                lines.append(
+                    f"{chapter_index}.{section_index}.{subsection_index} {_strip_outline_number(str(subsection))}"
+                )
+    return "\n".join(lines)
+
+
+def _strip_outline_number(value: str) -> str:
+    """移除模型偶尔自带的章节编号，避免与程序编号叠加。"""
+
+    stripped = re.sub(r"^\s*(?:\d+(?:\.\d+)*[、.．\s]+)+", "", value)
+    stripped = re.sub(r"^\s*第\s*\d+\s*[章节篇]\s*", "", stripped)
+    stripped = re.sub(r"^\s*第?[一二三四五六七八九十]+[章节、.．\s]+", "", stripped)
+    return stripped.strip()
+
+
+def _normalize_generated_text(value: str) -> str:
+    """清理模型正文中常见的中文标点空格和重复分隔符。"""
+
+    normalized = re.sub(r"\s+([，。；：！？、）】])", r"\1", value)
+    normalized = re.sub(r"([（【])\s+", r"\1", normalized)
+    normalized = normalized.replace("。；", "；").replace("；。", "；")
+    return normalized
+
+
+def _profile_with_placeholders(request: dict[str, Any]) -> dict[str, str]:
+    """为非必填身份字段补充可见且易替换的通用占位值。"""
+
+    raw_profile = request.get("student_profile")
+    profile: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
+    defaults = {
+        "school": "某某大学",
+        "college": "某某学院",
+        "name": "某某某",
+        "student_no": "20XXXXXXXXXX",
+        "class_name": "某某班",
+        "major": "某某专业",
+        "internal_advisor": "某某某",
+        "enterprise_advisor": "某某某",
+        "year_month": "20XX年XX月",
+    }
+    return {key: str(profile.get(key) or value) for key, value in defaults.items()}
+
+
 def _set_cell_content(cell: Any, heading: str, body: str) -> None:
     cell.text = ""
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
     heading_paragraph = cell.paragraphs[0]
     heading_run = heading_paragraph.add_run(heading)
     _format_run(heading_run, 12, bold=True, font=FONT_HEADING)
-    for block in [item.strip() for item in body.split("\n")]:
+    for block in [item.strip() for item in _normalize_generated_text(body).split("\n")]:
         paragraph = cell.add_paragraph(block)
         paragraph.paragraph_format.line_spacing = 1.5
         paragraph.paragraph_format.first_line_indent = Cm(0.74) if block else None
@@ -299,7 +402,7 @@ def _merge_labeled_row(table: Any, row: int, label: str, content: str) -> None:
 def _replace_cell_text(cell: Any, text: str, *, bold: bool = False) -> None:
     cell.text = ""
     cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-    lines = text.split("\n") or [""]
+    lines = _normalize_generated_text(text).split("\n") or [""]
     for index, line in enumerate(lines):
         paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if len(line) < 20 else WD_ALIGN_PARAGRAPH.LEFT
@@ -355,4 +458,4 @@ def _set_cell_width(cell: Any, width: Cm) -> None:
     tc_width.set(qn("w:type"), "dxa")
 
 
-__all__ = ["build_writing_document"]
+__all__ = ["build_thesis_material_document"]

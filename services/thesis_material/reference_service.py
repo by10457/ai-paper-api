@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from math import ceil
 
 from core.config import get_settings
-from schemas.writing import ReferenceRecord
+from schemas.thesis_material import ReferenceRecord
 from services.thesis.content import reference_service_serpapi, reference_service_wfapi
 from services.thesis.content.reference_service import (
     REFERENCE_MODE_MIXED,
@@ -60,7 +60,12 @@ async def retrieve_reference_records(
         )
         records = _merge_records(records, parse_reference_records(supplement, provider=provider))
 
-    target_chinese_count, target_english_count = _target_language_quota(target_count)
+    records = _rank_records_by_relevance(title, context, records)
+
+    if minimum_english_count == 0:
+        target_chinese_count, target_english_count = target_count, 0
+    else:
+        target_chinese_count, target_english_count = _target_language_quota(target_count)
     records = await _supplement_language_shortage(
         title,
         context,
@@ -68,6 +73,7 @@ async def retrieve_reference_records(
         target_chinese_count,
         target_english_count,
     )
+    records = _rank_records_by_relevance(title, context, records)
     if _meets_quota(records, target_count, target_chinese_count, target_english_count):
         return _select_records(records, target_count, target_chinese_count, target_english_count)
     if _meets_quota(records, minimum_count, minimum_chinese_count, minimum_english_count):
@@ -188,6 +194,38 @@ def _select_records(
         formatted = re.sub(r"^\[\d+\]", f"[{index}]", item.formatted, count=1)
         normalized.append(item.model_copy(update={"index": index, "formatted": formatted}))
     return normalized
+
+
+def _rank_records_by_relevance(
+    title: str,
+    context: str,
+    records: list[ReferenceRecord],
+) -> list[ReferenceRecord]:
+    """按题名与请求上下文的字符片段重排检索结果，并剔除撤稿记录。"""
+
+    query = _normalized_search_text(f"{title}{context}")
+    query_bigrams = _text_bigrams(query)
+
+    def relevance(item: ReferenceRecord) -> tuple[int, int]:
+        candidate = _normalized_search_text(item.title)
+        overlap = len(query_bigrams & _text_bigrams(candidate))
+        direct_bonus = sum(1 for token in ("实验室", "预约", "高校", "教育", "人工智能") if token in query and token in candidate)
+        return overlap + direct_bonus * 3, -len(candidate)
+
+    usable = [item for item in records if "retracted" not in item.title.lower() and "撤稿" not in item.title]
+    return sorted(usable, key=relevance, reverse=True)
+
+
+def _normalized_search_text(value: str) -> str:
+    """保留中英文数字并统一小写，供轻量相关性排序使用。"""
+
+    return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.lower())
+
+
+def _text_bigrams(value: str) -> set[str]:
+    """返回字符二元片段，兼容中文与未分词英文题名。"""
+
+    return {value[index : index + 2] for index in range(max(len(value) - 1, 0))}
 
 
 def parse_reference_records(text: str, *, provider: str) -> list[ReferenceRecord]:

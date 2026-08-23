@@ -102,6 +102,35 @@ class AdminOrderDetailResponse(BaseModel):
     point_ledgers: list[PointLedgerResponse]
 
 
+class AdminThesisMaterialOrderListItem(BaseModel):
+    id: int
+    order_sn: str
+    user_id: int
+    username: str
+    document_type: str
+    title: str
+    status: str
+    cost_points: int
+    paid_points: int
+    refunded_points: int
+    task_id: str | None
+    stage: str | None
+    progress: int
+    last_error: str | None
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class AdminThesisMaterialOrderDetailResponse(BaseModel):
+    order: AdminThesisMaterialOrderListItem
+    request_payload: dict[str, Any]
+    result_data: dict[str, Any] | None
+    storage_provider: str | None
+    file_key: str | None
+    local_file_key: str | None
+    download_url: str | None
+
+
 class AdminOrderManualFileRequest(BaseModel):
     download_url: str = Field(..., min_length=1, max_length=1024)
     file_key: str | None = Field(None, max_length=512)

@@ -93,7 +93,7 @@ class PointLedgerResponse(BaseModel):
     balance_after: int
     reason: str
     order_id: int | None = None
+    thesis_material_order_id: int | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
-

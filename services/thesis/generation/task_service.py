@@ -148,7 +148,7 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
     if order is None:
         raise RuntimeError("论文订单不存在")
     if generation_task.document_type != "thesis":
-        await _run_writing_generation_task(generation_task, order)
+        await _run_thesis_material_generation_task(generation_task, order)
         return
     normalized = PaperOrderService.normalize_generate_input(order)
     if not normalized.outline_json:
@@ -186,10 +186,10 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
     )
 
 
-async def _run_writing_generation_task(generation_task: PaperGenerationTask, order: Any) -> None:
+async def _run_thesis_material_generation_task(generation_task: PaperGenerationTask, order: Any) -> None:
     """执行开题报告、文献综述或任务书生成任务。"""
 
-    from services.writing.generation import generate_writing_document
+    from services.thesis_material.generation import generate_thesis_material_document
 
     request_payload = order.config_form if isinstance(order.config_form, dict) else {}
     order.status = "generating"
@@ -198,7 +198,7 @@ async def _run_writing_generation_task(generation_task: PaperGenerationTask, ord
     order.last_error = ""
     await order.save(update_fields=["status", "task_id", "started_at", "last_error", "updated_at"])
     try:
-        result = await generate_writing_document(
+        result = await generate_thesis_material_document(
             task_id=generation_task.task_id,
             document_type=generation_task.document_type,
             request_payload=request_payload,
@@ -358,7 +358,7 @@ async def _mark_generation_completed(
 
     docx_path = str(_result_value(result, "docx_path", ""))
     document_type = str(_result_value(result, "document_type", ""))
-    is_academic_writing = document_type in {"proposal_report", "literature_review", "task_book"}
+    is_thesis_material = document_type in {"proposal_report", "literature_review", "task_book"}
     document_label = {
         "proposal_report": "开题报告",
         "literature_review": "文献综述",
@@ -366,7 +366,7 @@ async def _mark_generation_completed(
     }.get(document_type, "论文")
     await publish_progress(
         task_id,
-        "uploading" if is_academic_writing else "storage",
+        "uploading" if is_thesis_material else "storage",
         f"正在保存{document_label}文件",
     )
     stored = await store_document(docx_path, task_id)

@@ -14,6 +14,7 @@ from tortoise.expressions import Q
 from core import redis as redis_module
 from core.logger import logger
 from models.paper import PaperGenerationTask, PaperOrder
+from models.paper_material import ThesisMaterialGenerationTask
 
 PAPER_QUEUE_READY_KEY = "ai-paper:queue:paper:ready"
 PAPER_QUEUE_DELAYED_KEY = "ai-paper:queue:paper:delayed"
@@ -47,7 +48,7 @@ end
 return moved
 """
 
-PaperQueueKind = Literal["order", "task"]
+PaperQueueKind = Literal["order", "task", "thesis_material_task"]
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,9 @@ def _decode_job(payload: str) -> PaperQueueJob | None:
     """解析 Redis 队列载荷，异常数据直接丢弃并记录日志。"""
 
     kind, separator, raw_item_id = payload.partition(":")
-    if separator != ":" or kind not in {"order", "task"}:
+    if kind in {"paper_material_task", "writing_task"}:
+        kind = "thesis_material_task"
+    if separator != ":" or kind not in {"order", "task", "thesis_material_task"}:
         logger.warning(f"忽略非法论文队列任务：{payload}")
         return None
 
@@ -98,6 +101,12 @@ async def enqueue_generation_task(generation_task_id: int, delay_seconds: int = 
     """把论文生成任务加入 Redis 生成队列。"""
 
     return await _enqueue_generation_job("task", generation_task_id, delay_seconds)
+
+
+async def enqueue_thesis_material_generation_task(generation_task_id: int, delay_seconds: int = 0) -> bool:
+    """把论文材料生成任务加入 Redis 生成队列。"""
+
+    return await _enqueue_generation_job("thesis_material_task", generation_task_id, delay_seconds)
 
 
 async def pop_ready_generation_job() -> PaperQueueJob | None:
@@ -135,23 +144,28 @@ async def move_due_delayed_jobs(limit: int = 100) -> int:
     return int(moved)
 
 
-async def enqueue_pending_paid_jobs(limit: int) -> tuple[int, int]:
+async def enqueue_pending_paid_jobs(limit: int) -> tuple[int, int, int]:
     """补投数据库中已支付但还未被 Redis worker 消费的任务。"""
 
     if redis_module.redis_client is None:
         logger.warning("Redis 未连接，跳过论文生成任务补投")
-        return 0, 0
+        return 0, 0, 0
 
-    generation_tasks = await _list_due_paid_generation_tasks(limit)
+    thesis_material_tasks = await _list_due_paid_thesis_material_tasks(limit)
+    for thesis_material_task in thesis_material_tasks:
+        await enqueue_thesis_material_generation_task(thesis_material_task.id)
+
+    remaining_limit = max(limit - len(thesis_material_tasks), 0)
+    generation_tasks = await _list_due_paid_generation_tasks(remaining_limit)
     for generation_task in generation_tasks:
         await enqueue_generation_task(generation_task.id)
 
-    remaining_limit = max(limit - len(generation_tasks), 0)
+    remaining_limit = max(remaining_limit - len(generation_tasks), 0)
     orders = await _list_due_paid_orders_without_task(remaining_limit)
     for order in orders:
         await enqueue_order_generation(order.id)
 
-    return len(orders), len(generation_tasks)
+    return len(orders), len(generation_tasks), len(thesis_material_tasks)
 
 
 async def _enqueue_generation_job(kind: PaperQueueKind, item_id: int, delay_seconds: int) -> bool:
@@ -205,3 +219,12 @@ async def _list_due_paid_generation_tasks(limit: int) -> list[PaperGenerationTas
         return []
     eligibility = Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=timezone.now())
     return await PaperGenerationTask.filter(Q(status="paid") & eligibility).order_by("id").limit(limit)
+
+
+async def _list_due_paid_thesis_material_tasks(limit: int) -> list[ThesisMaterialGenerationTask]:
+    """查询当前已到生成时间的论文材料任务。"""
+
+    if limit <= 0:
+        return []
+    eligibility = Q(next_retry_at__isnull=True) | Q(next_retry_at__lte=timezone.now())
+    return await ThesisMaterialGenerationTask.filter(Q(status="paid") & eligibility).order_by("id").limit(limit)

@@ -13,6 +13,8 @@ from schemas.admin import (
     AdminOverviewResponse,
     AdminPointAdjustRequest,
     AdminResetPasswordRequest,
+    AdminThesisMaterialOrderDetailResponse,
+    AdminThesisMaterialOrderListItem,
     AdminUserCreateRequest,
     AdminUserDetailResponse,
     AdminUserUpdateRequest,
@@ -152,6 +154,58 @@ async def get_order_detail(
     """查询指定论文订单详情。"""
 
     return Response.ok(data=await AdminService.get_order_detail(order_id))
+
+
+@router.get(
+    "/writing-orders",
+    response_model=Response[PageResponse[AdminThesisMaterialOrderListItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/paper-material-orders",
+    response_model=Response[PageResponse[AdminThesisMaterialOrderListItem]],
+    include_in_schema=False,
+)
+@router.get(
+    "/thesis-material-orders",
+    response_model=Response[PageResponse[AdminThesisMaterialOrderListItem]],
+    summary="分页查询论文材料订单",
+)
+async def list_thesis_material_orders(
+    page: int = 1,
+    page_size: int = 10,
+    keyword: str | None = None,
+    status: str | None = None,
+    document_type: str | None = None,
+    _: User = Depends(get_current_admin_user),
+) -> Response[PageResponse[AdminThesisMaterialOrderListItem]]:
+    """查询开题报告、文献综述和任务书订单。"""
+
+    return Response.ok(data=await AdminService.list_thesis_material_orders(page, page_size, keyword, status, document_type))
+
+
+@router.get(
+    "/writing-orders/{order_id}",
+    response_model=Response[AdminThesisMaterialOrderDetailResponse],
+    include_in_schema=False,
+)
+@router.get(
+    "/paper-material-orders/{order_id}",
+    response_model=Response[AdminThesisMaterialOrderDetailResponse],
+    include_in_schema=False,
+)
+@router.get(
+    "/thesis-material-orders/{order_id}",
+    response_model=Response[AdminThesisMaterialOrderDetailResponse],
+    summary="查询论文材料订单详情",
+)
+async def get_thesis_material_order_detail(
+    order_id: int,
+    _: User = Depends(get_current_admin_user),
+) -> Response[AdminThesisMaterialOrderDetailResponse]:
+    """查询论文材料订单的请求、结果、进度和文件信息。"""
+
+    return Response.ok(data=await AdminService.get_thesis_material_order_detail(order_id))
 
 
 @router.post("/orders/{order_id}/retry", response_model=Response[PaperOrderStatusResponse], summary="重试生成订单")

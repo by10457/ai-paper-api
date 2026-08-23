@@ -289,7 +289,7 @@ class PaperOrderService:
                 using_db=conn,
                 user=locked_user,
                 order=order,
-                change_type="writing_api_deduct" if document_type != "thesis" else "paper_api_deduct",
+                change_type="thesis_material_api_deduct" if document_type != "thesis" else "paper_api_deduct",
                 delta=-resolved_cost_points,
                 balance_after=locked_user.points,
                 reason=f"AI写作订单 {order.order_sn} 接口调用积分支付",

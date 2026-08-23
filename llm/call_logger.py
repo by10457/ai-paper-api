@@ -37,6 +37,8 @@ async def record_model_call(
             user_id=ctx.user_id,
             order_id=ctx.order_id,
             generation_task_id=ctx.generation_task_id,
+            thesis_material_order_id=ctx.thesis_material_order_id,
+            thesis_material_generation_task_id=ctx.thesis_material_generation_task_id,
             model_config_id=model_config_id,
             config_type=config_type,
             call_type=call_type,
