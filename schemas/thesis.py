@@ -14,6 +14,8 @@ FIGURE_BLOCK_PATTERN = re.compile(r"<<FIGURE>>\s*(.*?)\s*<</FIGURE>>", re.DOTALL
 TitleRecommendationContent = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=5000)]
 # 单个论文题目的接口长度边界。
 RecommendedTitle = Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=100)]
+# 统一订单列表支持的论文及论文材料类型。
+UnifiedOrderDocumentType = Literal["thesis", "proposal_report", "literature_review", "task_book"]
 
 
 class TitleRecommendationRequest(BaseModel):
@@ -276,6 +278,21 @@ class PaperOrderListItemResponse(BaseModel):
     error_msg: str | None = None
     created_at: str
     paid_at: str | None = None
+    completed_at: str | None = None
+
+
+class UnifiedOrderListItemResponse(BaseModel):
+    """论文与论文材料统一订单列表项。"""
+
+    order_sn: str
+    document_type: UnifiedOrderDocumentType
+    title: str
+    status: str
+    paid_points: int
+    refunded_points: int
+    has_file: int
+    error_message: str | None = None
+    created_at: str
     completed_at: str | None = None
 
 

@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
 
@@ -9,7 +12,9 @@ from fastapi.testclient import TestClient
 from api.dependencies.api_token import get_api_token_or_jwt_user
 from app import app
 from models.paper import PaperOrder
-from services.thesis.business import order_workflow
+from models.paper_material import ThesisMaterialOrder
+from models.user import User
+from services.thesis.business import order_workflow, unified_order_query
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.generation.task_service import json_outline_to_markdown
 from services.thesis.storage.qiniu_storage import build_qiniu_private_download_url
@@ -32,6 +37,129 @@ def test_paper_order_routes_are_registered() -> None:
     assert "/api/v1/thesis/orders/pay" in routes
     assert "/api/v1/thesis/orders/status" in routes
     assert "/api/v1/thesis/orders/download-url" in routes
+    assert "/api/v1/thesis/orders/unified" in routes
+
+
+class FakeOrderQuery:
+    """统一订单服务测试使用的最小异步查询替身。"""
+
+    # 初始化异步查询替身并记录可返回的数据。
+    def __init__(self, items: Sequence[object]) -> None:
+        self.items = list(items)
+        self.limit_value = len(items)
+
+    # 返回替身查询的记录数量。
+    async def count(self) -> int:
+        """返回替身查询的记录数量。"""
+
+        return len(self.items)
+
+    # 保持测试数据既有顺序。
+    def order_by(self, *_fields: str) -> FakeOrderQuery:
+        """保持测试数据既有顺序。
+
+        Args:
+            _fields: ORM 排序字段，本替身不解析。
+
+        Returns:
+            当前查询替身。
+        """
+
+        return self
+
+    # 记录查询数量上限。
+    def limit(self, value: int) -> FakeOrderQuery:
+        """记录查询数量上限。
+
+        Args:
+            value: 最大返回数量。
+
+        Returns:
+            当前查询替身。
+        """
+
+        self.limit_value = value
+        return self
+
+    # 将替身查询转换为可等待对象。
+    def __await__(self) -> Generator[object, None, list[object]]:
+        """返回可等待的查询结果。"""
+
+        async def resolve() -> list[object]:
+            return self.items[: self.limit_value]
+
+        return resolve().__await__()
+
+
+# 验证论文与材料订单会按真实创建时间合并并正确分页。
+async def test_unified_order_query_merges_types_by_created_at(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """确认统一订单按真实创建时间合并并分页。"""
+
+    paper_orders = [
+        SimpleNamespace(
+            id=1,
+            order_sn="AP001",
+            title="较早论文",
+            status="completed",
+            paid_points=200,
+            refunded_points=0,
+            last_error=None,
+            file_key="papers/AP001.docx",
+            local_file_key=None,
+            download_url=None,
+            created_at=datetime(2026, 8, 20, 8, tzinfo=UTC),
+            completed_at=datetime(2026, 8, 20, 9, tzinfo=UTC),
+        ),
+        SimpleNamespace(
+            id=2,
+            order_sn="AP002",
+            title="最新论文",
+            status="generating",
+            paid_points=200,
+            refunded_points=0,
+            last_error=None,
+            file_key=None,
+            local_file_key=None,
+            download_url=None,
+            created_at=datetime(2026, 8, 22, 8, tzinfo=UTC),
+            completed_at=None,
+        ),
+    ]
+    material_orders = [
+        SimpleNamespace(
+            id=3,
+            order_sn="TM001",
+            document_type="proposal_report",
+            title="中间开题报告",
+            status="completed",
+            paid_points=20,
+            refunded_points=0,
+            last_error=None,
+            file_key="materials/TM001.docx",
+            local_file_key=None,
+            download_url=None,
+            created_at=datetime(2026, 8, 21, 8, tzinfo=UTC),
+            completed_at=datetime(2026, 8, 21, 9, tzinfo=UTC),
+        )
+    ]
+    monkeypatch.setattr(PaperOrder, "filter", lambda **_kwargs: FakeOrderQuery(paper_orders))
+    monkeypatch.setattr(
+        ThesisMaterialOrder,
+        "filter",
+        lambda **_kwargs: FakeOrderQuery(material_orders),
+    )
+
+    result = await unified_order_query.list_unified_orders(
+        cast(User, SimpleNamespace(id=1)),
+        page=1,
+        page_size=2,
+    )
+
+    assert result.total == 3
+    assert [item.order_sn for item in result.items] == ["AP002", "TM001"]
+    assert [item.document_type for item in result.items] == ["thesis", "proposal_report"]
 
 
 def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

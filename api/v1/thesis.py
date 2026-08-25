@@ -27,8 +27,10 @@ from schemas.thesis import (
     PaperPriceResponse,
     TaskStatusResponse,
     TitleRecommendationRequest,
+    UnifiedOrderListItemResponse,
 )
 from services.thesis.business import order_workflow
+from services.thesis.business.unified_order_query import list_unified_orders
 from services.thesis.content.title_service import generate_recommended_titles
 from services.thesis.generation import task_service as generation_task
 from services.thesis.generation.runtime_context import use_runtime_context
@@ -232,6 +234,31 @@ async def list_my_paper_orders(
     """分页查询当前用户论文订单。"""
 
     return Response.ok(data=await order_workflow.list_user_orders(current_user, page, page_size))
+
+
+# 分页查询当前用户的全部论文与论文材料订单。
+@router.get(
+    "/orders/unified",
+    response_model=Response[PageResponse[UnifiedOrderListItemResponse]],
+    summary="分页查询当前用户全部论文订单",
+)
+async def list_my_unified_orders(
+    page: int = 1,
+    page_size: int = 10,
+    current_user: User = Depends(get_api_token_or_jwt_user),
+) -> Response[PageResponse[UnifiedOrderListItemResponse]]:
+    """分页查询当前用户的全部论文与论文材料订单。
+
+    Args:
+        page: 当前页码。
+        page_size: 每页数量。
+        current_user: 当前认证用户。
+
+    Returns:
+        按创建时间倒序排列的统一订单分页结果。
+    """
+
+    return Response.ok(data=await list_unified_orders(current_user, page, page_size))
 
 
 @router.get(
