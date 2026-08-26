@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -11,31 +12,120 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from llm.client import create_configured_llm
 from schemas.thesis_material import ReferenceRecord
 
+
+@dataclass(frozen=True)
+class LengthRange:
+    """单个正文区块的目标和提示范围。"""
+
+    target: int
+    minimum: int
+    maximum: int
+
+
+@dataclass(frozen=True)
+class MaterialLengthPlan:
+    """按用户目标字数分配后的材料正文预算。"""
+
+    target_word_count: int
+    fields: dict[str, LengthRange]
+    theme_count: int
+    theme: LengthRange | None
+    body_minimum: int
+    body_maximum: int
+
+
+_DEFAULT_TARGETS = {"proposal_report": 4000, "literature_review": 6000}
+_LENGTH_WEIGHTS: dict[str, tuple[tuple[str, int], ...]] = {
+    "proposal_report": (
+        ("research_purpose", 16),
+        ("research_status_and_trends", 30),
+        ("research_content", 17),
+        ("key_points", 9),
+        ("difficulties", 9),
+        ("research_methods", 12),
+        ("feasibility_and_innovation", 7),
+    ),
+    "literature_review": (
+        ("abstract", 7),
+        ("introduction", 10),
+        ("domestic_research", 14),
+        ("foreign_research", 14),
+        ("method_comparison", 9),
+        ("research_gaps", 6),
+        ("future_trends", 5),
+        ("conclusion", 5),
+    ),
+}
+_LITERATURE_THEME_WEIGHT = 30
+
+
+def build_length_plan(document_type: str, request: dict[str, Any]) -> MaterialLengthPlan:
+    """把总正文目标按材料类型动态分配到各区块。
+
+    统计口径统一为正文非空白字符数；不计标题、关键词、写作提纲、进度计划、
+    参考文献、个人信息和签字审核区。章节预算允许约正负 10% 的结构弹性，总正文
+    验收容差为目标的正负 10%，另保留最多 20 个字符的引用规范化缓冲。
+    """
+
+    if document_type not in _DEFAULT_TARGETS:
+        return MaterialLengthPlan(0, {"design_background": LengthRange(150, 100, 200)}, 0, None, 0, 0)
+    target = int(request.get("target_word_count") or _DEFAULT_TARGETS[document_type])
+    field_targets = _allocate_targets(target, _LENGTH_WEIGHTS[document_type])
+    fields = {field: _length_range(value) for field, value in field_targets.items()}
+    theme_count = 0
+    theme = None
+    if document_type == "literature_review":
+        theme_count = max(3, min(6, round(target / 1500)))
+        theme_total = round(target * _LITERATURE_THEME_WEIGHT / 100)
+        theme = _length_range(round(theme_total / theme_count))
+    body_slack = min(20, max(10, round(target * 0.005)))
+    return MaterialLengthPlan(
+        target_word_count=target,
+        fields=fields,
+        theme_count=theme_count,
+        theme=theme,
+        body_minimum=max(0, round(target * 0.9) - body_slack),
+        body_maximum=round(target * 1.1) + body_slack,
+    )
+
+
+def _allocate_targets(target: int, weights: tuple[tuple[str, int], ...]) -> dict[str, int]:
+    allocated: dict[str, int] = {}
+    used = 0
+    reserved_weight = _LITERATURE_THEME_WEIGHT if sum(weight for _, weight in weights) < 100 else 0
+    allocatable = round(target * (100 - reserved_weight) / 100)
+    for index, (field, weight) in enumerate(weights):
+        value = allocatable - used if index == len(weights) - 1 else round(target * weight / 100)
+        allocated[field] = value
+        used += value
+    return allocated
+
+
+def _length_range(target: int) -> LengthRange:
+    margin = max(20, round(target * 0.1))
+    return LengthRange(target, max(80, target - margin), target + margin)
+
+
+_DEFAULT_PROPOSAL_PLAN = build_length_plan("proposal_report", {})
+_DEFAULT_LITERATURE_PLAN = build_length_plan("literature_review", {})
 WRITING_LENGTH_CONSTRAINTS: dict[str, dict[str, tuple[int, int]]] = {
     "proposal_report": {
-        "research_purpose": (700, 1000),
-        "research_status_and_trends": (1400, 2000),
-        "research_content": (600, 900),
-        "key_points": (300, 500),
-        "difficulties": (300, 500),
-        "research_methods": (400, 600),
-        "feasibility_and_innovation": (300, 500),
+        field: (length.minimum, length.maximum) for field, length in _DEFAULT_PROPOSAL_PLAN.fields.items()
     },
     "literature_review": {
-        "abstract": (200, 300),
-        "introduction": (400, 600),
-        "domestic_research": (600, 800),
-        "foreign_research": (600, 800),
-        "method_comparison": (500, 700),
-        "research_gaps": (350, 500),
-        "future_trends": (350, 500),
-        "conclusion": (300, 450),
+        field: (length.minimum, length.maximum) for field, length in _DEFAULT_LITERATURE_PLAN.fields.items()
     },
     "task_book": {"design_background": (100, 200)},
 }
-
-LITERATURE_THEME_LENGTH = (500, 700)
-LITERATURE_BODY_LENGTH = (5500, 7500)
+assert _DEFAULT_LITERATURE_PLAN.theme is not None
+LITERATURE_THEME_LENGTH = (
+    _DEFAULT_LITERATURE_PLAN.theme.minimum,
+    _DEFAULT_LITERATURE_PLAN.theme.maximum,
+)
+LITERATURE_BODY_LENGTH = (
+    _DEFAULT_LITERATURE_PLAN.body_minimum,
+    _DEFAULT_LITERATURE_PLAN.body_maximum,
+)
 LITERATURE_BODY_FIELDS = (
     "abstract",
     "introduction",
@@ -97,6 +187,22 @@ _FIELD_KEYWORD_GROUPS = {
 }
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？!?；;])\s*|\n+")
+_UNSUPPORTED_CITATION_CLAIM = re.compile(
+    r"发现|证明|验证|表明|揭示|显示|显著|提升|提高|降低|改善|证实|提出|构建了|实现了|设计了|"
+    r"强调|采用|使用|引入|聚焦|关注|指出|认为|提到|探讨|分析|研究了|进行了"
+)
+_CITATION_TEXT_FIELDS = (
+    "research_purpose",
+    "research_status_and_trends",
+    "abstract",
+    "introduction",
+    "domestic_research",
+    "foreign_research",
+    "method_comparison",
+    "research_gaps",
+    "future_trends",
+    "conclusion",
+)
 
 
 async def generate_proposal_content(
@@ -105,25 +211,50 @@ async def generate_proposal_content(
 ) -> dict[str, Any]:
     """分三次生成开题报告主体，避免单次长输出丢失区块。"""
 
+    plan = build_length_plan("proposal_report", request)
     context = _request_context(request)
     reference_text = _reference_text(references)
+    purpose_range = plan.fields["research_purpose"]
+    status_range = plan.fields["research_status_and_trends"]
     purpose = await _ask_text(
         "你是本科毕业设计开题报告写作专家。只输出连续正文，不要标题。",
-        f"课题：{request['title']}\n补充信息：{context}\n写700-1000字研究目的，必须包括行业背景、现实问题、技术背景、必要性、应用价值和研究目标。可引用[1]-[2]。\n真实文献：\n{reference_text}",
+        f"课题：{request['title']}\n补充信息：{context}\n"
+        f"写{purpose_range.minimum}-{purpose_range.maximum}字研究目的，必须包括行业背景、现实问题、"
+        f"技术背景、必要性、应用价值和研究目标。可引用[1]-[2]。\n真实文献：\n{reference_text}",
+        max_tokens=max(600, round(purpose_range.maximum * 1.2)),
     )
     status = await _ask_text(
         "你是严谨的学术文献综述作者。不得虚构文献，只能使用给定编号。"
+        "只能依据题名、作者、年份和来源作审慎归纳，不得把题名未支持的内容写成文献结论。"
         "引用必须紧跟其支撑的具体论述，每句最多引用2篇，禁止在段末集中罗列连续编号。只输出连续正文。",
-        f"课题：{request['title']}\n补充信息：{context}\n围绕传统方案、国内外研究、主流技术、应用场景、架构演进、现有不足和未来趋势写1400-2000字。引用至少8篇给定文献。\n真实文献：\n{reference_text}",
+        f"课题：{request['title']}\n补充信息：{context}\n围绕传统方案、国内外研究、主流技术、应用场景、"
+        f"架构演进、现有不足和未来趋势写{status_range.minimum}-{status_range.maximum}字。"
+        f"引用至少{min(len(references), 8)}篇给定文献。\n真实文献：\n{reference_text}",
+        max_tokens=max(800, round(status_range.maximum * 1.2)),
+    )
+    analysis_constraints = "；".join(
+        f"{field} {length.minimum}-{length.maximum}字"
+        for field, length in plan.fields.items()
+        if field not in {"research_purpose", "research_status_and_trends"}
     )
     analysis = await _ask_json(
         "你是毕业设计技术方案专家。严格输出JSON对象，不要Markdown。",
-        f"课题：{request['title']}\n补充信息：{context}\n生成以下字段：research_content 600-900字；"
-        "key_points 300-500字；difficulties 300-500字；research_methods 400-600字；"
-        "feasibility_and_innovation 300-500字；writing_outline数组，包含5-8个一级章节，每项严格为"
+        f"课题：{request['title']}\n补充信息：{context}\n生成以下字段：{analysis_constraints}；"
+        "writing_outline数组，包含5-8个一级章节，每项严格为"
         "{title,sections}，sections为2-5项数组，每项严格为{title,subsections}，subsections为0-4个三级标题字符串；"
         "至少一个二级标题必须包含三级标题。title与subsections中禁止自带数字、中文序号或章节编号。"
         "内容必须具体且互不重复。",
+        max_tokens=max(
+            2200,
+            round(
+                sum(
+                    length.maximum
+                    for field, length in plan.fields.items()
+                    if field not in {"research_purpose", "research_status_and_trends"}
+                )
+                * 1.4
+            ),
+        ),
     )
     return {
         "research_purpose": purpose,
@@ -143,26 +274,54 @@ async def generate_literature_review_content(
 ) -> dict[str, Any]:
     """生成文献综述的结构化各部分。"""
 
+    plan = build_length_plan("literature_review", request)
+    if plan.theme is None:
+        raise RuntimeError("文献综述字数预算缺少主题配置")
     context = _request_context(request)
     reference_text = _reference_text(references)
+    overview_fields = ("abstract", "introduction", "domestic_research", "foreign_research")
+    overview_constraints = "、".join(
+        f"{field}({plan.fields[field].minimum}-{plan.fields[field].maximum}字)" for field in overview_fields
+    )
     overview = await _ask_json(
-        "你是学术文献综述作者。严格输出JSON对象，不得虚构文献编号。",
+        "你是学术文献综述作者。严格输出JSON对象，不得虚构文献编号。"
+        "只能依据题名、作者、年份和来源作审慎归纳，不得把题名未支持的内容写成文献结论。",
         f"课题：{request['title']}\n补充信息：{context}\n真实文献：\n{reference_text}\n"
-        "生成abstract(200-300字)、keywords(3-6个字符串)、introduction(400-600字)、"
-        "domestic_research(600-800字)、foreign_research(600-800字)。国内外研究必须综合比较并引用给定编号；"
+        f"生成{overview_constraints}、keywords(3-6个字符串)。国内外研究必须综合比较并引用给定编号；"
         "引用必须紧跟具体观点，每句最多2篇，禁止在段末集中罗列连续编号。",
+        max_tokens=max(2200, round(sum(plan.fields[field].maximum for field in overview_fields) * 1.4)),
+    )
+    analysis_fields = ("method_comparison", "research_gaps", "future_trends", "conclusion")
+    analysis_constraints = "、".join(
+        f"{field}为{plan.fields[field].minimum}-{plan.fields[field].maximum}字" for field in analysis_fields
     )
     analysis = await _ask_json(
-        "你是学术综述评审专家。严格输出JSON对象，不要Markdown，不得虚构文献。",
+        "你是学术综述评审专家。严格输出JSON对象，不要Markdown，不得虚构文献。"
+        "引用语句只能陈述题名和元数据能够支持的内容。",
         f"课题：{request['title']}\n真实文献：\n{reference_text}\n"
-        "生成themes数组5项，每项含title和content，content为500-700字，必须比较多篇文献并包含已有做法、不同观点、优缺点和小结；"
-        "method_comparison为500-700字、research_gaps为350-500字、future_trends为350-500字、conclusion为300-450字。",
+        f"生成themes数组{plan.theme_count}项，每项含title和content，content为"
+        f"{plan.theme.minimum}-{plan.theme.maximum}字，必须比较多篇文献并包含已有做法、不同观点、"
+        f"优缺点和小结；{analysis_constraints}。",
+        max_tokens=max(
+            2600,
+            round(
+                (plan.theme.maximum * plan.theme_count + sum(plan.fields[field].maximum for field in analysis_fields))
+                * 1.4
+            ),
+        ),
+    )
+    analysis = await _repair_missing_text_fields(
+        analysis,
+        analysis_fields,
+        title=str(request["title"]),
+        reference_text=reference_text,
+        length_plan=plan,
     )
     keywords = overview.get("keywords")
     themes = analysis.get("themes")
     if not isinstance(keywords, list) or not 3 <= len(keywords) <= 6:
         raise RuntimeError("文献综述关键词结构不合法")
-    if not isinstance(themes, list) or not 3 <= len(themes) <= 6:
+    if not isinstance(themes, list) or len(themes) != plan.theme_count:
         raise RuntimeError("文献综述主题结构不合法")
     return {
         "abstract": _required_text(overview, "abstract"),
@@ -181,12 +340,19 @@ async def generate_literature_review_content(
 async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
     """生成任务书目标、模块任务和成果要求。"""
 
+    numeric_requirements = _has_user_numeric_requirements(request)
+    metric_instruction = (
+        "用户已明确提供数值要求，只能复述这些数值，不得自行增加阈值。"
+        if numeric_requirements
+        else "用户未提供数值要求，禁止自行编造响应时间、并发量、覆盖率、准确率、占比或运行天数等确定性阈值；"
+        "指标应写成可检查的质量要求，确需举例的数值必须明确标注为‘建议值，待导师确认’。"
+    )
     result = await _ask_json(
         "你是高职和本科毕业设计任务书编制专家。严格输出JSON对象，不要填写姓名、学校、导师、签名、审核意见或日期。",
         f"课题：{request['title']}\n补充信息：{_request_context(request)}\n选题类型：{request.get('topic_type', '其他')}\n"
         "生成design_background(100-200字)、technology_stack(字符串数组)、design_goals(5-10个可验收目标)、"
         "main_indicators(4-8个可测量或可核验的主要技术/质量指标)、module_tasks(4-8项，每项含name、role、responsibilities、boundary)、"
-        "deliverable_forms(2-5项)、deliverable_requirements(2-5项)。设计目标、主要指标与模块任务不得重复。",
+        f"deliverable_forms(2-5项)、deliverable_requirements(2-5项)。设计目标、主要指标与模块任务不得重复。{metric_instruction}",
     )
     goals = result.get("design_goals")
     tasks = result.get("module_tasks")
@@ -203,7 +369,87 @@ async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("任务书成果要求数量不合法")
     if not isinstance(indicators, list) or not 4 <= len(indicators) <= 8:
         raise RuntimeError("任务书主要指标数量不合法")
+    _mark_unconfirmed_generated_metrics(request, result)
     return result
+
+
+def _has_user_numeric_requirements(request: dict[str, Any]) -> bool:
+    context = request.get("research_context")
+    if not isinstance(context, dict):
+        return False
+    return bool(re.search(r"\d", str(context.get("additional_requirements") or "")))
+
+
+def _mark_unconfirmed_generated_metrics(request: dict[str, Any], result: dict[str, Any]) -> None:
+    """把模型自行给出的数值指标显式降级为待确认建议。"""
+
+    if _has_user_numeric_requirements(request):
+        result["generated_suggestion_fields"] = []
+        return
+    generated_suggestion_fields: list[str] = []
+    for field in ("design_goals", "deliverable_requirements", "main_indicators"):
+        values = result.get(field)
+        if not isinstance(values, list):
+            continue
+        generated_suggestion = False
+        normalized: list[str] = []
+        for item in values:
+            value = str(item).strip()
+            if re.search(r"\d|%|％|毫秒|秒内|分钟|万字", value):
+                generated_suggestion = True
+                if "待导师确认" not in value:
+                    value = f"建议值（待导师确认）：{value}"
+            normalized.append(value)
+        result[field] = normalized
+        if generated_suggestion:
+            generated_suggestion_fields.append(field)
+    result["generated_suggestion_fields"] = generated_suggestion_fields
+
+
+def normalize_citation_claims(result: dict[str, Any]) -> None:
+    """把题名元数据无法支持的确定性研究结论改为可核验的保守表述。"""
+
+    raw_references = result.get("references")
+    if not isinstance(raw_references, list):
+        return
+    references = {
+        int(item["index"]): item
+        for item in raw_references
+        if isinstance(item, dict) and str(item.get("index") or "").isdigit()
+    }
+    for field in _CITATION_TEXT_FIELDS:
+        value = result.get(field)
+        if isinstance(value, str):
+            result[field] = _normalize_citation_text(value, references)
+    themes = result.get("themes")
+    if isinstance(themes, list):
+        for theme in themes:
+            if isinstance(theme, dict) and isinstance(theme.get("content"), str):
+                theme["content"] = _normalize_citation_text(str(theme["content"]), references)
+
+
+def _normalize_citation_text(value: str, references: dict[int, dict[str, Any]]) -> str:
+    sentences = [item for item in _SENTENCE_BOUNDARY.split(value) if item]
+    normalized: list[str] = []
+    conservative_indexes: set[int] = set()
+    for sentence in sentences:
+        indexes = [int(item) for item in re.findall(r"\[(\d+)\]", sentence)]
+        if not indexes or _UNSUPPORTED_CITATION_CLAIM.search(sentence) is None:
+            normalized.append(sentence)
+            continue
+        valid_indexes = [index for index in indexes if index in references]
+        if valid_indexes:
+            conservative_indexes.update(valid_indexes)
+            continue
+        normalized.append(sentence)
+    if len(conservative_indexes) == 1:
+        index = next(iter(conservative_indexes))
+        title = str(references[index].get("title") or "").strip()
+        normalized.append(f"文献[{index}]题名涉及《{title}》，本文仅据其题名与来源将其作为研究线索。")
+    elif conservative_indexes:
+        labels = "".join(f"[{index}]" for index in sorted(conservative_indexes))
+        normalized.append(f"文献{labels}题名涉及本课题相关主题，本文仅据题名与来源将其作为研究线索。")
+    return "".join(normalized)
 
 
 def _required_outline(value: Any) -> list[dict[str, Any]]:
@@ -231,51 +477,6 @@ def _required_outline(value: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-# 收敛文献综述总篇幅，优先裁剪主题而不重做已通过章节
-async def _repair_literature_body_length(request: dict[str, Any], result: dict[str, Any]) -> None:
-    """将文献综述正文收敛到总字数上限。
-
-    Args:
-        request: 原始写作请求，用于局部模型修复时保留课题上下文。
-        result: 已通过字段级校验的结构化综述结果。
-
-    Returns:
-        None。仅在总字数超长时更新主题内容，不改变其它章节。
-    """
-
-    body_length = _literature_body_length(result)
-    if body_length <= LITERATURE_BODY_LENGTH[1]:
-        return
-    themes = result.get("themes")
-    if not isinstance(themes, list):
-        raise RuntimeError("文献综述主题结构不合法")
-
-    remaining = body_length - LITERATURE_BODY_LENGTH[1]
-    remaining_themes = sum(1 for theme in themes if isinstance(theme, dict))
-    for index, theme in enumerate(themes):
-        if remaining <= 0 or not isinstance(theme, dict):
-            continue
-        content = str(theme.get("content") or "").strip()
-        current_length = text_length(content)
-        minimum, _ = LITERATURE_THEME_LENGTH
-        reduction = max(1, (remaining + remaining_themes - 1) // remaining_themes)
-        target_maximum = max(minimum + 50, current_length - reduction)
-        trimmed = _trim_to_complete_sentences(content, "theme_content", minimum, target_maximum)
-        if trimmed == content and current_length > target_maximum:
-            trimmed = await _repair_length_value(
-                "theme_content",
-                content,
-                minimum,
-                target_maximum,
-                request,
-                result,
-                field_label=f"themes[{index}].content",
-            )
-        theme["content"] = trimmed
-        remaining -= current_length - text_length(trimmed)
-        remaining_themes -= 1
-
-
 # 统计文献综述的可验收正文长度
 def _literature_body_length(result: dict[str, Any]) -> int:
     """统计文献综述正文长度。
@@ -290,11 +491,7 @@ def _literature_body_length(result: dict[str, Any]) -> int:
     total = sum(text_length(str(result.get(field) or "")) for field in LITERATURE_BODY_FIELDS)
     themes = result.get("themes")
     if isinstance(themes, list):
-        total += sum(
-            text_length(str(theme.get("content") or ""))
-            for theme in themes
-            if isinstance(theme, dict)
-        )
+        total += sum(text_length(str(theme.get("content") or "")) for theme in themes if isinstance(theme, dict))
     return total
 
 
@@ -305,21 +502,23 @@ async def repair_length_constraints(
 ) -> None:
     """只修复超出产品字数约束的字段。"""
 
-    constraints = WRITING_LENGTH_CONSTRAINTS.get(document_type, {})
-    for field, (minimum, maximum) in constraints.items():
+    plan = build_length_plan(document_type, request)
+    for field, length_range in plan.fields.items():
         if field not in result:
             continue
         result[field] = await _repair_length_value(
             field,
             str(result.get(field) or "").strip(),
-            minimum,
-            maximum,
+            length_range.minimum,
+            length_range.maximum,
             request,
             result,
         )
     if document_type == "literature_review":
+        if plan.theme is None:
+            raise RuntimeError("文献综述字数预算缺少主题配置")
         themes = result.get("themes")
-        if not isinstance(themes, list):
+        if not isinstance(themes, list) or len(themes) != plan.theme_count:
             raise RuntimeError("文献综述主题结构不合法")
         for index, theme in enumerate(themes):
             if not isinstance(theme, dict):
@@ -327,12 +526,12 @@ async def repair_length_constraints(
             theme["content"] = await _repair_length_value(
                 "theme_content",
                 str(theme.get("content") or "").strip(),
-                *LITERATURE_THEME_LENGTH,
+                plan.theme.minimum,
+                plan.theme.maximum,
                 request,
                 result,
                 field_label=f"themes[{index}].content",
             )
-        await _repair_literature_body_length(request, result)
 
 
 async def _repair_length_value(
@@ -376,22 +575,42 @@ async def _repair_length_value(
         else:
             source_instruction = f"原文：\n{value}"
         value = await _ask_text(
-            "你是严格执行篇幅要求的学术编辑。只输出修订后的连续正文，不要标题、说明或字数统计。",
+            "你是严格执行篇幅要求的学术编辑。只输出修订后的连续正文，不要标题、说明或字数统计。"
+            "参考文献只提供题名与来源元数据时，只能审慎说明题名涉及的主题，不得据此编造研究发现、"
+            "效果、提升幅度或作者结论。",
             f"课题：{request['title']}\n字段：{label}\n当前字符数：{length}\n{source_instruction}\n"
             f"内容要求：{_FIELD_REQUIREMENTS.get(field, '保留该字段的核心事实和论证。')}"
             f"请修订到约{target}字，硬性范围为{minimum}-{maximum}字。"
             f"写成{paragraph_count}个自然段，每段约{max(80, target // paragraph_count)}字。"
-            "字数按中文字符、汉字标点和英文单词共同计算，不得超出硬性范围；超长时必须重新组织语言，不得照抄原文。"
+            "字数按非空白字符统计，汉字、标点、英文字母和数字均逐字符计数；不得超出硬性范围；"
+            "超长时必须重新组织语言，不得照抄原文。"
             f"{citation_requirement}",
-            max_tokens=max(400, int(maximum * 0.9)),
+            max_tokens=max(500, round(maximum * 1.2)),
         )
     final_length = text_length(value)
     if final_length > maximum:
         value = _trim_to_complete_sentences(value, field, minimum, maximum)
         final_length = text_length(value)
+    if final_length > maximum and not re.search(r"\[\d+\]", value):
+        value = _trim_to_character_limit(value, maximum)
+        final_length = text_length(value)
     if not minimum <= final_length <= maximum:
         raise RuntimeError(f"字段{label}字数{final_length}不在{minimum}-{maximum}范围内")
     return value
+
+
+def _trim_to_character_limit(value: str, maximum: int) -> str:
+    """模型多次超长且无引用时，按同一统计口径安全截到完整句号。"""
+
+    kept: list[str] = []
+    count = 0
+    for char in value:
+        if not char.isspace():
+            if count >= maximum - 1:
+                break
+            count += 1
+        kept.append(char)
+    return "".join(kept).rstrip("，,；;：:。. ") + "。"
 
 
 async def repair_reference_coverage(
@@ -406,15 +625,17 @@ async def repair_reference_coverage(
         return
     reference_text = _reference_text(missing_references)
     if document_type == "proposal_report":
+        status_range = build_length_plan(document_type, request).fields["research_status_and_trends"]
         result["research_status_and_trends"] = await _ask_text(
             "你是严谨的开题报告文献综述作者。只输出修订后的连续正文，不要标题。",
             f"课题：{request['title']}\n原文：\n{result.get('research_status_and_trends', '')}\n"
             f"下列真实文献尚未在正文引用：\n{reference_text}\n"
             "在保留原文主要论证和已有引用的前提下完成修订。逐篇结合标题和元数据说明与课题的关系，"
             "形成比较、评价或趋势判断，并准确使用每个给定编号；不得增加不存在的文献。"
+            "只能说明题名和来源可直接支持的主题关系，不得把推测写成作者研究发现或确定性结论。"
             "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。"
-            "修订后的全文必须保持在1400-2000字。",
-            max_tokens=3000,
+            f"修订后的全文必须保持在{status_range.minimum}-{status_range.maximum}字。",
+            max_tokens=max(800, round(status_range.maximum * 1.2)),
         )
         return
     if document_type == "literature_review":
@@ -430,7 +651,8 @@ async def repair_reference_coverage(
             "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。",
         )
         new_theme = {"title": "补充文献的综合比较", "content": supplemental}
-        if len(themes) < 6:
+        planned_theme_count = build_length_plan(document_type, request).theme_count
+        if len(themes) < planned_theme_count:
             themes.append(new_theme)
         else:
             previous = themes[-1]
@@ -450,8 +672,8 @@ async def _ask_text(system: str, prompt: str, *, max_tokens: int = 5000) -> str:
     return text
 
 
-async def _ask_json(system: str, prompt: str) -> dict[str, Any]:
-    text = await _ask_text(system, prompt)
+async def _ask_json(system: str, prompt: str, *, max_tokens: int = 5000) -> dict[str, Any]:
+    text = await _ask_text(system, prompt, max_tokens=max_tokens)
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
     start = cleaned.find("{")
     end = cleaned.rfind("}")
@@ -464,6 +686,37 @@ async def _ask_json(system: str, prompt: str) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RuntimeError("模型JSON顶层必须是对象")
     return data
+
+
+async def _repair_missing_text_fields(
+    data: dict[str, Any],
+    required_fields: tuple[str, ...],
+    *,
+    title: str,
+    reference_text: str,
+    length_plan: MaterialLengthPlan,
+) -> dict[str, Any]:
+    """仅补生成模型偶发遗漏的文本字段，避免整次长内容调用作废。"""
+
+    missing_fields = [field for field in required_fields if not str(data.get(field) or "").strip()]
+    if not missing_fields:
+        return data
+    constraints = "、".join(
+        f"{field}为{length_plan.fields[field].minimum}-{length_plan.fields[field].maximum}字"
+        for field in missing_fields
+    )
+    repaired = await _ask_json(
+        "你是学术综述评审专家。只补全指定的JSON文本字段，不要输出其他字段或Markdown。"
+        "只能依据题名、作者、年份和来源作审慎归纳，不得虚构文献内容。",
+        f"课题：{title}\n真实文献：\n{reference_text}\n"
+        f"上一轮缺少字段：{json.dumps(missing_fields, ensure_ascii=False)}。"
+        f"请严格输出这些字段，其中{constraints}。",
+        max_tokens=max(800, round(sum(length_plan.fields[field].maximum for field in missing_fields) * 1.8)),
+    )
+    merged = dict(data)
+    for field in missing_fields:
+        merged[field] = _required_text(repaired, field)
+    return merged
 
 
 def _request_context(request: dict[str, Any]) -> str:
@@ -509,13 +762,15 @@ def _trim_to_complete_sentences(value: str, field: str, minimum: int, maximum: i
     if len(sentences) < 2:
         return value
 
-    citation_indexes = {
-        index for index, sentence in enumerate(sentences) if re.search(r"\[\d+\]", sentence)
-    }
+    citation_indexes = {index for index, sentence in enumerate(sentences) if re.search(r"\[\d+\]", sentence)}
     topic_indexes: set[int] = set()
     for keyword_group in _FIELD_KEYWORD_GROUPS.get(field, ()):
         matched_index = next(
-            (index for index, sentence in enumerate(sentences) if any(keyword in sentence for keyword in keyword_group)),
+            (
+                index
+                for index, sentence in enumerate(sentences)
+                if any(keyword in sentence for keyword in keyword_group)
+            ),
             None,
         )
         if matched_index is not None:

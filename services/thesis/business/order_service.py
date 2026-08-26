@@ -529,17 +529,73 @@ class PaperOrderService:
             generation_params = form_params
         else:
             generation_params = config
+        reference_count = PaperOrderService._first_value(
+            generation_params,
+            "wxnum",
+            "reference_count",
+            "referenceCount",
+            "literature_count",
+            "literatureCount",
+        )
+        if reference_count is None:
+            reference_count = PaperOrderService._first_value(
+                config,
+                "wxnum",
+                "reference_count",
+                "referenceCount",
+                "literature_count",
+                "literatureCount",
+            )
+        include_foreign = PaperOrderService._first_value(
+            generation_params,
+            "language",
+            "include_foreign",
+            "includeForeign",
+        )
+        if include_foreign is None:
+            include_foreign = PaperOrderService._first_value(
+                config,
+                "language",
+                "include_foreign",
+                "includeForeign",
+            )
+        writing_requirements = PaperOrderService._first_value(
+            config,
+            "about_msg",
+            "aboutmsg",
+            "writing_requirements",
+            "writingRequirements",
+        )
+        if writing_requirements is None:
+            writing_requirements = PaperOrderService._first_value(
+                generation_params,
+                "about_msg",
+                "aboutmsg",
+                "writing_requirements",
+                "writingRequirements",
+            )
+        target_word_count = PaperOrderService._first_value(
+            generation_params,
+            "lengthnum",
+            "target_word_count",
+            "targetWordCount",
+        )
+        if target_word_count is None:
+            target_word_count = PaperOrderService._first_value(
+                config,
+                "lengthnum",
+                "target_word_count",
+                "targetWordCount",
+            )
         return NormalizedPaperOrder(
             title=order.title,
             outline_json=PaperOrderService._normalize_outline(order.outline_json),
-            target_word_count=PaperOrderService._to_int(
-                generation_params.get("lengthnum") or generation_params.get("target_word_count"),
-                8000,
-            ),
+            target_word_count=PaperOrderService._to_int(target_word_count, 8000),
             codetype=PaperOrderService._to_text(generation_params.get("codetype"), "否"),
             wxquote=PaperOrderService._to_text(generation_params.get("wxquote"), "标注"),
-            language=PaperOrderService._to_text(generation_params.get("language"), "否"),
-            wxnum=PaperOrderService._to_int(generation_params.get("wxnum"), 25),
+            language=PaperOrderService._to_yes_no(include_foreign, "否"),
+            wxnum=PaperOrderService._to_int(reference_count, 25),
+            writing_requirements=PaperOrderService._to_text(writing_requirements, ""),
             author=PaperOrderService._to_text(config.get("author"), "作者姓名"),
             advisor=PaperOrderService._to_text(config.get("advisor"), "指导教师"),
             degree_type=PaperOrderService._to_text(config.get("degree_type"), "学士"),
@@ -607,6 +663,29 @@ class PaperOrderService:
     def _to_text(value: Any, default: str) -> str:
         text = str(value).strip() if value is not None else ""
         return text or default
+
+    @staticmethod
+    def _first_value(values: dict[str, Any], *keys: str) -> Any:
+        """返回第一个存在且非空的配置值。"""
+
+        for key in keys:
+            value = values.get(key)
+            if value is not None and value != "":
+                return value
+        return None
+
+    @staticmethod
+    def _to_yes_no(value: Any, default: str) -> str:
+        """兼容布尔值与常见文本形式并归一化为“是/否”。"""
+
+        if isinstance(value, bool):
+            return "是" if value else "否"
+        normalized = str(value).strip().casefold() if value is not None else ""
+        if normalized in {"是", "yes", "true", "1", "y"}:
+            return "是"
+        if normalized in {"否", "no", "false", "0", "n"}:
+            return "否"
+        return default
 
     @staticmethod
     def _to_int(value: Any, default: int) -> int:

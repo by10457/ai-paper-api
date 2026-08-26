@@ -120,6 +120,17 @@ class GenerateRequest(BaseModel):
     wxquote: str = Field(default="标注", description="标注/不标注")
     language: str = Field(default="否")
     wxnum: int = Field(default=25, description="参考文献条数")
+    reference_count: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="参考文献目标数量；提供时优先于兼容字段 wxnum",
+    )
+    include_foreign: bool | None = Field(
+        default=None,
+        description="是否包含外文文献；提供时优先于兼容字段 language",
+    )
+    aboutmsg: str = Field(default="", max_length=1000, description="写作方向补充说明或用户提供的事实材料")
     author: str = Field(default="作者姓名", description="作者姓名")
     advisor: str = Field(default="指导教师（姓名、职称、单位）", description="指导教师")
     degree_type: str = Field(default="学士", description="学位类别")
@@ -130,6 +141,16 @@ class GenerateRequest(BaseModel):
     student_class: str = Field(default="", description="班级")
     callback_url: str = Field(default="", max_length=1024, description="生成完成后的业务回调地址")
     callback_secret: str = Field(default="", max_length=255, description="生成回调密钥，不填则使用服务默认配置")
+
+    @model_validator(mode="after")
+    def normalize_reference_config(self) -> "GenerateRequest":
+        """让语义明确的新字段覆盖历史兼容字段，避免请求配置被静默忽略。"""
+
+        if self.reference_count is not None:
+            self.wxnum = self.reference_count
+        if self.include_foreign is not None:
+            self.language = "是" if self.include_foreign else "否"
+        return self
 
 
 class GenerateSubmitResponse(BaseModel):
@@ -162,6 +183,7 @@ class TaskStatusResponse(BaseModel):
     fulltext_word_count: int = Field(default=0, ge=0, description="按 Word/WPS 口径估算的正文有效字数")
     truncation_warning: bool = False
     docx_path: str = Field(default="")
+    result_data: dict[str, Any] = Field(default_factory=dict, description="生成质量、缺失资料与实际生效配置")
 
 
 class PaperOutlineCreateRequest(BaseModel):
@@ -170,6 +192,9 @@ class PaperOutlineCreateRequest(BaseModel):
     title: str = Field(..., min_length=2, max_length=200)
     form_params: dict[str, Any] = Field(default_factory=dict)
     about_msg: str = ""
+    target_word_count: int | None = Field(default=None, ge=1000, le=50000)
+    reference_count: int | None = Field(default=None, ge=1, le=100)
+    include_foreign: bool | None = None
     three_level: bool = False
     literatures: list[str] = Field(default_factory=list)
     gallery_resources: list[str] = Field(default_factory=list)
@@ -250,6 +275,7 @@ class PaperOrderStatusResponse(BaseModel):
     fulltext_char_count: int = Field(default=0, ge=0)
     fulltext_word_count: int = Field(default=0, ge=0, description="按 Word/WPS 口径估算的正文有效字数")
     truncation_warning: bool = False
+    result_data: dict[str, Any] = Field(default_factory=dict, description="生成质量、缺失资料与实际生效配置")
 
 
 class PaperOrderDownloadUrlResponse(BaseModel):
@@ -323,6 +349,7 @@ class NormalizedPaperOrder(BaseModel):
     wxquote: str
     language: str
     wxnum: int
+    writing_requirements: str = ""
     author: str = "作者姓名"
     advisor: str = "指导教师"
     degree_type: str = "学士"

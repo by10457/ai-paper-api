@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
+from html import unescape
 from math import ceil
 
 from core.config import get_settings
@@ -20,9 +21,56 @@ _REFERENCE_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<body>.+)$")
 _TYPE_MARKER = re.compile(r"(?P<title>.+?)\[(?P<marker>[A-Z])\]")
 _YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
 _VOLUME_ISSUE = re.compile(r"(?P<volume>\d+)\s*[（(](?P<issue>\d+)[)）]")
-_PAGES = re.compile(r"(?P<pages>\d{1,5}(?:[-–]\d{1,5})?(?:\+\d+)?)")
+_PAGES = re.compile(r"(?P<pages>[A-Za-z]?\d{1,8}(?:[-–][A-Za-z]?\d{1,8})?(?:\+\d+)?)")
 _DOI = re.compile(r"(?:doi\s*[:：]?\s*|https?://doi\.org/)(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.IGNORECASE)
 _URL = re.compile(r"https?://[^\s，。]+", re.IGNORECASE)
+
+_TECHNOLOGY_TERMS = (
+    "springboot",
+    "spring",
+    "vue",
+    "java",
+    "mysql",
+    "redis",
+    "python",
+    "django",
+    "fastapi",
+    "react",
+    "深度学习",
+    "机器学习",
+    "神经网络",
+    "推荐系统",
+)
+_GENERIC_TERMS = (
+    "基于",
+    "研究",
+    "设计",
+    "实现",
+    "系统",
+    "平台",
+    "技术",
+    "应用",
+    "分析",
+    "development",
+    "design",
+    "implementation",
+    "system",
+    "platform",
+    "application",
+    "study",
+)
+_BUSINESS_CONCEPT_GROUPS = (
+    ("校园", "高校", "大学生", "campus", "college", "university", "student"),
+    ("二手", "闲置", "旧物", "转售", "secondhand", "second-hand", "resale", "preowned", "usedgoods"),
+    ("交易", "买卖", "市场", "交换", "trading", "trade", "marketplace", "exchange"),
+    ("教育", "教学", "课堂", "education", "teaching", "learning"),
+    ("物流", "供应链", "配送", "logistics", "supplychain", "delivery"),
+    ("医疗", "健康", "疾病", "medical", "health", "disease"),
+    ("农业", "农产品", "乡村", "agriculture", "agricultural", "rural"),
+    ("图像", "视觉", "识别", "image", "vision", "recognition"),
+    ("电商", "电子商务", "购物", "ecommerce", "e-commerce", "shopping"),
+    ("预约", "预订", "booking", "reservation"),
+)
 
 
 class ReferenceShortageError(RuntimeError):
@@ -164,15 +212,43 @@ async def _supplement_language_shortage(
         ("en", lambda count: reference_service_serpapi.generate_references(
             title, context, wxnum=count, include_english=True, include_chinese=False)),
     ):
-        chinese_count, english_count = _language_counts(records)
-        needed = (target_chinese_count - chinese_count) if language == "zh" else (target_english_count - english_count)
-        if needed <= 0:
-            continue
-        supplement = await generator(max(needed, 2))
-        records = _merge_records(
-            records,
-            parse_reference_records(supplement, provider=f"language_{language}"),
-        )
+        for attempt in range(2):
+            chinese_count, english_count = _language_counts(records)
+            needed = (
+                target_chinese_count - chinese_count
+                if language == "zh"
+                else target_english_count - english_count
+            )
+            if needed <= 0:
+                break
+            # 检索结果常与首轮重复；逐轮扩大批量，并在计数前先执行同一相关性门槛。
+            request_count = min(max(needed * 3, 10) * (attempt + 1), 30)
+            supplement = await generator(request_count)
+            usable = _rank_records_by_relevance(
+                title,
+                context,
+                parse_reference_records(supplement, provider=f"language_{language}"),
+            )
+            records = _merge_records(records, usable)
+
+    target_total = target_chinese_count + target_english_count
+    if len(records) < target_total:
+        request_count = min(max(target_total * 2, 12), 30)
+        for language, generator in (
+            ("zh", lambda count: reference_service_wfapi.generate_references(
+                title, context, wxnum=count, include_english=False)),
+            ("en", lambda count: reference_service_serpapi.generate_references(
+                title, context, wxnum=count, include_english=True, include_chinese=False)),
+        ):
+            supplement = await generator(request_count)
+            usable = _rank_records_by_relevance(
+                title,
+                context,
+                parse_reference_records(supplement, provider=f"total_{language}"),
+            )
+            records = _merge_records(records, usable)
+            if len(records) >= target_total:
+                break
     return records
 
 
@@ -201,19 +277,75 @@ def _rank_records_by_relevance(
     context: str,
     records: list[ReferenceRecord],
 ) -> list[ReferenceRecord]:
-    """按题名与请求上下文的字符片段重排检索结果，并剔除撤稿记录。"""
+    """以业务主题为准入门槛，技术主题只作为次级加分项。"""
 
     query = _normalized_search_text(f"{title}{context}")
-    query_bigrams = _text_bigrams(query)
+    query_business = _strip_terms(query, (*_TECHNOLOGY_TERMS, *_GENERIC_TERMS))
+    query_concepts = _matched_concepts(query)
+    ranked: list[tuple[int, ReferenceRecord]] = []
+    for item in records:
+        if "retracted" in item.title.lower() or "撤稿" in item.title:
+            continue
+        if not _has_delivery_metadata(item):
+            continue
+        score = _relevance_score(query, query_business, query_concepts, item)
+        if score is not None:
+            ranked.append((score, item))
+    ranked.sort(key=lambda pair: (pair[0], -len(pair[1].title)), reverse=True)
+    return [item for _, item in ranked]
 
-    def relevance(item: ReferenceRecord) -> tuple[int, int]:
-        candidate = _normalized_search_text(item.title)
-        overlap = len(query_bigrams & _text_bigrams(candidate))
-        direct_bonus = sum(1 for token in ("实验室", "预约", "高校", "教育", "人工智能") if token in query and token in candidate)
-        return overlap + direct_bonus * 3, -len(candidate)
 
-    usable = [item for item in records if "retracted" not in item.title.lower() and "撤稿" not in item.title]
-    return sorted(usable, key=relevance, reverse=True)
+def _relevance_score(
+    query: str,
+    query_business: str,
+    query_concepts: set[int],
+    item: ReferenceRecord,
+) -> int | None:
+    candidate = _normalized_search_text(item.title)
+    candidate_business = _strip_terms(candidate, (*_TECHNOLOGY_TERMS, *_GENERIC_TERMS))
+    matched_concepts = query_concepts & _matched_concepts(candidate)
+    overlap = len(_text_bigrams(query_business) & _text_bigrams(candidate_business))
+    denominator = max(1, min(len(_text_bigrams(query_business)), len(_text_bigrams(candidate_business))))
+    overlap_ratio = overlap / denominator
+    required_concepts = 2 if len(query_concepts) >= 2 else len(query_concepts)
+    concept_match = required_concepts > 0 and len(matched_concepts) >= required_concepts
+    direct_business_match = (
+        len(query_concepts) < 2
+        and item.language == "zh"
+        and overlap >= 2
+        and overlap_ratio >= 0.08
+    )
+    if not concept_match and not direct_business_match:
+        return None
+    technology_overlap = sum(1 for term in _TECHNOLOGY_TERMS if term in query and term in candidate)
+    return len(matched_concepts) * 20 + round(overlap_ratio * 20) + overlap + technology_overlap * 3
+
+
+def _matched_concepts(value: str) -> set[int]:
+    return {
+        index
+        for index, terms in enumerate(_BUSINESS_CONCEPT_GROUPS)
+        if any(_normalized_search_text(term) in value for term in terms)
+    }
+
+
+def _strip_terms(value: str, terms: tuple[str, ...]) -> str:
+    result = value
+    for term in terms:
+        result = result.replace(_normalized_search_text(term), "")
+    return result
+
+
+def _has_delivery_metadata(item: ReferenceRecord) -> bool:
+    """过滤无法形成完整交付著录信息的记录。"""
+
+    if not item.title or not item.authors or not item.year or not item.source:
+        return False
+    if item.document_type.upper() == "J" and not (item.pages or item.doi):
+        return False
+    if item.language == "en" and not item.doi:
+        return False
+    return True
 
 
 def _normalized_search_text(value: str) -> str:
@@ -234,7 +366,7 @@ def parse_reference_records(text: str, *, provider: str) -> list[ReferenceRecord
     records: list[ReferenceRecord] = []
     seen_titles: set[str] = set()
     for raw_line in text.splitlines():
-        line = raw_line.strip()
+        line = re.sub(r"\bet al\.\.", "et al.", unescape(raw_line.strip()), flags=re.IGNORECASE)
         match = _REFERENCE_LINE.match(line)
         if match is None:
             continue
@@ -242,14 +374,20 @@ def parse_reference_records(text: str, *, provider: str) -> list[ReferenceRecord
         marker_match = _TYPE_MARKER.search(body)
         if marker_match is None:
             continue
-        title = marker_match.group("title").split(".")[-1].strip(" .,，")
+        heading = marker_match.group("title").strip(" .,，")
+        if "." in heading:
+            author_text, title = heading.split(".", 1)
+        else:
+            author_text, title = "", heading
+        title = title.strip(" .,，")
+        if re.search(r"(?:…|\.{3})", title):
+            continue
         title_key = re.sub(r"\s+", "", title).lower()
         if not title_key or title_key in seen_titles:
             continue
         seen_titles.add(title_key)
 
-        prefix = body[: marker_match.start()].strip(" .,，")
-        authors = [item.strip() for item in re.split(r"[,，]", prefix) if item.strip()]
+        authors = [item.strip() for item in re.split(r"[,，]", author_text) if item.strip()]
         suffix = body[marker_match.end() :].strip(" .,，")
         doi_match = _DOI.search(body)
         url_match = _URL.search(body)

@@ -26,6 +26,7 @@ from services.thesis.generation.paper_queue import enqueue_thesis_material_gener
 from services.thesis.generation.progress import publish_progress
 from services.thesis.storage.document_storage import build_download_url
 from services.thesis_material.order_service import ThesisMaterialOrderService
+from services.thesis_material.profile_policy import missing_profile_fields
 
 PRODUCTS: dict[str, tuple[str, int, int | None, int | None, int | None]] = {
     "proposal_report": ("开题报告", settings.PROPOSAL_REPORT_POINTS, 4000, 15, 8),
@@ -72,7 +73,9 @@ async def submit_request(
         cost_points=points,
     )
     if await status_store.read_status_async(generation_task.task_id) is None:
-        await publish_progress(generation_task.task_id, "queued", f"{PRODUCTS[document_type][0]}任务已进入队列", progress=2)
+        await publish_progress(
+            generation_task.task_id, "queued", f"{PRODUCTS[document_type][0]}任务已进入队列", progress=2
+        )
     if should_start:
         await enqueue_thesis_material_generation_task(generation_task.id)
     order = await ThesisMaterialOrder.filter(id=generation_task.order_id).first()
@@ -83,6 +86,7 @@ async def submit_request(
         order_sn=order.order_sn,
         document_type=document_type,
         charged_points=order.paid_points,
+        missing_profile_fields=missing_profile_fields(document_type, request_payload),
     )
 
 

@@ -174,6 +174,7 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
             "year_month": normalized.year_month,
             "student_id": normalized.student_id,
             "student_class": normalized.student_class,
+            "writing_requirements": normalized.writing_requirements,
         },
         normalized.codetype,
         normalized.wxquote,
@@ -342,6 +343,7 @@ def _generation_task_status_response(generation_task: PaperGenerationTask) -> Ta
         storage_provider=generation_task.storage_provider or "",
         local_file_key=generation_task.local_file_key or "",
         local_download_url=_build_local_download_url(generation_task.local_file_key),
+        result_data=cast(dict[str, Any], generation_task.result_data or {}),
     )
 
 

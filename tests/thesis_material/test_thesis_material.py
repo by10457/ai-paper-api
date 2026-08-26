@@ -5,12 +5,14 @@ from pathlib import Path
 from docx import Document
 from pydantic import ValidationError
 
+import services.thesis_material.llm_service as llm_service
 from app import app
 from schemas.thesis_material import (
     LiteratureReviewRequest,
     ProposalReportRequest,
     ReferenceRecord,
     TaskBookRequest,
+    ThesisMaterialSubmitResponse,
 )
 from services.thesis_material.document_builder import (
     _normalize_generated_text,
@@ -21,21 +23,99 @@ from services.thesis_material.generation import (
     PROPOSAL_SCHEDULE,
     TASK_BOOK_SCHEDULE,
     _build_schedule,
+    _ensure_body_minimum_after_normalization,
+    _ensure_reference_coverage_after_normalization,
+    _material_body_char_count,
     _validate_result,
+    _word_count_metadata,
 )
 from services.thesis_material.llm_service import (
-    LITERATURE_BODY_LENGTH,
     _literature_body_length,
+    _mark_unconfirmed_generated_metrics,
+    _repair_missing_text_fields,
+    _trim_to_character_limit,
     _trim_to_complete_sentences,
+    build_length_plan,
+    normalize_citation_claims,
     repair_length_constraints,
+    repair_reference_coverage,
 )
 from services.thesis_material.order_service import ThesisMaterialOrderService
+from services.thesis_material.profile_policy import missing_profile_fields, profile_with_placeholders
 from services.thesis_material.reference_service import (
     _merge_records,
+    _rank_records_by_relevance,
     _select_records,
     _target_language_quota,
     parse_reference_records,
 )
+
+
+def test_literature_missing_text_field_is_repaired(monkeypatch) -> None:
+    calls: list[str] = []
+
+    async def fake_ask_json(system: str, prompt: str, *, max_tokens: int = 5000) -> dict[str, str]:
+        calls.append(prompt)
+        return {"research_gaps": "现有研究仍缺少跨场景的数据验证。"}
+
+    monkeypatch.setattr(llm_service, "_ask_json", fake_ask_json)
+    plan = build_length_plan("literature_review", {"target_word_count": 3500})
+    repaired = asyncio.run(
+        _repair_missing_text_fields(
+            {"method_comparison": "已有方法比较。", "research_gaps": ""},
+            ("method_comparison", "research_gaps"),
+            title="测试课题",
+            reference_text="[1]测试文献。",
+            length_plan=plan,
+        )
+    )
+
+    assert repaired["method_comparison"] == "已有方法比较。"
+    assert repaired["research_gaps"] == "现有研究仍缺少跨场景的数据验证。"
+    assert len(calls) == 1
+    assert "research_gaps" in calls[0]
+
+
+def test_final_reference_coverage_uses_verifiable_title_statements() -> None:
+    references = [
+        ReferenceRecord(
+            index=index,
+            title=f"校园二手交易研究{index}",
+            authors=["测试作者"],
+            year="2025",
+            formatted=f"[{index}]测试作者.校园二手交易研究{index}[J].测试期刊,2025(1):1-5.",
+        )
+        for index in range(1, 13)
+    ]
+    result = {
+        field: "校园交易平台相关研究。" * 40
+        for field in (
+            "abstract",
+            "introduction",
+            "domestic_research",
+            "foreign_research",
+            "method_comparison",
+            "research_gaps",
+            "future_trends",
+            "conclusion",
+        )
+    }
+    result["domestic_research"] += "".join(f"已有文献线索[{index}]。" for index in range(1, 11))
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "校园二手交易研究比较。" * 40}
+        for index in range(1, 4)
+    ]
+
+    _ensure_reference_coverage_after_normalization(
+        "literature_review",
+        {"target_word_count": 3500},
+        result,
+        references,
+    )
+
+    assert "研究线索[11]" in result["conclusion"]
+    assert "研究线索[12]" in result["conclusion"]
+    assert "发现" not in result["conclusion"]
 
 
 def test_thesis_material_routes_are_registered() -> None:
@@ -111,6 +191,21 @@ def test_title_is_only_required_request_field() -> None:
     assert task_book.student_profile.name is None
 
 
+def test_submit_response_exposes_missing_profile_fields() -> None:
+    fields = ThesisMaterialSubmitResponse.model_fields
+    assert "missing_profile_fields" in fields
+
+
+def test_missing_profile_fields_are_explicit_and_placeholders_are_not_fake_data() -> None:
+    request = {"student_profile": {"school": "测试大学", "name": "张三"}}
+    missing = missing_profile_fields("proposal_report", request)
+    profile = profile_with_placeholders(request)
+    assert "school" not in missing
+    assert "student_no" in missing
+    assert profile["school"] == "测试大学"
+    assert profile["student_no"] == "【待补充：学号】"
+
+
 def test_thesis_material_order_number_uses_domain_prefix() -> None:
     assert ThesisMaterialOrderService.generate_order_sn().startswith("TM")
 
@@ -139,7 +234,28 @@ def test_parse_reference_records_renumbers_and_deduplicates() -> None:
     assert len(records) == 2
     assert records[0].index == 1
     assert records[0].title == "智慧校园平台研究"
+    assert records[0].authors == ["张三", "李四"]
     assert records[1].language == "en"
+
+
+def test_parse_reference_title_preserves_dot_in_technology_name() -> None:
+    records = parse_reference_records(
+        "[1]曲蕴慧.基于ASP.NET的校园二手交易平台设计与实现[J].数字技术与应用,2013,(7):110-111.",
+        provider="wfapi",
+    )
+    assert records[0].authors == ["曲蕴慧"]
+    assert records[0].title == "基于ASP.NET的校园二手交易平台设计与实现"
+
+
+def test_parse_reference_records_rejects_truncated_title() -> None:
+    """带省略号的检索片段不是完整题名，不得进入最终文献。"""
+
+    records = parse_reference_records(
+        "[1]Smith J.The effects of second-hand trading platforms on continuance intention to …[J].Review,2022,2(1):1-9. doi:10.1000/example.",
+        provider="serpapi",
+    )
+
+    assert records == []
 
 
 def test_merge_reference_records_deduplicates_and_renumbers() -> None:
@@ -160,7 +276,9 @@ def test_reference_language_quota_and_selection() -> None:
         ReferenceRecord(index=index, title=f"中文{index}", language="zh", formatted=f"[{index}]中文{index}")
         for index in range(1, 11)
     ] + [
-        ReferenceRecord(index=index + 10, title=f"English {index}", language="en", formatted=f"[{index + 10}]English {index}")
+        ReferenceRecord(
+            index=index + 10, title=f"English {index}", language="en", formatted=f"[{index + 10}]English {index}"
+        )
         for index in range(1, 6)
     ]
     selected = _select_records(records, 15, 10, 5)
@@ -168,6 +286,45 @@ def test_reference_language_quota_and_selection() -> None:
     assert sum(item.language == "zh" for item in selected) == 10
     assert sum(item.language == "en" for item in selected) == 5
     assert [item.index for item in selected] == list(range(1, 16))
+
+
+def test_reference_relevance_requires_business_topic_match() -> None:
+    def record(index: int, title: str, language: str) -> ReferenceRecord:
+        return ReferenceRecord(
+            index=index,
+            title=title,
+            authors=["Author A"],
+            year="2024",
+            source="Journal of Information Systems",
+            volume="12",
+            issue="2",
+                pages="10-20",
+                doi="10.1000/test" if language == "en" else "",
+                language=language,
+            formatted=f"[{index}]Author A.{title}[J].Journal of Information Systems,2024,12(2):10-20.",
+        )
+
+    records = [
+        record(1, "Campus second-hand trading platform design with Spring Boot", "en"),
+        record(2, "高校闲置物品交易平台设计研究", "zh"),
+        record(3, "Design and implementation of robot assisted chemistry online Q&A using Spring Boot", "en"),
+        record(4, "A higher-performance big data-based movie recommendation system", "en"),
+        record(5, "On-demand fashion: wardrobe management and trading community", "en"),
+        record(7, "校园综合服务平台设计与实现", "zh"),
+    ]
+    records.append(
+        record(6, "Campus second-hand marketplace research", "en").model_copy(update={"pages": "", "doi": ""})
+    )
+    ranked = _rank_records_by_relevance(
+        "基于 Spring Boot 与 Vue 的校园二手交易平台设计与实现",
+        "Spring Boot；Vue；MySQL",
+        records,
+    )
+    titles = {item.title for item in ranked}
+    assert titles == {
+        "Campus second-hand trading platform design with Spring Boot",
+        "高校闲置物品交易平台设计研究",
+    }
 
 
 def test_reference_validation_requires_minimum_coverage() -> None:
@@ -186,56 +343,172 @@ def test_reference_validation_requires_minimum_coverage() -> None:
 
 def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
     calls: list[str] = []
+    request = {"title": "测试课题", "target_word_count": 2500}
+    plan = build_length_plan("proposal_report", request)
 
     async def fake_ask_text(system: str, prompt: str, *, max_tokens: int = 5000) -> str:
         del system, max_tokens
         calls.append(prompt)
-        return "修" * 850
+        return "修" * plan.fields["research_purpose"].target
 
     monkeypatch.setattr("services.thesis_material.llm_service._ask_text", fake_ask_text)
-    result = {
-        "research_purpose": "长" * 1200,
-        "research_status_and_trends": "现" * 1600,
-        "key_points": "重" * 350,
-        "difficulties": "难" * 350,
-        "research_methods": "法" * 450,
-    }
+    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["research_purpose"] = "长" * 1200
 
-    asyncio.run(repair_length_constraints("proposal_report", {"title": "测试课题"}, result))
+    asyncio.run(repair_length_constraints("proposal_report", request, result))
 
     assert len(calls) == 1
-    assert len(result["research_purpose"]) == 850
-    assert len(result["research_status_and_trends"]) == 1600
+    assert len(result["research_purpose"]) == plan.fields["research_purpose"].target
+    assert len(result["research_status_and_trends"]) == plan.fields["research_status_and_trends"].target
 
 
-def test_literature_total_length_is_trimmed_without_regenerating_sections(monkeypatch) -> None:
+def test_target_word_count_drives_dynamic_section_budgets(monkeypatch) -> None:
     async def unexpected_llm_call(*_args: object, **_kwargs: object) -> str:
-        raise AssertionError("完整句裁剪足够时不应调用模型")
-
-    def fixed_length_sentence(prefix: str, fill: str, length: int) -> str:
-        return prefix + fill * (length - len(prefix) - 1) + "。"
+        raise AssertionError("处于动态预算内时不应调用模型")
 
     monkeypatch.setattr("services.thesis_material.llm_service._ask_text", unexpected_llm_call)
-    theme = "".join(
-        [fixed_length_sentence("已有做法、观点、优势、不足和小结[1]", "甲", 100)]
-        + [fixed_length_sentence("比较分析", "乙", 100) for _ in range(6)]
-    )
+    request = {"title": "测试课题", "target_word_count": 3500}
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
+    ]
+
+    asyncio.run(repair_length_constraints("literature_review", request, result))
+
+    assert plan.theme_count == 3
+    assert plan.body_minimum == 3132
+    assert plan.body_maximum == 3868
+    assert plan.body_minimum <= _literature_body_length(result) <= plan.body_maximum
+    assert 3400 <= _literature_body_length(result) <= 3600
+
+
+def test_reference_coverage_repair_preserves_dynamic_theme_count(monkeypatch) -> None:
+    async def fake_ask_text(*_args: object, **_kwargs: object) -> str:
+        return "补充比较[12]。"
+
+    monkeypatch.setattr("services.thesis_material.llm_service._ask_text", fake_ask_text)
+    request = {"title": "测试课题", "target_word_count": 3500}
+    result = {"themes": [{"title": f"主题{index}", "content": "原有内容。"} for index in range(3)]}
+    missing = [
+        ReferenceRecord(
+            index=12,
+            language="zh",
+            title="高校二手交易平台研究",
+            authors=["张三"],
+            year="2025",
+            source="计算机应用研究",
+            pages="1-8",
+            formatted="[12]张三.高校二手交易平台研究[J].计算机应用研究,2025:1-8.",
+        )
+    ]
+
+    asyncio.run(repair_reference_coverage("literature_review", request, result, missing))
+
+    assert len(result["themes"]) == 3
+    assert "补充比较[12]" in result["themes"][-1]["content"]
+
+
+def test_section_validation_allows_small_post_processing_drift() -> None:
+    request = {"target_word_count": 3500}
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["introduction"] += "[1]"
+    result["foreign_research"] = "正" * (plan.fields["foreign_research"].maximum + 20) + "[2]"
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
+    ]
+
+    _validate_result("literature_review", result, 2, request)
+
+
+def test_word_count_metadata_excludes_outline_schedule_and_references() -> None:
+    request = {"target_word_count": 2500}
+    plan = build_length_plan("proposal_report", request)
+    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result.update({"writing_outline": ["不计入" * 1000], "schedule": ["不计入" * 1000]})
+    metadata = _word_count_metadata("proposal_report", request, result)
+    assert metadata["actual"] == _material_body_char_count("proposal_report", result)
+    assert metadata["target"] == 2500
+    assert "writing_outline" in metadata["excluded_sections"]
+
+
+def test_post_normalization_shortage_uses_uncited_topic_supplement() -> None:
+    request = {"target_word_count": 3500}
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.target}
+        for index in range(plan.theme_count)
+    ]
+    result["domestic_research"] = result["domestic_research"][:-400]
+
+    _ensure_body_minimum_after_normalization("literature_review", request, result)
+
+    assert _material_body_char_count("literature_review", result) >= plan.body_minimum
+    assert "[" not in result["conclusion"]
+
+
+def test_task_book_generated_numeric_metrics_are_marked_as_unconfirmed() -> None:
     result = {
-        "abstract": fixed_length_sentence("摘要", "甲", 300),
-        "introduction": fixed_length_sentence("引言", "甲", 600),
-        "domestic_research": fixed_length_sentence("国内研究", "甲", 800),
-        "foreign_research": fixed_length_sentence("国外研究", "甲", 800),
-        "themes": [{"title": f"主题{index}", "content": theme} for index in range(5)],
-        "method_comparison": fixed_length_sentence("方法比较", "甲", 700),
-        "research_gaps": fixed_length_sentence("研究不足", "甲", 500),
-        "future_trends": fixed_length_sentence("未来趋势", "甲", 500),
-        "conclusion": fixed_length_sentence("结论", "甲", 450),
+        "main_indicators": [
+            "接口平均响应时间不超过500ms",
+            "支持100名并发用户",
+            "完成核心业务流程核验",
+            "异常操作应有明确提示",
+        ]
     }
+    _mark_unconfirmed_generated_metrics({"research_context": {}}, result)
+    assert result["generated_suggestion_fields"] == ["main_indicators"]
+    assert result["main_indicators"][0].startswith("建议值（待导师确认）：")
+    assert result["main_indicators"][2] == "完成核心业务流程核验"
 
-    asyncio.run(repair_length_constraints("literature_review", {"title": "测试课题"}, result))
+    already_marked = {"main_indicators": ["单张图片建议值5MB，待导师确认"] * 4}
+    _mark_unconfirmed_generated_metrics({"research_context": {}}, already_marked)
+    assert already_marked["generated_suggestion_fields"] == ["main_indicators"]
+    assert already_marked["main_indicators"][0] == "单张图片建议值5MB，待导师确认"
 
-    assert _literature_body_length(result) <= LITERATURE_BODY_LENGTH[1]
-    assert all(500 <= len(item["content"]) <= 700 for item in result["themes"])
+    all_fields = {
+        "design_goals": ["完成核心流程"] * 5,
+        "deliverable_requirements": ["演示视频时长5-10分钟"] * 2,
+        "main_indicators": ["功能可验证"] * 4,
+    }
+    _mark_unconfirmed_generated_metrics({"research_context": {}}, all_fields)
+    assert all_fields["generated_suggestion_fields"] == ["deliverable_requirements"]
+    assert all_fields["deliverable_requirements"][0].startswith("建议值（待导师确认）：")
+
+
+def test_unsupported_citation_conclusion_is_rewritten_from_reference_title() -> None:
+    result = {
+        "foreign_research": "某学者[1]发现环保意识显著提高购买意愿。另一研究[2]围绕平台架构展开。",
+        "references": [
+            {"index": 1, "title": "Second-hand clothing shopping among college students"},
+            {"index": 2, "title": "Campus marketplace architecture"},
+        ],
+    }
+    normalize_citation_claims(result)
+    assert "显著提高" not in result["foreign_research"]
+    assert "Second-hand clothing shopping among college students" in result["foreign_research"]
+    assert "另一研究[2]围绕平台架构展开" in result["foreign_research"]
+
+
+def test_repeated_unsupported_citation_claims_are_collapsed() -> None:
+    result = {
+        "foreign_research": (
+            "研究[1]表明效果显著。研究[1]证明效率提高。研究[2]显示体验改善。文献[2]采用问卷分析用户行为。"
+        ),
+        "references": [
+            {"index": 1, "title": "Campus marketplace architecture"},
+            {"index": 2, "title": "College second-hand trading"},
+        ],
+    }
+    normalize_citation_claims(result)
+    assert result["foreign_research"].count("本文仅据题名与来源") == 1
+    assert "[1][2]" in result["foreign_research"]
+    assert "采用问卷" not in result["foreign_research"]
 
 
 def test_sentence_trim_preserves_citations_and_required_topics() -> None:
@@ -261,6 +534,12 @@ def test_sentence_trim_preserves_citations_and_required_topics() -> None:
         assert keyword in trimmed
 
 
+def test_character_limit_is_deterministic_for_uncited_short_section() -> None:
+    trimmed = _trim_to_character_limit("关键业务与数据设计，" * 80, 239)
+    assert len(trimmed) == 239
+    assert trimmed.endswith("。")
+
+
 def test_relative_schedule_has_required_number_of_stages() -> None:
     proposal = _build_schedule({}, PROPOSAL_SCHEDULE, default_weeks=16)
     task_book = _build_schedule({}, TASK_BOOK_SCHEDULE, default_weeks=20)
@@ -272,7 +551,13 @@ def test_relative_schedule_has_required_number_of_stages() -> None:
 
 def test_build_three_document_types(tmp_path: Path) -> None:
     references = [
-        ReferenceRecord(index=1, title="测试文献", authors=["张三"], year="2024", formatted="[1]张三.测试文献[J].测试期刊,2024,1(1):1-5.")
+        ReferenceRecord(
+            index=1,
+            title="测试文献",
+            authors=["张三"],
+            year="2024",
+            formatted="[1]张三.测试文献[J].测试期刊,2024,1(1):1-5.",
+        )
     ]
     request = {"student_profile": {}, "research_context": {}}
     proposal_result = {
@@ -327,13 +612,68 @@ def test_build_three_document_types(tmp_path: Path) -> None:
     for path in paths:
         with zipfile.ZipFile(path) as package:
             package_xml = "\n".join(
-                package.read(name).decode("utf-8")
-                for name in ("word/document.xml", "word/styles.xml")
+                package.read(name).decode("utf-8") for name in ("word/document.xml", "word/styles.xml")
             )
         assert "STHeiti" not in package_xml
         assert 'w:ascii="Times New Roman"' in package_xml
         assert 'w:hAnsi="Times New Roman"' in package_xml
         assert 'w:eastAsia="宋体"' in package_xml
         assert 'w:eastAsia="黑体"' in package_xml
-    assert "指导教师意见" in "\n".join(cell.text for table in Document(paths[0]).tables for row in table.rows for cell in row.cells)
-    assert "审核意见" in "\n".join(cell.text for table in Document(paths[2]).tables for row in table.rows for cell in row.cells)
+    assert "指导教师意见" in "\n".join(
+        cell.text for table in Document(paths[0]).tables for row in table.rows for cell in row.cells
+    )
+    assert "审核意见" in "\n".join(
+        cell.text for table in Document(paths[2]).tables for row in table.rows for cell in row.cells
+    )
+    task_document = Document(paths[2])
+    task_paragraph = task_document.tables[-1].cell(0, 0).paragraphs[0]
+    assert round(float(task_paragraph.paragraph_format.line_spacing), 2) == 1.15
+    assert task_paragraph.runs[0].font.size.pt == 10
+
+
+def test_proposal_uses_short_non_splitting_rows_and_grouped_approval(tmp_path: Path) -> None:
+    result = {
+        "research_purpose": "研究背景与目的。" * 120,
+        "research_status_and_trends": "已有研究及其不足[1]。" * 160,
+        "research_content": "主要研究内容。" * 80,
+        "key_points": "研究重点。" * 40,
+        "difficulties": "研究难点。" * 40,
+        "research_methods": "研究方法。" * 50,
+        "feasibility_and_innovation": "可行性与创新点。" * 35,
+        "writing_outline": [
+            {
+                "title": "绪论",
+                "sections": [{"title": "研究背景", "subsections": ["校园闲置物品现状"]}],
+            }
+        ],
+        "schedule": [],
+    }
+    reference = ReferenceRecord(
+        index=1,
+        title="校园二手交易平台研究",
+        authors=["张三"],
+        year="2024",
+        source="软件导刊",
+        pages="1-8",
+        formatted="[1]张三.校园二手交易平台研究[J].软件导刊,2024:1-8.",
+    )
+    path = tmp_path / "proposal-pagination.docx"
+    build_thesis_material_document(
+        document_type="proposal_report",
+        title="测试课题",
+        request={"student_profile": {}},
+        result=result,
+        references=[reference],
+        output_path=path,
+    )
+    document = Document(path)
+    assert len(document.tables) == 9
+    assert all("w:cantSplit" in row._tr.xml for table in document.tables for row in table.rows)
+    assert max(len(row.cells[0].text) for table in document.tables for row in table.rows) <= 450
+    outline_paragraph = document.tables[5].cell(1, 0).paragraphs[0]
+    assert outline_paragraph.paragraph_format.line_spacing == 1.0
+    assert outline_paragraph.runs[0].font.size.pt == 9.5
+    approval_text = document.tables[-1].cell(0, 0).text
+    assert "指导教师意见" in approval_text
+    assert "负责人（签章）" in approval_text
+    assert "某某" not in "\n".join(paragraph.text for paragraph in document.paragraphs)

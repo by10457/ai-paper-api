@@ -15,6 +15,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from schemas.thesis_material import ReferenceRecord
+from services.thesis_material.profile_policy import profile_with_placeholders
 
 # Match the supplied school templates: Chinese body text uses Songti, headings
 # use Heiti, and Latin characters/numbers use Times New Roman.
@@ -79,11 +80,11 @@ def _build_proposal(
     references: list[ReferenceRecord],
 ) -> DocumentObject:
     doc = _new_document()
-    profile = _profile_with_placeholders(request)
+    profile = profile_with_placeholders(request)
     context = request.get("research_context") or {}
     _cover_title(doc, profile["school"], "毕业设计（论文）开题报告", title)
     cover_fields = [
-        ("课题类别", context.get("topic_category") or "某某类"),
+        ("课题类别", context.get("topic_category") or "【待补充：课题类别】"),
         ("学生姓名", profile["name"]),
         ("学号", profile["student_no"]),
         ("班级", profile["class_name"]),
@@ -99,25 +100,18 @@ def _build_proposal(
         paragraph.add_run(str(value))
     doc.add_page_break()
 
-    table = doc.add_table(rows=0, cols=1)
-    table.style = "Table Grid"
-    table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    table.autofit = False
-    for heading, body in (
-        ("一、本课题设计（研究）的目的", result["research_purpose"]),
-        ("二、设计（研究）现状和发展趋势（文献综述）", result["research_status_and_trends"]),
-        ("三、设计（研究）的主要内容", str(result.get("research_content") or "")),
-        ("四、设计（研究）的重点与难点，拟采用的途径（研究手段）", _proposal_methods(result)),
-        ("五、可行性分析与创新点", str(result.get("feasibility_and_innovation") or "")),
-        ("六、论文（设计）写作提纲", _outline_text(result.get("writing_outline", []))),
-        ("七、设计（研究）进度计划", _schedule_text(result.get("schedule", []))),
-        ("八、参考文献", "\n".join(item.formatted for item in references)),
-        ("指导教师意见", "\n\n\n签名：________________    年____月____日"),
-        ("教研室（学术小组）意见", "\n\n\n负责人（签章）：________________    年____月____日"),
+    for heading, body, compact in (
+        ("一、本课题设计（研究）的目的", result["research_purpose"], False),
+        ("二、设计（研究）现状和发展趋势（文献综述）", result["research_status_and_trends"], False),
+        ("三、设计（研究）的主要内容", str(result.get("research_content") or ""), False),
+        ("四、设计（研究）的重点与难点，拟采用的途径（研究手段）", _proposal_methods(result), False),
+        ("五、可行性分析与创新点", str(result.get("feasibility_and_innovation") or ""), False),
+        ("六、论文（设计）写作提纲", _outline_text(result.get("writing_outline", [])), True),
+        ("七、设计（研究）进度计划", _schedule_text(result.get("schedule", [])), False),
+        ("八、参考文献", "\n".join(item.formatted for item in references), False),
     ):
-        cell = table.add_row().cells[0]
-        _set_cell_width(cell, Cm(16))
-        _set_cell_content(cell, heading, body)
+        _add_proposal_section(doc, heading, body, compact=compact)
+    _add_proposal_approval(doc)
     return doc
 
 
@@ -167,14 +161,21 @@ def _build_task_book(
     references: list[ReferenceRecord],
 ) -> DocumentObject:
     doc = _new_document()
-    profile = _profile_with_placeholders(request)
+    profile = profile_with_placeholders(request)
     _cover_title(doc, profile["school"], "毕业设计任务书", "")
     info = doc.add_table(rows=6, cols=6)
     info.style = "Table Grid"
     info.alignment = WD_TABLE_ALIGNMENT.CENTER
     info_rows = [
         ("二级学院", profile["college"], "姓名", profile["name"], "校内指导教师", profile["internal_advisor"]),
-        ("班级名称", profile["class_name"], "学号", profile["student_no"], "企业指导教师", profile["enterprise_advisor"]),
+        (
+            "班级名称",
+            profile["class_name"],
+            "学号",
+            profile["student_no"],
+            "企业指导教师",
+            profile["enterprise_advisor"],
+        ),
     ]
     for row_index, row_values in enumerate(info_rows):
         for column, value in enumerate(row_values):
@@ -230,8 +231,7 @@ def _build_task_book(
     for row, label in ((3, "指导教师"), (4, "教研室审核意见"), (5, "二级学院审核意见")):
         _replace_cell_text(outcome.cell(row, 0), label, bold=True)
         _replace_cell_text(outcome.cell(row, 1), "\n（签名）________________    年____月____日")
-    note = doc.add_paragraph("注：⑴ 请双面打印。⑵ 如需附图，请以附件形式提供。")
-    note.paragraph_format.space_before = Pt(8)
+    _compact_table(outcome)
     return doc
 
 
@@ -328,9 +328,7 @@ def _outline_text(items: list[dict[str, Any]]) -> str:
             if not section_title or section_title in seen_section_titles:
                 continue
             seen_section_titles.add(section_title)
-            lines.append(
-                f"{chapter_index}.{section_index} {section_title}"
-            )
+            lines.append(f"{chapter_index}.{section_index} {section_title}")
             raw_third_level_items = section.get("items")
             third_level_items: list[Any] = raw_third_level_items if isinstance(raw_third_level_items, list) else []
             for subsection_index, subsection in enumerate(third_level_items, start=1):
@@ -358,39 +356,110 @@ def _normalize_generated_text(value: str) -> str:
     return normalized
 
 
-def _profile_with_placeholders(request: dict[str, Any]) -> dict[str, str]:
-    """为非必填身份字段补充可见且易替换的通用占位值。"""
+def _add_proposal_section(
+    doc: DocumentObject,
+    heading: str,
+    body: str,
+    *,
+    compact: bool = False,
+) -> None:
+    """用短行组成的独立表格区块承载开题报告章节。"""
 
-    raw_profile = request.get("student_profile")
-    profile: dict[str, Any] = raw_profile if isinstance(raw_profile, dict) else {}
-    defaults = {
-        "school": "某某大学",
-        "college": "某某学院",
-        "name": "某某某",
-        "student_no": "20XXXXXXXXXX",
-        "class_name": "某某班",
-        "major": "某某专业",
-        "internal_advisor": "某某某",
-        "enterprise_advisor": "某某某",
-        "year_month": "20XX年XX月",
-    }
-    return {key: str(profile.get(key) or value) for key, value in defaults.items()}
+    blocks = _split_proposal_blocks(body)
+    table = doc.add_table(rows=1 + len(blocks), cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    heading_cell = table.cell(0, 0)
+    _set_cell_width(heading_cell, Cm(16))
+    _replace_cell_text(heading_cell, heading, bold=True)
+    heading_cell.paragraphs[0].paragraph_format.keep_with_next = True
+    _set_cell_borders(heading_cell, top="single", bottom="nil")
+    _prevent_row_split(table.rows[0])
+    for index, block in enumerate(blocks, start=1):
+        cell = table.cell(index, 0)
+        _set_cell_width(cell, Cm(16))
+        _replace_cell_text(cell, block)
+        cell.paragraphs[0].paragraph_format.first_line_indent = Cm(0.74)
+        cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        if compact:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.line_spacing = 1
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                for run in paragraph.runs:
+                    _format_run(run, 9.5)
+            _set_cell_margin(cell, 20)
+        _set_cell_borders(cell, top="nil", bottom="single" if index == len(blocks) else "nil")
+        _prevent_row_split(table.rows[index])
 
 
-def _set_cell_content(cell: Any, heading: str, body: str) -> None:
-    cell.text = ""
-    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
-    heading_paragraph = cell.paragraphs[0]
-    heading_run = heading_paragraph.add_run(heading)
-    _format_run(heading_run, 12, bold=True, font=FONT_HEADING)
-    for block in [item.strip() for item in _normalize_generated_text(body).split("\n")]:
-        paragraph = cell.add_paragraph(block)
-        paragraph.paragraph_format.line_spacing = 1.5
-        paragraph.paragraph_format.first_line_indent = Cm(0.74) if block else None
-        paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        for run in paragraph.runs:
-            _format_run(run, 12)
-    _set_cell_margin(cell, 120)
+def _add_proposal_approval(doc: DocumentObject) -> None:
+    """把两个签字区保持在同一短表格行，避免末页只剩一行签章。"""
+
+    table = doc.add_table(rows=1, cols=1)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    table.autofit = False
+    cell = table.cell(0, 0)
+    _set_cell_width(cell, Cm(16))
+    content = (
+        "指导教师意见\n\n签名：________________    年____月____日\n\n"
+        "教研室（学术小组）意见\n\n负责人（签章）：________________    年____月____日"
+    )
+    _replace_cell_text(cell, content)
+    for paragraph in cell.paragraphs:
+        paragraph.paragraph_format.keep_together = True
+    _set_cell_borders(cell, top="single", bottom="single")
+    _prevent_row_split(table.rows[0])
+
+
+def _split_proposal_blocks(value: str, *, maximum_length: int = 420) -> list[str]:
+    """把超长连续正文拆成可单页容纳的完整句区块。"""
+
+    normalized = _normalize_generated_text(str(value)).strip()
+    if not normalized:
+        return [""]
+    raw_blocks = [item.strip() for item in normalized.split("\n") if item.strip()]
+    blocks: list[str] = []
+    for raw_block in raw_blocks:
+        sentences = [item for item in re.split(r"(?<=[。！？!?；;])", raw_block) if item]
+        current = ""
+        for sentence in sentences or [raw_block]:
+            while len(sentence) > maximum_length:
+                if current:
+                    blocks.append(current)
+                    current = ""
+                blocks.append(sentence[:maximum_length])
+                sentence = sentence[maximum_length:]
+            if current and len(current) + len(sentence) > maximum_length:
+                blocks.append(current)
+                current = sentence
+            else:
+                current += sentence
+        if current:
+            blocks.append(current)
+    return blocks or [""]
+
+
+def _prevent_row_split(row: Any) -> None:
+    tr_pr = row._tr.get_or_add_trPr()
+    if tr_pr.find(qn("w:cantSplit")) is None:
+        tr_pr.append(OxmlElement("w:cantSplit"))
+
+
+def _set_cell_borders(cell: Any, *, top: str, bottom: str) -> None:
+    tc_pr = cell._tc.get_or_add_tcPr()
+    borders = tc_pr.first_child_found_in("w:tcBorders")
+    if borders is None:
+        borders = OxmlElement("w:tcBorders")
+        tc_pr.append(borders)
+    for edge, value in (("top", top), ("left", "single"), ("bottom", bottom), ("right", "single")):
+        node = borders.find(qn(f"w:{edge}"))
+        if node is None:
+            node = OxmlElement(f"w:{edge}")
+            borders.append(node)
+        node.set(qn("w:val"), value)
+        node.set(qn("w:sz"), "6")
+        node.set(qn("w:color"), "000000")
 
 
 def _merge_labeled_row(table: Any, row: int, label: str, content: str) -> None:
@@ -410,6 +479,25 @@ def _replace_cell_text(cell: Any, text: str, *, bold: bool = False) -> None:
         run = paragraph.add_run(line)
         _format_run(run, 10.5, bold=bold)
     _set_cell_margin(cell, 100)
+
+
+def _compact_table(table: Any) -> None:
+    """压缩任务书主表，避免短审核行被孤立到新页。"""
+
+    visited_cells: set[int] = set()
+    for row in table.rows:
+        for cell in row.cells:
+            cell_id = id(cell._tc)
+            if cell_id in visited_cells:
+                continue
+            visited_cells.add(cell_id)
+            _set_cell_margin(cell, 60)
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.line_spacing = 1.15
+                paragraph.paragraph_format.space_before = Pt(0)
+                paragraph.paragraph_format.space_after = Pt(0)
+                for run in paragraph.runs:
+                    _format_run(run, 10, bold=bool(run.bold))
 
 
 def _format_run(run: Any, size: float, *, bold: bool = False, font: str = FONT_CN) -> None:

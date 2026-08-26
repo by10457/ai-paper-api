@@ -16,6 +16,14 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "- 这里只生成正文主体，严禁输出“摘要”“Abstract”“关键词”“致谢”“参考文献”等前后置内容，这些部分由系统单独生成\n"
                 "- 即使大纲中出现“摘要”“致谢”“参考文献”等字样，也必须忽略，不得在正文中展开或复写\n"
                 "- 最终输出的第一行必须直接是论文标题或一级章节标题，不能是说明性文字\n\n"
+                "## 用户事实边界（必须严格遵守）\n"
+                "用户补充要求：{writing_requirements}\n"
+                "用户明确确认的技术或架构：{confirmed_technologies}\n"
+                "数据证据约束：{evidence_instruction}\n"
+                "- 只有用户标题、补充要求或所给材料明确出现的信息，才能写成已实现、已部署或已测试的事实\n"
+                "- 未确认的框架、组件、版本号、运行环境和实现细节只能写成“建议方案（待确认）”\n"
+                "- 不得自行把 Vue 项目改写为微信小程序，也不得擅自补充 Vuex、Axios、Element UI、MyBatis、Redis、Nginx、JMeter 等组件\n"
+                "- 未提供真实测试记录时，不得编造响应时间、并发量、错误率、覆盖率等实测数值，也不得生成数据图\n\n"
                 "## 文档结构规范\n"
                 "本文最终将转换为 Word 文档，请严格遵守以下规范：\n\n"
                 "### 标题编号\n"
@@ -76,17 +84,18 @@ THESIS_FULLTEXT_PROMPT = ChatPromptTemplate.from_messages(
                 "- 节点数量尽量控制在 4-10 个以内，文字标签保持简洁。\n"
                 '- mermaid_code 中换行用 \\n 表示，引号用 \\" 转义。\n\n'
                 "### 选择方案 B：标准数据图 → render_method: chart\n"
+                "仅当用户明确提供可核验的数值数据时才允许使用 chart；否则不得输出 chart 占位符。\n"
                 "占位符格式示例：\n"
                 "<<FIGURE>>\n"
                 "{{\n"
                 '  "caption": "\u56fe X.Y \u6b64\u56fe\u7684\u6807\u9898",\n'
                 '  "render_method": "chart",\n'
                 '  "chart_type": "line",\n'
-                '  "title": "\u7cfb\u7edf\u7ae0\u8282\u751f\u6210\u63a5\u53e35\u5206\u949f\u538b\u529b\u6d4b\u8bd5\u54cd\u5e94\u65f6\u95f4\u53d8\u5316\u8d8b\u52bf",\n'
-                '  "x_label": "\u65f6\u95f4\uff08\u79d2\uff09",\n'
-                '  "y_label": "\u54cd\u5e94\u65f6\u95f4\uff08\u79d2\uff09",\n'
-                '  "categories": ["0", "30", "60", "90", "120"],\n'
-                '  "series": [{{"name": "\u54cd\u5e94\u65f6\u95f4", "data": [0.5, 1.9, 2.2, 2.1, 1.8]}}]\n'
+                '  "title": "用户提供数据的统计标题",\n'
+                '  "x_label": "分类",\n'
+                '  "y_label": "用户提供的指标",\n'
+                '  "categories": ["类别A", "类别B"],\n'
+                '  "series": [{{"name": "用户提供的指标", "data": [1, 2]}}]\n'
                 "}}\n"
                 "<</FIGURE>>\n"
                 "配置说明：\n"

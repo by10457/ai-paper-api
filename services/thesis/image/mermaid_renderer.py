@@ -274,6 +274,18 @@ def _summarize_mermaid_stderr(stderr_text: str) -> str:
     return stderr_text.strip().splitlines()[0][:500] if stderr_text.strip() else "未知错误"
 
 
+def _resolve_browser_executable() -> str:
+    """优先使用显式配置，否则探测 WSL/Linux 常见 Chrome 路径。"""
+
+    configured = os.getenv("PUPPETEER_EXECUTABLE_PATH", "").strip()
+    if configured:
+        return configured
+    for command in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        if path := shutil.which(command):
+            return path
+    return ""
+
+
 async def render_mermaid(mermaid_code: str, output_path: str) -> str:
     """将 Mermaid 代码渲染为 PNG。"""
 
@@ -288,7 +300,7 @@ async def render_mermaid(mermaid_code: str, output_path: str) -> str:
     puppeteer_config: dict[str, object] = {
         "args": ["--no-sandbox", "--disable-setuid-sandbox"],
     }
-    if executable_path := os.getenv("PUPPETEER_EXECUTABLE_PATH"):
+    if executable_path := _resolve_browser_executable():
         puppeteer_config["executablePath"] = executable_path
 
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".json", delete=False) as temp_config:

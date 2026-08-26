@@ -41,3 +41,11 @@ def test_crossref_uses_default_mailto(monkeypatch) -> None:
 
     assert client.params["mailto"] == "noreply@example.com"
     get_settings.cache_clear()
+
+
+def test_crossref_query_requests_doi_for_verification() -> None:
+    client = _FakeClient()
+
+    asyncio.run(reference_service._query_crossref_one(client, "A title"))
+
+    assert "DOI" in client.params["select"]

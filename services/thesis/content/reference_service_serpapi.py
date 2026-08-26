@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 SERPAPI_BASE = "https://serpapi.com/search"
 CROSSREF_API = "https://api.crossref.org/works"
-CROSSREF_SELECT_FIELDS = "title,author,container-title,published,volume,issue,page,type"
+CROSSREF_SELECT_FIELDS = "DOI,title,author,container-title,published,volume,issue,page,type"
 CROSSREF_TITLE_SIMILARITY_THRESHOLD = 0.55
 
 YEAR_PATTERN = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
@@ -249,6 +249,7 @@ def _extract_crossref_fields(item: dict[str, Any]) -> dict[str, Any]:
         "crossref_issue": item.get("issue", ""),
         "crossref_page": item.get("page", ""),
         "crossref_type": item.get("type", ""),
+        "crossref_doi": item.get("DOI", ""),
     }
 
 
@@ -429,7 +430,9 @@ def _format_one_reference(item: dict[str, Any], index: int, is_zh: bool) -> str:
     if not body:
         logger.debug("跳过缺卷期页码的期刊文献: %s", title[:80])
         return ""
-    return f"[{index}]{body}"
+    doi = str(item.get("crossref_doi") or "").strip()
+    doi_suffix = f" doi:{doi}." if doi else ""
+    return f"[{index}]{body}{doi_suffix}"
 
 
 async def _filter_results(

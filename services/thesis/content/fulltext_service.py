@@ -223,6 +223,9 @@ async def _invoke_fulltext(
     target_word_count: int,
     references: str,
     codetype: str,
+    writing_requirements: str,
+    confirmed_technologies: str,
+    evidence_instruction: str,
 ) -> GeneratedChunk:
     """生成一个大纲批次对应的正文。
 
@@ -250,6 +253,9 @@ async def _invoke_fulltext(
                     if codetype and codetype != "否"
                     else ""
                 ),
+                "writing_requirements": writing_requirements or "未提供补充材料",
+                "confirmed_technologies": confirmed_technologies or "未确认具体技术栈",
+                "evidence_instruction": evidence_instruction,
             }
         )
     return _extract_generated_chunk(result)
@@ -262,6 +268,9 @@ async def _regenerate_chapters(
     target_word_count: int,
     references: str,
     codetype: str,
+    writing_requirements: str,
+    confirmed_technologies: str,
+    evidence_instruction: str,
 ) -> list[str]:
     """逐章重新生成并验证异常批次。
 
@@ -287,6 +296,9 @@ async def _regenerate_chapters(
             target_word_count,
             references,
             codetype,
+            writing_requirements,
+            confirmed_technologies,
+            evidence_instruction,
         )
         missing = _missing_chapters([chapter_outline], generated.text)
         if _is_token_limited(generated.finish_reason) or missing:
@@ -301,6 +313,9 @@ async def generate_fulltext(
     target_word_count: int = 8000,
     references: str = "",
     codetype: str = "否",
+    writing_requirements: str = "",
+    confirmed_technologies: str = "",
+    evidence_instruction: str = "未提供真实测试数据，禁止输出实测结论或数据图。",
 ) -> str:
     """阶段②：分批生成正文并确保所有一级章节完整。
 
@@ -345,6 +360,9 @@ async def generate_fulltext(
             batch_target,
             references,
             codetype,
+            writing_requirements,
+            confirmed_technologies,
+            evidence_instruction,
         )
         missing = _missing_chapters(batch, generated.text)
         if _is_token_limited(generated.finish_reason) or missing:
@@ -362,6 +380,9 @@ async def generate_fulltext(
                     per_chapter_target,
                     references,
                     codetype,
+                    writing_requirements,
+                    confirmed_technologies,
+                    evidence_instruction,
                 )
             )
         else:

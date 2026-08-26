@@ -12,7 +12,7 @@ ThesisMaterialTaskStatus = Literal["queued", "generating", "completed", "failed"
 
 
 class StudentProfile(BaseModel):
-    """文档封面和任务书中的可选学生信息。"""
+    """文档封面和任务书中的可选学生信息；缺失项会在提交响应中显式返回。"""
 
     school: str | None = Field(default=None, max_length=200)
     college: str | None = Field(default=None, max_length=200)
@@ -124,6 +124,10 @@ class ThesisMaterialSubmitResponse(BaseModel):
     document_type: ThesisMaterialDocumentType
     status: Literal["queued"] = "queued"
     charged_points: int
+    missing_profile_fields: list[str] = Field(
+        default_factory=list,
+        description="文档中将显示待补充提示的个人信息字段",
+    )
 
 
 class ReferenceRecord(BaseModel):

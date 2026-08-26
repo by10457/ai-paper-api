@@ -28,7 +28,7 @@ POST /api/v1/thesis-materials/literature-reviews
 POST /api/v1/thesis-materials/task-books
 ```
 
-标题是唯一必填字段，长度为 2-200 个字符。学校、学生、导师和日期等资料均为可选；未提供时，DOCX 使用“某某大学”“某某某”“20XXXXXXXXXX”等明显占位值，便于下载后替换。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
+标题是唯一必填字段，长度为 2-200 个字符。学校、学生、导师和日期等资料均为可选；未提供时，DOCX 使用“【待补充：学号】”这类不可误认为真实数据的提示。提交响应和最终结构化结果同时返回 `missing_profile_fields`，调用方应在付费提交前后提醒用户补齐。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
 
 最小请求：
 
@@ -44,7 +44,8 @@ POST /api/v1/thesis-materials/task-books
   "order_sn":"TM20260809123456789ABC",
   "document_type":"proposal_report",
   "status":"queued",
-  "charged_points":20
+  "charged_points":20,
+  "missing_profile_fields":["student_no","class_name","major","internal_advisor","year_month"]
 }
 ```
 
@@ -58,7 +59,7 @@ GET /api/v1/thesis-materials/tasks/{task_id}/download
 
 任务阶段依次使用：`queued`、`retrieving_references`、`planning`、`generating_sections`、`validating`、`rendering_docx`、`uploading`、`completed`、`failed`。事件接口为 Server-Sent Events；客户端无法保持 SSE 时可按 2-5 秒轮询任务详情。
 
-完成任务的 `result` 为产品对应的结构化 JSON，同时提供 DOCX 下载。失败任务返回 `message`/`error_message` 和已退款积分；普通生成错误会自动重试，耗尽重试后幂等退款。
+完成任务的 `result` 为产品对应的结构化 JSON，同时提供 DOCX 下载。开题报告和文献综述的 `word_count` 明确给出目标、容差、实际值、计入字段和排除区块。统一按正文非空白字符统计，汉字、标点、英文字母和数字均逐字符计数；标题、关键词、提纲、计划、参考文献、个人信息和签字审核区不计入。目标总正文允许正负 10% 的验收容差，并为引用规范化保留最多 20 个非空白字符的后处理缓冲；实际上下限随 `word_count` 返回。失败任务返回 `message`/`error_message` 和已退款积分；普通生成错误会自动重试，耗尽重试后幂等退款。
 
 ## 订单
 
@@ -80,7 +81,9 @@ GET /api/v1/admin/thesis-material-orders/{order_id}
 
 开题报告包含研究目的、文献综述、主要内容、重点难点、研究方法、可行性与创新点、严格三级写作提纲、进度计划、参考文献和审核区。文献综述包含摘要、关键词、国内外研究、3-6 个主题比较、方法比较、研究不足、趋势、结论和参考文献。任务书包含设计背景、技术栈建议、设计目标、模块任务、进度计划、成果形式、成果要求、主要指标、参考资料和审核区。
 
-参考文献只来自已配置的万方、SerpAPI/Google Scholar、CrossRef 等真实来源。系统会过滤撤稿记录，按标题相关度排序、去重并连续编号。开题报告和文献综述按目标数量尽量满足中外文比例，同时设置可交付下限；任务书优先使用与课题直接相关的中文资料。正文引用覆盖不足时会进入局部修复，不要求为了凑编号在段末堆叠全部引用。
+参考文献只来自已配置的万方、SerpAPI/Google Scholar、CrossRef 等真实来源。系统以业务主题匹配作为准入门槛，再使用技术主题重合度排序，并过滤撤稿、著录信息不完整和仅技术栈相似但业务无关的记录。达不到最低相关文献数量时任务会明确失败，不用弱相关文献凑数。开题报告和文献综述按目标数量尽量满足中外文比例，同时设置可交付下限；任务书优先使用与课题直接相关的中文资料。正文引用覆盖不足时会进入局部修复，引用语句只允许依据题名和元数据作审慎归纳。
+
+任务书在用户没有通过 `research_context.additional_requirements` 明确提供数值指标时，不会把模型自行提出的响应时间、并发量、覆盖率、成果字数或演示时长等阈值当成已确认要求。若模型仍给出示例数值，正文会标记“建议值（待导师确认）”，结构化结果通过 `generated_suggestion_fields` 标识 `design_goals`、`deliverable_requirements` 或 `main_indicators` 等对应字段。
 
 ## 错误码
 

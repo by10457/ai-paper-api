@@ -51,9 +51,15 @@ async def create_outline_record(user: User, req: PaperOutlineCreateRequest) -> P
         with use_runtime_context(user_id=user.id, stage="outline"):
             outline_data = await generate_outline(
                 req.title,
-                int(req.form_params.get("lengthnum") or 8000),
+                int(req.target_word_count or req.form_params.get("lengthnum") or 8000),
                 str(req.form_params.get("codetype") or "否"),
-                str(req.form_params.get("language") or "否"),
+                (
+                    "是"
+                    if req.include_foreign is True
+                    else "否"
+                    if req.include_foreign is False
+                    else str(req.form_params.get("language") or "否")
+                ),
                 req.three_level,
                 req.about_msg,
             )
@@ -216,6 +222,7 @@ def _paper_order_status_response(order: PaperOrder) -> PaperOrderStatusResponse:
         fulltext_char_count=int(status_data.get("fulltext_char_count") or 0) if status_data else 0,
         fulltext_word_count=int(status_data.get("fulltext_word_count") or 0) if status_data else 0,
         truncation_warning=bool(status_data.get("truncation_warning")) if status_data else False,
+        result_data=status_data.get("result_data", {}) if status_data else {},
     )
 
 

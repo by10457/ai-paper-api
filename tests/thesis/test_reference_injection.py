@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from schemas.thesis_material import ReferenceRecord
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.generation import pipeline as thesis
 
@@ -14,9 +17,18 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
     calls: list[object] = []
     references_text = "[1] 物联网相关研究[J]."
 
-    async def fake_generate_references(title: str, outline: str, **kwargs) -> str:
+    async def fake_retrieve_verified_references(title: str, outline: str, **kwargs) -> list[ReferenceRecord]:
         calls.append("references")
-        return references_text
+        return [
+            ReferenceRecord(
+                index=1,
+                title="物联网相关研究",
+                authors=["测试作者"],
+                year="2025",
+                formatted=references_text,
+                language="zh",
+            )
+        ]
 
     async def fake_generate_fulltext(
             outline: str,
@@ -25,9 +37,9 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
             **kwargs,
     ) -> str:
         calls.append(("fulltext", references, target_word_count))
-        return "# 第一章 绪论\n系统设计已有较多研究基础[1]。\n"
+        return "# 第一章 绪论\n" + "系统设计已有较多研究基础，相关方案需要结合项目材料确认。" * 380 + "[1]\n"
 
-    async def fake_generate_abstracts(full_text: str) -> dict[str, str]:
+    async def fake_generate_abstracts(full_text: str, **kwargs) -> dict[str, str]:
         calls.append("abstracts")
         return {
             "abstract_zh": "中文摘要",
@@ -52,7 +64,7 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
         calls.append(("build", kwargs["references"]))
         return "/tmp/fake.docx"
 
-    monkeypatch.setattr(thesis, "generate_references", fake_generate_references)
+    monkeypatch.setattr(thesis, "_retrieve_verified_references", fake_retrieve_verified_references)
     monkeypatch.setattr(thesis, "generate_fulltext", fake_generate_fulltext)
     monkeypatch.setattr(thesis, "generate_abstracts", fake_generate_abstracts)
     monkeypatch.setattr(thesis, "generate_acknowledgment", fake_generate_acknowledgment)
@@ -71,22 +83,23 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
             task_id="task123",
             title="自习室门禁管理和学习支持系统",
             outline="# 第一章 绪论",
-            target_word_count=9000,
+            target_word_count=1000,
         )
     )
 
-    assert calls.index("references") < calls.index(("fulltext", references_text, 9000))
+    assert calls.index("references") < calls.index(("fulltext", references_text, 1000))
     assert "to_thread" in calls
     assert ("build", references_text) in calls
     assert result.docx_path == "/tmp/fake.docx"
     assert result.fulltext_char_count > result.fulltext_word_count > 0
-    assert result.truncation_warning is True
+    assert result.truncation_warning is False
+    assert result.result_data["reference_count"] == 1
 
 
-def test_generate_thesis_document_degrades_when_references_fail(monkeypatch) -> None:
+def test_generate_thesis_document_rejects_unverified_reference_shortage(monkeypatch) -> None:
     calls: list[object] = []
 
-    async def fake_generate_references(title: str, outline: str, **kwargs) -> str:
+    async def fake_retrieve_verified_references(title: str, outline: str, **kwargs) -> list[ReferenceRecord]:
         raise RuntimeError("serpapi down")
 
     async def fake_generate_fulltext(
@@ -98,7 +111,7 @@ def test_generate_thesis_document_degrades_when_references_fail(monkeypatch) -> 
         calls.append(("fulltext", references))
         return "# 第一章 绪论\n正文。\n"
 
-    async def fake_generate_abstracts(full_text: str) -> dict[str, str]:
+    async def fake_generate_abstracts(full_text: str, **kwargs) -> dict[str, str]:
         return {
             "abstract_zh": "",
             "keywords_zh": "",
@@ -112,7 +125,7 @@ def test_generate_thesis_document_degrades_when_references_fail(monkeypatch) -> 
     async def fake_render_all_figures(**kwargs):
         return {}
 
-    monkeypatch.setattr(thesis, "generate_references", fake_generate_references)
+    monkeypatch.setattr(thesis, "_retrieve_verified_references", fake_retrieve_verified_references)
     monkeypatch.setattr(thesis, "generate_fulltext", fake_generate_fulltext)
     monkeypatch.setattr(thesis, "generate_abstracts", fake_generate_abstracts)
     monkeypatch.setattr(thesis, "generate_acknowledgment", fake_generate_acknowledgment)
@@ -125,15 +138,16 @@ def test_generate_thesis_document_degrades_when_references_fail(monkeypatch) -> 
         lambda: SimpleNamespace(twelveai_api_key="", twelveai_image_model=""),
     )
 
-    asyncio.run(
-        thesis.generate_thesis_document(
-            task_id="task123",
-            title="自习室门禁管理和学习支持系统",
-            outline="# 第一章 绪论",
+    with pytest.raises(RuntimeError, match="serpapi down"):
+        asyncio.run(
+            thesis.generate_thesis_document(
+                task_id="task123",
+                title="自习室门禁管理和学习支持系统",
+                outline="# 第一章 绪论",
+            )
         )
-    )
 
-    assert calls == [("fulltext", "")]
+    assert calls == []
 
 
 def test_docx_builder_renders_citations_as_superscript() -> None:

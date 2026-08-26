@@ -47,3 +47,5 @@ public/jse/
 
 # macOS
 .DS_Store
+
+.codex-debug/

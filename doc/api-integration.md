@@ -77,6 +77,22 @@ Idempotency-Key: <业务订单号>
 
 提交后立即返回 `task_id`，论文生成由 Redis worker 后台执行。
 
+建议新接入方在请求中明确传递以下字段：
+
+```json
+{
+  "target_word_count": 5000,
+  "reference_count": 12,
+  "include_foreign": true,
+  "aboutmsg": "仅写入已确认的项目事实；未提供测试数据时不得生成实测结论"
+}
+```
+
+- `reference_count`、`include_foreign` 是推荐使用的语义字段；后端仍兼容历史字段 `wxnum`、`language`，两组同时出现时推荐字段优先。
+- 任务完成后从状态接口的 `result_data.effective_config` 核对实际生效值，不要只依赖前端表单回显。
+- `result_data.missing_profile_fields` 非空时，成品会显示 `【待补充：字段】`；调用方应在下载前明确提醒用户。
+- `result_data.generated_suggestion_fields` 表示未由用户材料确认的生成建议，不应被业务系统展示为实测事实。
+
 ### 查询状态
 
 ```http

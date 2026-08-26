@@ -3,15 +3,26 @@
 import asyncio
 import logging
 from collections.abc import Awaitable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from llm.client import get_enabled_model_config
+from schemas.thesis_material import ReferenceRecord
 from services.thesis.content.abstract_service import (
     generate_abstracts,
     generate_acknowledgment,
 )
 from services.thesis.content.fulltext_service import count_visible_words, generate_fulltext
+from services.thesis.content.quality_service import (
+    constrain_fulltext_length,
+    extract_confirmed_technologies,
+    has_user_empirical_evidence,
+    normalize_chapter_count_statement,
+    normalize_citation_integrity,
+    remove_ai_image_figures,
+    sanitize_abstract_truth,
+    sanitize_generated_claims,
+)
 from services.thesis.content.reference_service import generate_references
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.document.placeholder import (
@@ -28,6 +39,8 @@ from services.thesis.image import (
     PlaceholderImageGenerator,
     render_all_figures,
 )
+from services.thesis.profile_policy import mark_acknowledgment_as_draft, normalize_thesis_profile
+from services.thesis_material.reference_service import retrieve_reference_records
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +68,28 @@ class ThesisResult:
     fulltext_char_count: int = 0
     fulltext_word_count: int = 0
     truncation_warning: bool = False
+    result_data: dict[str, object] = field(default_factory=dict)
+
+
+async def _retrieve_verified_references(
+    title: str,
+    outline: str,
+    *,
+    target_count: int,
+    include_foreign: bool,
+) -> list[ReferenceRecord]:
+    """按论文配置检索满足元数据、相关性和语言配额的真实文献。"""
+
+    english_count = max(1, round(target_count / 3)) if include_foreign else 0
+    chinese_count = target_count - english_count
+    return await retrieve_reference_records(
+        title,
+        outline,
+        target_count=target_count,
+        minimum_count=target_count,
+        minimum_chinese_count=chinese_count,
+        minimum_english_count=english_count,
+    )
 
 
 async def generate_thesis_document(
@@ -74,6 +109,8 @@ async def generate_thesis_document(
     year_month: str = "",
     student_id: str = "",
     student_class: str = "",
+    writing_requirements: str = "",
+    allow_ai_images: bool = True,
 ) -> ThesisResult:
     """
     论文生成主流程（阶段② + ②.5 + ②.7 + ③）。
@@ -90,20 +127,26 @@ async def generate_thesis_document(
 
     await publish_progress(task_id, "started", "论文生成任务已启动")
 
+    reference_records = []
     references = ""
     if wxquote != "不标注":
         await publish_progress(task_id, "references", "正在检索和整理参考文献")
         with stage_context("references"):
-            references = await _best_effort(
-                generate_references(
-                    title,
-                    outline,
-                    wxnum=wxnum,
-                    include_english=language == "是",
-                ),
-                "",
-                "参考文献生成",
+            reference_records = await _retrieve_verified_references(
+                title,
+                outline,
+                target_count=wxnum,
+                include_foreign=language == "是",
             )
+            references = "\n".join(item.formatted for item in reference_records)
+
+    confirmed_technologies = extract_confirmed_technologies(f"{title}\n{writing_requirements}")
+    allow_empirical_data = has_user_empirical_evidence(writing_requirements)
+    evidence_instruction = (
+        "用户已提供包含测试语义和具体数值的材料；只可复述材料中的数值，不得补造其他指标。"
+        if allow_empirical_data
+        else "未提供真实测试数据，禁止输出实测结论、具体性能指标或数据图。"
+    )
 
     await publish_progress(task_id, "fulltext", "正在生成论文正文")
     with stage_context("fulltext"):
@@ -112,20 +155,28 @@ async def generate_thesis_document(
             target_word_count=target_word_count,
             references=references,
             codetype=codetype,
+            writing_requirements=writing_requirements,
+            confirmed_technologies="、".join(sorted(confirmed_technologies)),
+            evidence_instruction=evidence_instruction,
         )
+        full_text, suggestion_fields = sanitize_generated_claims(
+            full_text,
+            writing_requirements=writing_requirements,
+            confirmed_technologies=confirmed_technologies,
+        )
+        if not allow_ai_images:
+            full_text, removed_ai_images = remove_ai_image_figures(full_text)
+            if removed_ai_images:
+                suggestion_fields.append("ai_images_disabled")
+        full_text = normalize_chapter_count_statement(full_text)
+        if reference_records:
+            full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
+            references = "\n".join(item.formatted for item in reference_records)
+        full_text = constrain_fulltext_length(full_text, target_word_count=target_word_count)
 
     char_count = len(full_text)
     word_count = count_visible_words(full_text)
-    truncation_warning = False
-    truncation_threshold = int(target_word_count * 0.75)
-    if word_count < truncation_threshold:
-        logger.warning(
-            "全文有效字数约 %d（原始字符 %d，低于目标 %d 的 75%%），可能存在内容不足",
-            word_count,
-            char_count,
-            target_word_count,
-        )
-        truncation_warning = True
+    truncation_warning = not round(target_word_count * 0.9) <= word_count <= round(target_word_count * 1.1)
 
     default_abstract = {
         "abstract_zh": "",
@@ -136,9 +187,45 @@ async def generate_thesis_document(
     await publish_progress(task_id, "abstracts", "正在生成摘要、关键词和致谢")
     with stage_context("abstracts"):
         abstract_data, acknowledgment = await asyncio.gather(
-            _best_effort(generate_abstracts(full_text), default_abstract, "摘要生成"),
-            _best_effort(generate_acknowledgment(title, advisor), "", "致谢生成"),
+            _best_effort(
+                generate_abstracts(full_text, evidence_instruction=evidence_instruction),
+                default_abstract,
+                "摘要生成",
+            ),
+            _best_effort(
+                generate_acknowledgment(
+                    title,
+                    advisor if advisor and advisor not in {"指导教师", "指导教师（姓名、职称、单位）"} else "指导教师",
+                ),
+                "",
+                "致谢生成",
+            ),
         )
+        abstract_data, abstract_changed = sanitize_abstract_truth(
+            abstract_data,
+            writing_requirements=writing_requirements,
+            confirmed_technologies=confirmed_technologies,
+        )
+        if abstract_changed:
+            suggestion_fields.append("abstract_generated_suggestion")
+
+    normalized_profile, missing_profile_fields = normalize_thesis_profile(
+        {
+            "author": author,
+            "advisor": advisor,
+            "major": major,
+            "school": school,
+            "year_month": year_month,
+            "student_id": student_id,
+            "student_class": student_class,
+        }
+    )
+    acknowledgment = mark_acknowledgment_as_draft(
+        acknowledgment,
+        missing_profile_fields=missing_profile_fields,
+    )
+    if missing_profile_fields:
+        suggestion_fields.append("acknowledgment_personal_experience")
 
     placeholders = extract_figure_placeholders(full_text)
     mermaid_list, chart_list, ai_image_list, fallback_list = split_by_render_method(placeholders)
@@ -151,6 +238,7 @@ async def generate_thesis_document(
             placeholders=placeholders,
             image_generator=image_generator,
             output_dir=str(output_dir / "images"),
+            allow_ai_fallback=allow_ai_images,
         )
 
     await publish_progress(task_id, "document", "正在组装 Word 论文文档")
@@ -162,14 +250,14 @@ async def generate_thesis_document(
             image_paths=image_paths,
             output_path=str(output_dir / docx_filename),
             title=title,
-            author=author,
-            advisor=advisor,
+            author=normalized_profile["author"],
+            advisor=normalized_profile["advisor"],
             degree_type=degree_type,
-            major=major,
-            school=school,
-            year_month=year_month,
-            student_id=student_id,
-            student_class=student_class,
+            major=normalized_profile["major"],
+            school=normalized_profile["school"],
+            year_month=normalized_profile["year_month"],
+            student_id=normalized_profile["student_id"],
+            student_class=normalized_profile["student_class"],
             abstract_zh=abstract_data.get("abstract_zh", ""),
             abstract_en=abstract_data.get("abstract_en", ""),
             keywords_zh=abstract_data.get("keywords_zh", ""),
@@ -178,6 +266,40 @@ async def generate_thesis_document(
             references=references,
         )
 
+    language_counts = {
+        "zh": sum(item.language == "zh" for item in reference_records),
+        "en": sum(item.language == "en" for item in reference_records),
+    }
+    result_data: dict[str, object] = {
+        "word_count": {
+            "metric": "Word/WPS可见正文口径（中文字符逐字、连续英文数字按词；不含图表占位JSON）",
+            "target": target_word_count,
+            "minimum": round(target_word_count * 0.9),
+            "maximum": round(target_word_count * 1.1),
+            "actual": word_count,
+        },
+        "reference_count": len(reference_records),
+        "reference_language_counts": language_counts,
+        "reference_sources": [
+            {
+                "index": item.index,
+                "title": item.title,
+                "provider": item.provider,
+                "doi": item.doi,
+                "source_url": item.source_url,
+            }
+            for item in reference_records
+        ],
+        "citation_integrity": "closed" if reference_records else "not_applicable",
+        "missing_profile_fields": missing_profile_fields,
+        "generated_suggestion_fields": sorted(set(suggestion_fields)),
+        "effective_config": {
+            "target_word_count": target_word_count,
+            "reference_count": wxnum if wxquote != "不标注" else 0,
+            "include_foreign": language == "是",
+            "citation_enabled": wxquote != "不标注",
+        },
+    }
     return ThesisResult(
         task_id=task_id,
         docx_path=docx_path,
@@ -189,6 +311,7 @@ async def generate_thesis_document(
         fulltext_char_count=char_count,
         fulltext_word_count=word_count,
         truncation_warning=truncation_warning,
+        result_data=result_data,
     )
 
 

@@ -21,6 +21,7 @@ from services.thesis.image.chart_renderer import (
 )
 from services.thesis.image.mermaid_renderer import (
     _normalize_mermaid_code,
+    _resolve_browser_executable,
     render_mermaid,
 )
 from services.thesis.image.renderer import render_all_figures
@@ -141,6 +142,41 @@ def test_render_all_figures_uses_method_concurrency_slots(
     assert sorted(result) == [0, 1, 2]
 
 
+def test_render_all_figures_can_disable_mermaid_ai_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """纯文字回归禁用生图时，Mermaid 失败不得偷偷调用图片模型。"""
+
+    async def failed_mermaid(_code: str, _output_path: str) -> str:
+        raise RuntimeError("mermaid failed")
+
+    class ForbiddenImageGenerator(PlaceholderImageGenerator):
+        async def generate(
+            self,
+            description: str,
+            style: str,
+            aspect_ratio: str,
+            output_path: str,
+        ) -> str:
+            raise AssertionError("AI image generation must remain disabled")
+
+    monkeypatch.setattr("services.thesis.image.renderer.render_mermaid", failed_mermaid)
+
+    result = asyncio.run(
+        render_all_figures(
+            placeholders=[
+                {"index": 0, "render_method": "mermaid", "mermaid_code": "invalid"},
+            ],
+            image_generator=ForbiddenImageGenerator(),
+            output_dir=str(tmp_path / "images"),
+            allow_ai_fallback=False,
+        )
+    )
+
+    assert result == {0: None}
+
+
 def test_render_mermaid_reports_missing_cli(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -149,6 +185,19 @@ def test_render_mermaid_reports_missing_cli(
 
     with pytest.raises(RuntimeError, match="Mermaid CLI 未安装"):
         asyncio.run(render_mermaid("graph TD; A-->B;", str(tmp_path / "flow.png")))
+
+
+def test_resolve_browser_executable_uses_installed_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """未配置环境变量时应自动发现 WSL 中已有的 Chrome。"""
+
+    monkeypatch.delenv("PUPPETEER_EXECUTABLE_PATH", raising=False)
+    monkeypatch.setattr(
+        mermaid_renderer.shutil,
+        "which",
+        lambda command: "/usr/bin/google-chrome" if command == "google-chrome" else None,
+    )
+
+    assert _resolve_browser_executable() == "/usr/bin/google-chrome"
 
 
 def test_normalize_mermaid_usecase_diagram_to_flowchart() -> None:

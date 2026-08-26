@@ -11,6 +11,8 @@ ABSTRACT_COMBINED_PROMPT = ChatPromptTemplate.from_messages(
                 "2. 再写英文摘要（200-300 words），必须是中文摘要的忠实翻译，不可重新解读原文\n"
                 "3. 使用第三人称，不出现「本人」「我」\n"
                 "4. 不加「摘要」「Abstract」等标题\n\n"
+                "5. {evidence_instruction}\n"
+                "6. 摘要只能概括正文中已有且有用户材料支持的事实；不得把建议方案或待确认内容改写成既成成果\n\n"
                 "输出格式（严格遵守，不可省略分隔符）：\n"
                 "===中文摘要===\n"
                 "（中文摘要正文）\n"

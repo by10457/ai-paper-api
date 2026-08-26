@@ -1,6 +1,7 @@
 """负责根据论文正文生成中英文摘要、关键词和致谢内容。"""
 
 import logging
+import re
 
 from langchain_core.output_parsers import StrOutputParser
 
@@ -12,6 +13,24 @@ from llm.prompts.thesis_abstract_prompt import (
 from services.thesis.generation.concurrency import text_short_slot
 
 logger = logging.getLogger(__name__)
+
+
+def _limit_abstract_lengths(result: dict[str, str]) -> dict[str, str]:
+    """限制摘要篇幅，避免关键词被挤到近乎空白的续页。"""
+
+    english = result.get("abstract_en", "").strip()
+    words = english.split()
+    if len(words) > 220:
+        limited_words = words[:220]
+        while limited_words and not re.search(r"[.!?]$", limited_words[-1]):
+            limited_words.pop()
+        result["abstract_en"] = " ".join(limited_words or words[:220]).strip()
+    chinese = result.get("abstract_zh", "").strip()
+    if len(chinese) > 500:
+        limited = chinese[:500]
+        sentence_end = max(limited.rfind("。"), limited.rfind("！"), limited.rfind("？"))
+        result["abstract_zh"] = limited[: sentence_end + 1] if sentence_end >= 300 else limited
+    return result
 
 
 def _parse_body_and_keywords(raw: str, kw_prefixes: tuple[str, ...]) -> tuple[str, str]:
@@ -59,7 +78,10 @@ def _parse_combined_abstract(raw: str) -> dict[str, str]:
     }
 
 
-async def generate_abstracts(full_text: str) -> dict[str, str]:
+async def generate_abstracts(
+    full_text: str,
+    evidence_instruction: str = "未提供真实测试数据，禁止输出实测结论或具体指标。",
+) -> dict[str, str]:
     """单次 LLM 调用同时生成中英文摘要，英文为中文的忠实翻译。"""
     llm = await create_configured_llm(
         "outline",
@@ -69,9 +91,14 @@ async def generate_abstracts(full_text: str) -> dict[str, str]:
 
     chain = ABSTRACT_COMBINED_PROMPT | llm | StrOutputParser()
     async with text_short_slot():
-        raw = await chain.ainvoke({"text_sample": full_text})
+        raw = await chain.ainvoke(
+            {
+                "text_sample": full_text,
+                "evidence_instruction": evidence_instruction,
+            }
+        )
 
-    result = _parse_combined_abstract(raw)
+    result = _limit_abstract_lengths(_parse_combined_abstract(raw))
     logger.info(
         "摘要生成完成: zh=%d字 en=%d字",
         len(result["abstract_zh"]),

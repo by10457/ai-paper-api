@@ -17,8 +17,17 @@ async def render_all_figures(
     placeholders: list[dict],
     image_generator: ImageGenerator,
     output_dir: str = "public/output/thesis/images",
+    *,
+    allow_ai_fallback: bool = True,
 ) -> dict[int, str | None]:
-    """并发渲染所有占位符，返回 {index: path_or_none}。"""
+    """并发渲染所有占位符，返回 {index: path_or_none}。
+
+    Args:
+        placeholders: 已解析的结构化图形占位符。
+        image_generator: AI 图片生成器。
+        output_dir: 图片输出目录。
+        allow_ai_fallback: Mermaid 失败时是否允许调用 AI 生图兜底。
+    """
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -57,6 +66,13 @@ async def render_all_figures(
 
             except Exception as exc:
                 if method == "mermaid":
+                    if not allow_ai_fallback:
+                        logger.warning(
+                            "占位符 #%d Mermaid 渲染失败，AI 生图兜底已禁用: %s",
+                            index,
+                            summarize_render_error(exc),
+                        )
+                        return index, None
                     logger.info("占位符 #%d Mermaid 渲染失败，已转 AI 插图兜底: %s", index, summarize_render_error(exc))
                     method = "ai_image"
                     max_retries = 1

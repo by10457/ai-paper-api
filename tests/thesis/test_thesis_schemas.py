@@ -4,12 +4,57 @@ import pytest
 from pydantic import ValidationError
 
 from schemas.thesis import (
+    GenerateRequest,
     OutlinePayload,
     PaperOrderCreateRequest,
     extract_figure_placeholders,
     split_by_render_method,
     validate_figure_payload,
 )
+
+
+def test_generate_request_canonical_reference_config_overrides_legacy_fields() -> None:
+    """直连接口的新字段必须真正控制文献数量和外文开关。"""
+
+    payload = GenerateRequest.model_validate(
+        {
+            "title": "基于 Spring Boot 与 Vue 的校园二手交易平台设计与实现",
+            "outline_json": [
+                {
+                    "chapter": "绪论",
+                    "sections": [{"name": "研究背景", "abstract": "说明研究背景。"}],
+                }
+            ],
+            "wxnum": 25,
+            "language": "否",
+            "reference_count": 12,
+            "include_foreign": True,
+        }
+    )
+
+    assert payload.wxnum == 12
+    assert payload.language == "是"
+
+
+def test_generate_request_keeps_legacy_reference_config() -> None:
+    """未提供新字段时继续兼容既有 wxnum/language 客户端。"""
+
+    payload = GenerateRequest.model_validate(
+        {
+            "title": "论文题目",
+            "outline_json": [
+                {
+                    "chapter": "绪论",
+                    "sections": [{"name": "研究背景", "abstract": "说明研究背景。"}],
+                }
+            ],
+            "wxnum": 8,
+            "language": "否",
+        }
+    )
+
+    assert payload.wxnum == 8
+    assert payload.language == "否"
 
 
 def test_outline_payload_preserves_third_level_subsections() -> None:
