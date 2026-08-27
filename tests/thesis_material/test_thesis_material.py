@@ -327,6 +327,37 @@ def test_reference_relevance_requires_business_topic_match() -> None:
     }
 
 
+def test_reference_relevance_does_not_treat_outline_concepts_as_topic_gates() -> None:
+    def record(index: int, title: str) -> ReferenceRecord:
+        return ReferenceRecord(
+            index=index,
+            title=title,
+            authors=["测试作者"],
+            year="2024",
+            source="管理科学",
+            volume="12",
+            issue="2",
+            pages="10-20",
+            language="zh",
+            formatted=f"[{index}]测试作者.{title}[J].管理科学,2024,12(2):10-20.",
+        )
+
+    ranked = _rank_records_by_relevance(
+        "制造企业供应链一体化营销的协同机制构建",
+        "研究市场竞争力、关键要素识别与信息系统建设",
+        [
+            record(1, "供应链协同机制构建研究"),
+            record(2, "制造企业供应链整合路径研究"),
+            record(3, "图像识别技术的市场应用研究"),
+        ],
+    )
+
+    assert {item.title for item in ranked} == {
+        "供应链协同机制构建研究",
+        "制造企业供应链整合路径研究",
+    }
+
+
 def test_reference_validation_requires_minimum_coverage() -> None:
     result = {
         "abstract": "摘" * 220,

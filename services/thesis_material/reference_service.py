@@ -280,8 +280,12 @@ def _rank_records_by_relevance(
     """以业务主题为准入门槛，技术主题只作为次级加分项。"""
 
     query = _normalized_search_text(f"{title}{context}")
-    query_business = _strip_terms(query, (*_TECHNOLOGY_TERMS, *_GENERIC_TERMS))
-    query_concepts = _matched_concepts(query)
+    topic_query = _normalized_search_text(title)
+    query_business = _strip_terms(topic_query, (*_TECHNOLOGY_TERMS, *_GENERIC_TERMS))
+    # The outline contains supporting concepts such as markets, identification,
+    # and information systems. They may affect ranking, but must not redefine
+    # the paper's core topic or become mandatory relevance gates.
+    query_concepts = _matched_concepts(topic_query)
     ranked: list[tuple[int, ReferenceRecord]] = []
     for item in records:
         if "retracted" in item.title.lower() or "撤稿" in item.title:
