@@ -220,7 +220,7 @@ async def generate_proposal_content(
         "你是本科毕业设计开题报告写作专家。只输出连续正文，不要标题。",
         f"课题：{request['title']}\n补充信息：{context}\n"
         f"写{purpose_range.minimum}-{purpose_range.maximum}字研究目的，必须包括行业背景、现实问题、"
-        f"技术背景、必要性、应用价值和研究目标。可引用[1]-[2]。\n真实文献：\n{reference_text}",
+        f"技术背景、必要性、应用价值和研究目标。仅可引用下列实际存在的编号。\n真实文献：\n{reference_text}",
         max_tokens=max(600, round(purpose_range.maximum * 1.2)),
     )
     status = await _ask_text(
@@ -731,7 +731,10 @@ def _request_context(request: dict[str, Any]) -> str:
 
 
 def _reference_text(references: list[ReferenceRecord]) -> str:
-    return "\n".join(item.formatted for item in references)
+    return "\n".join(item.formatted for item in references) or (
+        "本次未检索到可用的真实文献。不得编造作者、题名、DOI或引用编号，也不得声称已有文献支持；"
+        "研究现状与主题比较只能写成待核实的研究方向、检索计划和评价框架，不能写成已完成的文献综述。"
+    )
 
 
 def _message_text(content: Any) -> str:

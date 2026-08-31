@@ -40,7 +40,11 @@ from services.thesis.image import (
     render_all_figures,
 )
 from services.thesis.profile_policy import mark_acknowledgment_as_draft, normalize_thesis_profile
-from services.thesis_material.reference_service import retrieve_reference_records
+from services.thesis_material.reference_service import (
+    NO_REFERENCE_NOTICE,
+    reference_quality_summary,
+    retrieve_reference_records,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +82,13 @@ async def _retrieve_verified_references(
     target_count: int,
     include_foreign: bool,
 ) -> list[ReferenceRecord]:
-    """按论文配置检索满足元数据、相关性和语言配额的真实文献。"""
+    """按论文配置尽力检索真实文献，数量和语言偏好不作为失败门槛。"""
 
-    english_count = max(1, round(target_count / 3)) if include_foreign else 0
-    chinese_count = target_count - english_count
     return await retrieve_reference_records(
         title,
         outline,
         target_count=target_count,
-        minimum_count=target_count,
-        minimum_chinese_count=chinese_count,
-        minimum_english_count=english_count,
+        include_foreign=include_foreign,
     )
 
 
@@ -140,6 +140,21 @@ async def generate_thesis_document(
             )
             references = "\n".join(item.formatted for item in reference_records)
 
+    reference_quality = reference_quality_summary(
+        reference_records, target_count=wxnum, include_foreign=language == "是", enabled=wxquote != "不标注",
+    )
+    reference_instruction = ""
+    if reference_quality["status"] == "unavailable":
+        reference_instruction = (
+            f"{NO_REFERENCE_NOTICE} 不得编造作者、题名、DOI、来源、引用编号或声称已有文献支持；"
+            "研究现状仅写待核实的研究方向与检索计划，不写成已完成的文献综述。"
+        )
+    if reference_quality["warnings"]:
+        await publish_progress(
+            task_id, "references", "文献检索未完全达到目标，使用实际可用文献继续生成",
+            reference_quality=reference_quality, quality_warnings=reference_quality["warnings"],
+        )
+
     confirmed_technologies = extract_confirmed_technologies(f"{title}\n{writing_requirements}")
     allow_empirical_data = has_user_empirical_evidence(writing_requirements)
     evidence_instruction = (
@@ -155,7 +170,7 @@ async def generate_thesis_document(
             target_word_count=target_word_count,
             references=references,
             codetype=codetype,
-            writing_requirements=writing_requirements,
+            writing_requirements="\n".join(filter(None, [writing_requirements, reference_instruction])),
             confirmed_technologies="、".join(sorted(confirmed_technologies)),
             evidence_instruction=evidence_instruction,
         )
@@ -169,10 +184,11 @@ async def generate_thesis_document(
             if removed_ai_images:
                 suggestion_fields.append("ai_images_disabled")
         full_text = normalize_chapter_count_statement(full_text)
-        if reference_records:
-            full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
-            references = "\n".join(item.formatted for item in reference_records)
+        # 零文献也必须清理模型擅自生成的引用，不能因为列表为空跳过校验。
+        full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
         full_text = constrain_fulltext_length(full_text, target_word_count=target_word_count)
+        full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
+        references = "\n".join(item.formatted for item in reference_records)
 
     char_count = len(full_text)
     word_count = count_visible_words(full_text)
@@ -208,6 +224,9 @@ async def generate_thesis_document(
         )
         if abstract_changed:
             suggestion_fields.append("abstract_generated_suggestion")
+        # 摘要独立生成但不参与正文编号，不保留模型自行添加的来源标记。
+        for key in ("abstract_zh", "abstract_en"):
+            abstract_data[key], _ = normalize_citation_integrity(abstract_data.get(key, ""), [])
 
     normalized_profile, missing_profile_fields = normalize_thesis_profile(
         {
@@ -263,7 +282,13 @@ async def generate_thesis_document(
             keywords_zh=abstract_data.get("keywords_zh", ""),
             keywords_en=abstract_data.get("keywords_en", ""),
             acknowledgment=acknowledgment,
-            references=references,
+            references="\n".join(filter(None, [
+                references,
+                *[
+                    item["message"] if item["message"].startswith("【") else f"【文献检索提示：{item['message']}】"
+                    for item in reference_quality["warnings"]
+                ],
+            ])),
         )
 
     language_counts = {
@@ -280,6 +305,8 @@ async def generate_thesis_document(
         },
         "reference_count": len(reference_records),
         "reference_language_counts": language_counts,
+        "reference_quality": reference_quality,
+        "quality_warnings": reference_quality["warnings"],
         "reference_sources": [
             {
                 "index": item.index,
@@ -290,7 +317,9 @@ async def generate_thesis_document(
             }
             for item in reference_records
         ],
-        "citation_integrity": "closed" if reference_records else "not_applicable",
+        "citation_integrity": (
+            "closed" if reference_records else "no_references" if wxquote != "不标注" else "not_applicable"
+        ),
         "missing_profile_fields": missing_profile_fields,
         "generated_suggestion_fields": sorted(set(suggestion_fields)),
         "effective_config": {

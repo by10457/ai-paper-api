@@ -5,12 +5,20 @@ from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
 from schemas.thesis_material import ReferenceRecord
 from services.thesis.document.docx_builder import build_word_document
 from services.thesis.generation import pipeline as thesis
+
+
+# 本文件只验证生成编排，不允许进度发布访问 Redis、数据库或真实产物目录
+@pytest.fixture(autouse=True)
+def isolate_progress(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把所有生成进度写入替换为空操作，保持测试隔离。"""
+    monkeypatch.setattr(thesis, "publish_progress", AsyncMock())
 
 
 def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch) -> None:
@@ -89,14 +97,14 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
 
     assert calls.index("references") < calls.index(("fulltext", references_text, 1000))
     assert "to_thread" in calls
-    assert ("build", references_text) in calls
+    assert any(isinstance(item, tuple) and item[0] == "build" and references_text in item[1] for item in calls)
     assert result.docx_path == "/tmp/fake.docx"
     assert result.fulltext_char_count > result.fulltext_word_count > 0
     assert result.truncation_warning is False
     assert result.result_data["reference_count"] == 1
 
 
-def test_generate_thesis_document_rejects_unverified_reference_shortage(monkeypatch) -> None:
+def test_generate_thesis_document_does_not_hide_internal_reference_errors(monkeypatch) -> None:
     calls: list[object] = []
 
     async def fake_retrieve_verified_references(title: str, outline: str, **kwargs) -> list[ReferenceRecord]:
@@ -148,6 +156,57 @@ def test_generate_thesis_document_rejects_unverified_reference_shortage(monkeypa
         )
 
     assert calls == []
+
+
+# 文献降级必须贯穿正文、摘要、Word 和任务结果，不能在后置校验再次失败
+@pytest.mark.parametrize("available_count", [0, 2])
+async def test_shortage_pipeline_builds_docx_with_actual_citations(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, available_count: int,
+) -> None:
+    """使用真实 Word 构建器验证零文献和不足目标时的交付内容。"""
+    records = [
+        ReferenceRecord(
+            index=index, title=f"测试课题研究{index}", authors=["测试作者"], year="2025",
+            language="zh", source="测试期刊", pages="1-5",
+            formatted=f"[{index}]测试作者.测试课题研究{index}[J].测试期刊,2025(1):1-5.",
+        )
+        for index in range(1, available_count + 1)
+    ]
+    retrieve = AsyncMock(return_value=records)
+    fulltext = AsyncMock(return_value=(
+        "# 1 绪论\n" + "本课题的研究方向需要结合后续资料审慎确认。" * 80
+        + "待核实的研究方向[1][2][99][1-99]。\n# 参考文献\n[99]模型自行编造的来源。"
+    ))
+    monkeypatch.setattr(thesis, "_retrieve_verified_references", retrieve)
+    monkeypatch.setattr(thesis, "generate_fulltext", fulltext)
+    monkeypatch.setattr(thesis, "generate_abstracts", AsyncMock(return_value={"abstract_zh": "摘要[99]。"}))
+    monkeypatch.setattr(thesis, "generate_acknowledgment", AsyncMock(return_value="感谢。"))
+    monkeypatch.setattr(thesis, "render_all_figures", AsyncMock(return_value={}))
+    monkeypatch.setattr("core.config.get_settings", lambda: SimpleNamespace(thesis_output_root=str(tmp_path)))
+
+    result = await thesis.generate_thesis_document(
+        task_id="isolated-shortage", title="测试课题", outline="# 1 绪论",
+        target_word_count=1000, wxnum=25, language="是", allow_ai_images=False,
+    )
+
+    assert Path(result.docx_path).is_file()
+    assert result.result_data["reference_count"] == available_count
+    assert result.result_data["quality_warnings"]
+    assert result.result_data["citation_integrity"] == ("closed" if records else "no_references")
+    retrieve.assert_awaited_once_with("测试课题", "# 1 绪论", target_count=25, include_foreign=True)
+    with zipfile.ZipFile(result.docx_path) as archive:
+        xml = archive.read("word/document.xml").decode()
+    assert "[99]" not in xml
+    assert "[1-99]" not in xml
+    assert "模型自行编造" not in xml
+    assert "文献检索提示" in xml or "待补充参考文献" in xml
+    if not records:
+        assert "未检索到可用的真实文献" in xml
+        assert "[1]" not in xml
+        assert "不得编造" in fulltext.call_args.kwargs["writing_requirements"]
+    else:
+        assert "[1]" in xml and "[2]" in xml
+        assert "目标25篇，实际可用2篇" in xml
 
 
 def test_docx_builder_renders_citations_as_superscript() -> None:

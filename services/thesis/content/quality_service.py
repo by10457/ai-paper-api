@@ -848,9 +848,30 @@ def normalize_citation_integrity(
         RuntimeError: 最终引用仍存在无效编号或闭环不完整。
     """
 
-    if not references:
-        return _CITATION.sub("", full_text), []
+    # 模型不负责文末书目；去掉擅自附加的书目区，防止与检索结果形成两份列表。
+    full_text = re.sub(
+        r"^#{1,6}[ \t]*(?:参考文献|References)[ \t]*\n.*?(?=^#{1,6}[ \t]+|\Z)",
+        "", full_text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+    )
+    # 兼容模型生成的合并引用；仅展开实际存在的编号，不为范围表达式制造新来源。
     valid_indexes = {item.index for item in references}
+
+    # 将数字范围约束到真实编号集合，避免扩展任意大范围
+    def expand_citations(match: re.Match[str]) -> str:
+        """将合并编号转换成待统一排序的单编号，丢弃不存在的来源。"""
+        selected: set[int] = set()
+        for part in re.split(r"[,，、]", match.group(1)):
+            bounds = re.split(r"[-–]", part.strip())
+            if len(bounds) == 1:
+                selected.update({int(bounds[0])} & valid_indexes)
+            else:
+                low, high = int(bounds[0]), int(bounds[-1])
+                selected.update(index for index in valid_indexes if low <= index <= high)
+        return "".join(f"[{index}]" for index in sorted(selected))
+
+    full_text = re.sub(r"\[(\d+(?:\s*[-–,，、]\s*\d+)+)\]", expand_citations, full_text)
+    if not references:
+        return _CITATION.sub("", full_text).strip(), []
     cleaned = _CITATION.sub(
         lambda match: match.group(0) if int(match.group(1)) in valid_indexes else "",
         full_text,

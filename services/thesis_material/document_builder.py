@@ -16,6 +16,7 @@ from docx.shared import Cm, Pt, RGBColor
 
 from schemas.thesis_material import ReferenceRecord
 from services.thesis_material.profile_policy import profile_with_placeholders
+from services.thesis_material.reference_service import NO_REFERENCE_NOTICE
 
 # Match the supplied school templates: Chinese body text uses Songti, headings
 # use Heiti, and Latin characters/numbers use Times New Roman.
@@ -108,7 +109,7 @@ def _build_proposal(
         ("五、可行性分析与创新点", str(result.get("feasibility_and_innovation") or ""), False),
         ("六、论文（设计）写作提纲", _outline_text(result.get("writing_outline", [])), True),
         ("七、设计（研究）进度计划", _schedule_text(result.get("schedule", [])), False),
-        ("八、参考文献", "\n".join(item.formatted for item in references), False),
+        ("八、参考文献", "\n".join(item.formatted for item in references) or NO_REFERENCE_NOTICE, False),
     ):
         _add_proposal_section(doc, heading, body, compact=compact)
     _add_proposal_approval(doc)
@@ -146,6 +147,8 @@ def _build_literature_review(
         doc.add_heading(heading, level=1)
         _body_paragraph(doc, result[key])
     doc.add_heading("参考文献", level=1)
+    if not references:
+        _body_paragraph(doc, NO_REFERENCE_NOTICE)
     for item in references:
         paragraph = doc.add_paragraph(item.formatted)
         paragraph.paragraph_format.first_line_indent = Cm(-0.74)
@@ -214,7 +217,7 @@ def _build_task_book(
     indicators = "\n".join(
         f"（{index}）{value}" for index, value in enumerate(result.get("main_indicators", []), start=1)
     )
-    references_text = "\n".join(item.formatted for item in references)
+    references_text = "\n".join(item.formatted for item in references) or NO_REFERENCE_NOTICE
     outcome = doc.add_table(rows=6, cols=2)
     outcome.style = "Table Grid"
     outcome.alignment = WD_TABLE_ALIGNMENT.CENTER

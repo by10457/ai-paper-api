@@ -393,6 +393,19 @@ def test_normalize_citation_integrity_closes_reference_loop() -> None:
     assert all(f"[{index}]" in full_text for index in range(1, 4))
 
 
+# 零文献时单编号、合并编号及模型擅自添加的书目都必须清理
+def test_zero_references_removes_all_citation_forms_and_generated_bibliography() -> None:
+    """保留正文数字和后续章节，不把模型编号作为真实来源。"""
+    text, records = normalize_citation_integrity(
+        "# 1 绪论\n研究方向[1][2,3][1-9][2，4]，目标为25篇。\n"
+        "# 参考文献\n[1]虚构作者.虚构书目。\n# 2 方法\n方法计划。", [],
+    )
+    assert records == []
+    assert "[" not in text
+    assert "虚构" not in text
+    assert "25篇" in text and "# 2 方法" in text
+
+
 # 缺失个人信息应转换成醒目的待补充字段
 def test_normalize_thesis_profile_marks_missing_fields() -> None:
     """验证论文封面和声明页不会继续输出隐蔽旧占位值。"""

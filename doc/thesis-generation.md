@@ -132,7 +132,11 @@ REFERENCE_PROVIDER_MODE=wfapi
 | `serpapi` | 中英文都用 SerpAPI Google Scholar。 |
 | `mixed` | 中文万方，英文 SerpAPI。 |
 
-如果用户选择“不标注”，主流程会跳过参考文献生成。启用参考文献时，系统只接收具有可核验来源且同时满足业务主题与技术主题相关性门槛的结果；达不到目标数量或外文配额时任务明确失败，不用弱相关或不可核验文献凑数。
+如果用户选择“不标注”，主流程会跳过参考文献生成。启用参考文献时，系统只接收具有可核验来源且通过业务主题相关性校验的结果，技术词重合仅用于辅助排序。目标总数和中英文比例均为尽力目标，不是生成失败条件；不足时不使用弱相关或不可核验文献凑数。
+
+检索总预算为 180 秒，单供应商批次最多 60 秒；主检索后最多访问两个备用源，中英文各最多两轮补检，无新增有效文献即停止该语言的重复补检，必要时再以可用语言补总量。预算包括相关性审核；耗尽后保留已经验证的结果。HTTP/超时故障允许降级，内部程序错误和任务取消仍向上传递。
+
+总量或英文不足时，以实际文献继续正文、引用及 DOCX 生成，记录非阻断质量提示。完全没有可用文献时，返回空列表，正文提示词改为待核实的研究方向/检索计划，不声称已有文献支持；清理单编号、合并编号及模型擅自附加的书目，文末显式显示“待补充参考文献”。已退款订单不会自动重新生成或扣费。
 
 ## 正文生成
 
@@ -175,7 +179,10 @@ REFERENCE_PROVIDER_MODE=wfapi
 
 - `word_count`：目标、90%-110% 区间和实际可见正文字数。
 - `reference_count`、`reference_language_counts`、`reference_sources`：最终可核验文献及语言构成。
+- `reference_quality`：`status` 为 `complete`、`limited`、`unavailable` 或 `disabled`，并提供 `target_count`、`actual_count`、`target_languages`、`actual_languages`、`warnings`。
+- `quality_warnings`：文献不足等非阻断提示，代码为 `reference_count_shortfall`、`reference_language_shortfall` 或 `references_unavailable`；不能按此字段将已完成任务视为失败。
 - `citation_integrity`：文内引用与最终参考文献是否闭环。
+  有文献为 `closed`；启用检索但零结果为 `no_references`；主动不标注为 `not_applicable`。最终覆盖率以实际文献列表为准，不按期望数量校验。
 - `missing_profile_fields`：调用方仍需补齐的个人资料字段。
 - `generated_suggestion_fields`：由模型提出但未经用户材料确认的建议内容类别。
 - `effective_config`：最终采用的目标字数、文献数、外文开关和引用开关。

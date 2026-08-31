@@ -9,7 +9,9 @@ import re
 from collections.abc import Awaitable, Callable
 from html import unescape
 from math import ceil
+from typing import TypedDict
 
+import httpx
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.output_parsers import StrOutputParser
 
@@ -27,6 +29,23 @@ from services.thesis.generation.concurrency import text_short_slot
 from services.thesis.generation.progress import record_process_detail
 
 logger = logging.getLogger(__name__)
+
+# 检索和相关性审核共用总预算；每个供应商批次另有上限，防止补检阻塞整篇生成。
+REFERENCE_TOTAL_TIMEOUT_SECONDS = 180
+REFERENCE_BATCH_TIMEOUT_SECONDS = 60
+# 零文献不是已完成的文献研究，必须在生成要求和成品中显式披露。
+NO_REFERENCE_NOTICE = "【待补充参考文献：本次未检索到可用的真实文献，文献研究部分仅为待核实草稿，不代表已完成文献检索或证据验证。】"
+
+
+class ReferenceQualitySummary(TypedDict):
+    """检索目标、实际数量与非阻断质量提示。"""
+
+    status: str
+    target_count: int
+    actual_count: int
+    target_languages: dict[str, int]
+    actual_languages: dict[str, int]
+    warnings: list[dict[str, str]]
 
 _REFERENCE_LINE = re.compile(r"^\[(?P<index>\d+)\]\s*(?P<body>.+)$")
 _TYPE_MARKER = re.compile(r"(?P<title>.+?)\[(?P<marker>[A-Z])\]")
@@ -84,79 +103,6 @@ _BUSINESS_CONCEPT_GROUPS = (
 )
 
 
-class ReferenceShortageError(RuntimeError):
-    """真实文献数量低于产品交付下限。"""
-
-
-async def retrieve_reference_records(
-    title: str,
-    context: str,
-    *,
-    target_count: int,
-    minimum_count: int,
-    minimum_chinese_count: int,
-    minimum_english_count: int,
-) -> list[ReferenceRecord]:
-    """调用真实检索链，并执行中英文文献的目标和最低配额校验。"""
-
-    settings = get_settings()
-    primary_provider = settings.reference_provider_mode.strip().lower()
-    semantic_decisions: dict[str, bool] = {}
-    text = await generate_references(
-        title,
-        context,
-        wxnum=target_count,
-        include_english=True,
-    )
-    records = await _filter_reference_records(
-        title, context, parse_reference_records(text, provider=primary_provider), semantic_decisions,
-    )
-    for provider, generator in _fallback_generators(primary_provider):
-        if _meets_quota(records, target_count, *_target_language_quota(target_count)):
-            break
-        supplement = await generator(
-            title,
-            context,
-            wxnum=max(target_count - len(records), minimum_count),
-            include_english=True,
-        )
-        usable = await _filter_reference_records(
-            title, context, parse_reference_records(supplement, provider=provider), semantic_decisions,
-        )
-        records = _merge_records(records, usable)
-
-    if minimum_english_count == 0:
-        target_chinese_count, target_english_count = target_count, 0
-    else:
-        target_chinese_count, target_english_count = _target_language_quota(target_count)
-    records = await _supplement_language_shortage(
-        title,
-        context,
-        records,
-        target_chinese_count,
-        target_english_count,
-        semantic_decisions,
-    )
-    # Every batch is already validated. A second lexical-only pass would discard
-    # English records approved by the cross-language semantic review.
-    chinese_count, english_count = _language_counts(records)
-    await record_process_detail(
-        "references", "参考文献最终有效数量校验",
-        validated_total=len(records), validated_zh=chinese_count, validated_en=english_count,
-        minimum_total=minimum_count, minimum_zh=minimum_chinese_count, minimum_en=minimum_english_count,
-    )
-    if _meets_quota(records, target_count, target_chinese_count, target_english_count):
-        return _select_records(records, target_count, target_chinese_count, target_english_count)
-    if _meets_quota(records, minimum_count, minimum_chinese_count, minimum_english_count):
-        return _select_records(records, minimum_count, minimum_chinese_count, minimum_english_count)
-    chinese_count, english_count = _language_counts(records)
-    raise ReferenceShortageError(
-        "真实参考文献不足："
-        f"共{len(records)}篇（中文{chinese_count}篇、英文{english_count}篇），"
-        f"最低需要{minimum_count}篇（中文{minimum_chinese_count}篇、英文{minimum_english_count}篇）"
-    )
-
-
 def _fallback_generators(
     primary_provider: str,
 ) -> list[tuple[str, Callable[..., Awaitable[str]]]]:
@@ -193,7 +139,7 @@ def _merge_records(
 
 
 def _target_language_quota(target_count: int) -> tuple[int, int]:
-    """按已确认的中文约三分之二、英文约三分之一计算目标配额。"""
+    """计算中文约三分之二、英文约三分之一的尽力检索目标，不作为交付下限。"""
 
     chinese_count = ceil(target_count * 2 / 3)
     return chinese_count, target_count - chinese_count
@@ -220,6 +166,26 @@ def _meets_quota(
     )
 
 
+# 单批检索超时或 HTTP 故障按空结果处理，未知程序错误继续上抛
+async def _fetch_reference_batch(coro: Awaitable[str], provider: str) -> str:
+    """在有限耗时内检索一个供应商批次。
+
+    Args:
+        coro: 已构造但尚未等待的检索协程。
+        provider: 用于脱敏日志的供应商标识。
+
+    Returns:
+        检索文本；可恢复的网络故障时返回空字符串。
+    """
+    try:
+        async with asyncio.timeout(REFERENCE_BATCH_TIMEOUT_SECONDS):
+            return await coro
+    except (TimeoutError, httpx.HTTPError) as exc:
+        logger.warning("参考文献批次不可用，继续有限补检: provider=%s error=%s", provider, type(exc).__name__)
+        return ""
+
+
+# 对缺少的语言进行有限补检，无新增结果时停止重复请求
 async def _supplement_language_shortage(
     title: str,
     context: str,
@@ -228,8 +194,21 @@ async def _supplement_language_shortage(
     target_english_count: int,
     semantic_decisions: dict[str, bool],
 ) -> list[ReferenceRecord]:
-    """按缺口分别检索，避免总数充足却某种语言不足。"""
+    """按缺口有限补检；原地保存已验证结果，确保超时后仍可交付。
 
+    Args:
+        title: 课题标题。
+        context: 检索上下文。
+        records: 已验证的文献，成功批次原地合并。
+        target_chinese_count: 中文尽力目标。
+        target_english_count: 英文尽力目标。
+        semantic_decisions: 本次检索的相关性审核缓存。
+
+    Returns:
+        补检后实际可用的文献；不足不抛异常。
+    """
+
+    exhausted_languages: set[str] = set()
     for language, generator in (
         ("zh", lambda count: reference_service_wfapi.generate_references(
             title, context, wxnum=count, include_english=False)),
@@ -247,14 +226,18 @@ async def _supplement_language_shortage(
                 break
             # 检索结果常与首轮重复；逐轮扩大批量，并在计数前先执行同一相关性门槛。
             request_count = min(max(needed * 3, 10) * (attempt + 1), 30)
-            supplement = await generator(request_count)
+            supplement = await _fetch_reference_batch(generator(request_count), f"language_{language}")
             usable = await _filter_reference_records(
                 title,
                 context,
                 parse_reference_records(supplement, provider=f"language_{language}"),
                 semantic_decisions,
             )
-            records = _merge_records(records, usable)
+            previous_count = len(records)
+            records[:] = _merge_records(records, usable)
+            if len(records) == previous_count:
+                exhausted_languages.add(language)
+                break
 
     target_total = target_chinese_count + target_english_count
     if len(records) < target_total:
@@ -265,14 +248,16 @@ async def _supplement_language_shortage(
             ("en", lambda count: reference_service_serpapi.generate_references(
                 title, context, wxnum=count, include_english=True, include_chinese=False)),
         ):
-            supplement = await generator(request_count)
+            if language in exhausted_languages or (language == "en" and target_english_count == 0):
+                continue
+            supplement = await _fetch_reference_batch(generator(request_count), f"total_{language}")
             usable = await _filter_reference_records(
                 title,
                 context,
                 parse_reference_records(supplement, provider=f"total_{language}"),
                 semantic_decisions,
             )
-            records = _merge_records(records, usable)
+            records[:] = _merge_records(records, usable)
             if len(records) >= target_total:
                 break
     return records
@@ -284,7 +269,7 @@ def _select_records(
     chinese_count: int,
     english_count: int,
 ) -> list[ReferenceRecord]:
-    """优先选足语言配额，再按原检索顺序补足总数并连续编号。"""
+    """优先满足语言偏好，再用实际可用文献补足总数并连续编号。"""
 
     selected = [item for item in records if item.language == "zh"][:chinese_count]
     selected.extend(item for item in records if item.language == "en")
@@ -530,4 +515,106 @@ def parse_reference_records(text: str, *, provider: str) -> list[ReferenceRecord
     return records
 
 
-__all__ = ["ReferenceShortageError", "parse_reference_records", "retrieve_reference_records"]
+# 生成目标与实际数量差异的质量提示，不把第三方数据缺口映射成生成失败
+def reference_quality_summary(
+    records: list[ReferenceRecord], *, target_count: int, include_foreign: bool, enabled: bool = True,
+) -> ReferenceQualitySummary:
+    """汇总文献检索质量，供任务结果、日志和文档提示使用。
+
+    Args:
+        records: 最终选定的真实文献。
+        target_count: 用户期望的总数。
+        include_foreign: 是否尽力检索外文文献。
+        enabled: 是否启用参考文献。
+
+    Returns:
+        可序列化的目标、实际数量、状态及质量提示；不抛数量不足异常。
+    """
+    target = target_count if enabled else 0
+    target_zh, target_en = _target_language_quota(target) if include_foreign else (target, 0)
+    actual_zh, actual_en = _language_counts(records)
+    warnings: list[dict[str, str]] = []
+    if enabled and not records:
+        warnings.append({"code": "references_unavailable", "message": NO_REFERENCE_NOTICE})
+    elif enabled:
+        if len(records) < target:
+            warnings.append({
+                "code": "reference_count_shortfall",
+                "message": f"参考文献目标{target}篇，实际可用{len(records)}篇；已使用真实文献继续生成，未补造文献。",
+            })
+        if actual_en < target_en or actual_zh < target_zh:
+            warnings.append({
+                "code": "reference_language_shortfall",
+                "message": f"中英文目标为{target_zh}/{target_en}篇，实际为{actual_zh}/{actual_en}篇；语言比例仅作偏好，不影响生成。",
+            })
+    return {
+        "status": "disabled" if not enabled else "unavailable" if not records else "limited" if warnings else "complete",
+        "target_count": target,
+        "actual_count": len(records),
+        "target_languages": {"zh": target_zh, "en": target_en},
+        "actual_languages": {"zh": actual_zh, "en": actual_en},
+        "warnings": warnings,
+    }
+
+
+# 有界检索并返回实际可用文献，真实性门槛不随数量降级而降低
+async def retrieve_reference_records(
+    title: str,
+    context: str,
+    *,
+    target_count: int,
+    include_foreign: bool = True,
+) -> list[ReferenceRecord]:
+    """优先满足目标总数和语言偏好，不足或零结果时允许继续生成。
+
+    Args:
+        title: 课题标题。
+        context: 相关上下文，不重新定义课题相关性门槛。
+        target_count: 期望篇数，不是最低交付数量。
+        include_foreign: 是否尽力补充外文文献。
+
+    Returns:
+        连续编号的可核验、相关文献；无可用结果时返回空列表。
+    """
+    primary_provider = get_settings().reference_provider_mode.strip().lower()
+    target_zh, target_en = _target_language_quota(target_count) if include_foreign else (target_count, 0)
+    records: list[ReferenceRecord] = []
+    semantic_decisions: dict[str, bool] = {}
+    timed_out = False
+    try:
+        async with asyncio.timeout(REFERENCE_TOTAL_TIMEOUT_SECONDS):
+            text = await _fetch_reference_batch(
+                generate_references(title, context, wxnum=target_count, include_english=include_foreign),
+                primary_provider,
+            )
+            records = await _filter_reference_records(
+                title, context, parse_reference_records(text, provider=primary_provider), semantic_decisions,
+            )
+            for provider, generator in _fallback_generators(primary_provider):
+                if _meets_quota(records, target_count, target_zh, target_en):
+                    break
+                supplement = await _fetch_reference_batch(
+                    generator(title, context, wxnum=target_count, include_english=include_foreign), provider,
+                )
+                usable = await _filter_reference_records(
+                    title, context, parse_reference_records(supplement, provider=provider), semantic_decisions,
+                )
+                records[:] = _merge_records(records, usable)
+            await _supplement_language_shortage(title, context, records, target_zh, target_en, semantic_decisions)
+    except TimeoutError:
+        timed_out = True
+        logger.warning("参考文献检索达到总时间预算，保留已验证文献: count=%d", len(records))
+
+    # 已通过语义复核的批次不能再用纯词法校验过滤；不足时从实际候选选择，不补造条目。
+    selected = _select_records(records, target_count, target_zh, target_en)
+    quality = reference_quality_summary(selected, target_count=target_count, include_foreign=include_foreign)
+    logger.info("参考文献检索完成: quality=%s timed_out=%s", quality, timed_out)
+    await record_process_detail(
+        "references", "参考文献检索完成，不足时按实际数量继续生成",
+        reference_quality=quality, retrieval_timed_out=timed_out, validated_total=len(records),
+        validated_zh=_language_counts(records)[0], validated_en=_language_counts(records)[1],
+    )
+    return selected
+
+
+__all__ = ["NO_REFERENCE_NOTICE", "parse_reference_records", "reference_quality_summary", "retrieve_reference_records"]

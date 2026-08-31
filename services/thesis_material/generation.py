@@ -23,7 +23,7 @@ from services.thesis_material.llm_service import (
     text_length,
 )
 from services.thesis_material.profile_policy import missing_profile_fields
-from services.thesis_material.reference_service import retrieve_reference_records
+from services.thesis_material.reference_service import reference_quality_summary, retrieve_reference_records
 
 _CITATION = re.compile(r"\[(\d+)\]")
 
@@ -64,20 +64,17 @@ async def generate_thesis_material_document(
         await publish_progress(task_id, "retrieving_references", "正在检索和整理真实参考文献", progress=12)
         options = request_payload.get("reference_options") or {}
         defaults = {
-            "proposal_report": (15, 8, 4, 2),
-            "literature_review": (20, 12, 6, 4),
-            "task_book": (10, 5, 5, 0),
+            "proposal_report": 15,
+            "literature_review": 20,
+            "task_book": 10,
         }
-        default_target, minimum, minimum_chinese, minimum_english = defaults[document_type]
-        target = int(options.get("target_count") or default_target)
+        target = int(options.get("target_count") or defaults[document_type])
         with stage_context("retrieving_references"):
             references = await retrieve_reference_records(
                 title,
                 _research_context_text(request_payload),
                 target_count=target,
-                minimum_count=minimum,
-                minimum_chinese_count=minimum_chinese,
-                minimum_english_count=minimum_english,
+                include_foreign=document_type != "task_book",
             )
 
     await publish_progress(task_id, "planning", "正在规划文档结构", progress=28)
@@ -129,6 +126,10 @@ async def generate_thesis_material_document(
                 references,
             )
     _validate_result(document_type, result, len(references), request_payload)
+    result["reference_quality"] = reference_quality_summary(
+        references, target_count=target, include_foreign=document_type != "task_book",
+    )
+    result["quality_warnings"] = result["reference_quality"]["warnings"]
     result["word_count"] = _word_count_metadata(document_type, request_payload, result)
     await publish_progress(task_id, "rendering_docx", "正在生成Word文档", progress=84)
     output_root = Path(get_settings().THESIS_MATERIAL_OUTPUT_ROOT) / task_id
@@ -211,7 +212,7 @@ def _validate_result(
         invalid = sorted(index for index in citations if index < 1 or index > reference_count)
         if invalid:
             raise RuntimeError(f"正文包含无效参考文献编号: {invalid}")
-        if not citations:
+        if reference_count and not citations:
             raise RuntimeError("正文没有引用真实参考文献")
         required_coverage = _required_reference_coverage(document_type, reference_count)
         if len(citations) < required_coverage:

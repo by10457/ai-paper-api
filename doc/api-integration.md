@@ -89,6 +89,8 @@ Idempotency-Key: <业务订单号>
 ```
 
 - `reference_count`、`include_foreign` 是推荐使用的语义字段；后端仍兼容历史字段 `wxnum`、`language`，两组同时出现时推荐字段优先。
+- 文献总数和中英文比例为尽力目标，不保证第三方一定返回足量。有限补检后不足仍继续生成，完成结果的 `result_data.reference_quality` 返回目标/实际数量与 `complete/limited/unavailable/disabled` 状态，`result_data.quality_warnings` 提供非阻断提示。调用方应提醒用户补充资料，不应把提示转换为失败、退款或自动重试。
+- 零文献时返回 `reference_count=0`、`citation_integrity=no_references`，文档明确标记“待补充参考文献”；正文不保留无来源编号。不标注模式仍为 `citation_integrity=not_applicable`。本策略不改变提交参数、收费及任务终态协议。
 - 任务完成后从状态接口的 `result_data.effective_config` 核对实际生效值，不要只依赖前端表单回显。
 - `result_data.missing_profile_fields` 非空时，成品会显示 `【待补充：字段】`；调用方应在下载前明确提醒用户。
 - `result_data.generated_suggestion_fields` 表示未由用户材料确认的生成建议，不应被业务系统展示为实测事实。

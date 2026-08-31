@@ -1,7 +1,11 @@
 import asyncio
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 
+import pytest
 from docx import Document
 from pydantic import ValidationError
 
@@ -14,6 +18,7 @@ from schemas.thesis_material import (
     TaskBookRequest,
     ThesisMaterialSubmitResponse,
 )
+from services.thesis_material import generation as material_generation
 from services.thesis_material.document_builder import (
     _normalize_generated_text,
     _outline_text,
@@ -370,6 +375,37 @@ def test_reference_validation_requires_minimum_coverage() -> None:
         assert "正文引用参考文献不足" in str(exc)
     else:
         raise AssertionError("正文引用量不足时应校验失败")
+
+
+# 共享文献服务降级后，材料的后置引用校验也必须按实际零篇处理
+@pytest.mark.parametrize("document_type", ["proposal_report", "literature_review"])
+async def test_material_generation_without_references_is_explicit_draft(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, document_type: str,
+) -> None:
+    """替换外部服务，保留真实长度、引用校验和 DOCX 构建。"""
+    request = {"title": "测试材料", "target_word_count": 3500}
+    plan = build_length_plan(document_type, request)
+    content: dict[str, Any] = {field: "测" * value.target for field, value in plan.fields.items()}
+    content["writing_outline"] = [{"title": f"章节{index}", "children": []} for index in range(5)]
+    content["keywords"] = ["测试", "计划"]
+    if plan.theme is not None:
+        content["themes"] = [{"title": f"待核实方向{index}", "content": "测" * plan.theme.target} for index in range(plan.theme_count)]
+    monkeypatch.setattr(material_generation, "retrieve_reference_records", AsyncMock(return_value=[]))
+    monkeypatch.setattr(material_generation, "publish_progress", AsyncMock())
+    monkeypatch.setattr(material_generation, "generate_proposal_content", AsyncMock(return_value=content))
+    monkeypatch.setattr(material_generation, "generate_literature_review_content", AsyncMock(return_value=content))
+    monkeypatch.setattr(material_generation, "get_settings", lambda: SimpleNamespace(THESIS_MATERIAL_OUTPUT_ROOT=str(tmp_path)))
+    monkeypatch.setattr(llm_service, "_ask_text", AsyncMock(side_effect=AssertionError("合规字数不得调用模型")))
+    result = await material_generation.generate_thesis_material_document(
+        task_id="isolated-material", document_type=document_type, request_payload=request,
+    )
+    assert result["result_data"]["references"] == []
+    assert result["result_data"]["reference_quality"]["status"] == "unavailable"
+    assert result["result_data"]["quality_warnings"][0]["code"] == "references_unavailable"
+    with zipfile.ZipFile(result["docx_path"]) as archive:
+        xml = archive.read("word/document.xml").decode()
+    assert "未检索到可用的真实文献" in xml
+    assert "[1]" not in xml
 
 
 def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
