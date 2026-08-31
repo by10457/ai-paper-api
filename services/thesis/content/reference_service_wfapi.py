@@ -657,6 +657,9 @@ def _format_wf_reference(item: dict[str, Any], index: int) -> str:
     body = ".".join(parts).strip()
     if not body.endswith("."):
         body += "."
+    doi = str(item.get("doi") or "").strip()
+    if doi:
+        body += f" doi:{doi}."
     return f"[{index}]{body}"
 
 
