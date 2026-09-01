@@ -13,6 +13,11 @@ from langchain_core.output_parsers import StrOutputParser
 from core.config import get_settings
 from llm.client import create_configured_llm
 from llm.prompts.thesis_reference_prompt import REFERENCE_WFDATA_KEYWORD_PROMPT
+from services.thesis.content.reference_query import (
+    collect_keyword_queries,
+    normalize_english_queries,
+    parse_keyword_json,
+)
 from services.thesis.generation.concurrency import text_short_slot, wfdata_slot
 from services.thesis.generation.progress import record_process_detail
 
@@ -25,6 +30,23 @@ WFDATA_RESPONSE_PREVIEW_LENGTH = 500
 WFDATA_ZH_QUERY_LIMIT = 8
 WFDATA_EN_QUERY_LIMIT = 6
 WFDATA_BATCH_BUFFER_MULTIPLIER = 3
+_ENGLISH_QUERY_GENERIC_TERMS = {
+    "analysis",
+    "application",
+    "approach",
+    "design",
+    "effect",
+    "efficacy",
+    "framework",
+    "implementation",
+    "method",
+    "platform",
+    "research",
+    "study",
+    "system",
+    "technology",
+    "vs",
+}
 WFDATA_RETURNED_FIELDS = [
     "Title",
     "Creator",
@@ -81,7 +103,11 @@ def _scalar_from_value(value: dict[str, Any]) -> str:
         return str(value["stringValue"]).strip()
     if "numberValue" in value:
         number_value = value["numberValue"]
-        return str(int(number_value)) if isinstance(number_value, float) and number_value.is_integer() else str(number_value)
+        return (
+            str(int(number_value))
+            if isinstance(number_value, float) and number_value.is_integer()
+            else str(number_value)
+        )
     if "boolValue" in value:
         return str(value["boolValue"])
     return ""
@@ -173,41 +199,6 @@ def _to_int(value: str) -> int:
         return 0
 
 
-def _append_keyword_values(queries: list[str], value: Any) -> None:
-    if isinstance(value, str):
-        query = value.strip()
-        if query:
-            queries.append(query)
-        return
-
-    if isinstance(value, list):
-        for item in value:
-            if isinstance(item, str) and item.strip():
-                queries.append(item.strip())
-
-
-def _dedup_keyword_queries(queries: list[str], fallback: str, limit: int) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for query in queries:
-        normalized_query = re.sub(r"\s+", " ", query).strip()
-        key = normalized_query.lower()
-        if not normalized_query or key in seen:
-            continue
-        seen.add(key)
-        deduped.append(normalized_query)
-        if len(deduped) >= limit:
-            break
-    return deduped or [fallback]
-
-
-def _collect_keyword_queries(keyword_data: dict[str, Any], fields: tuple[str, ...], fallback: str, limit: int) -> list[str]:
-    queries: list[str] = []
-    for field in fields:
-        _append_keyword_values(queries, keyword_data.get(field))
-    return _dedup_keyword_queries(queries, fallback, limit)
-
-
 async def _extract_keyword_queries(title: str, outline: str) -> tuple[list[str], list[str]]:
     """基于题目和大纲提取中英文检索词，失败时用标题兜底。"""
 
@@ -217,25 +208,33 @@ async def _extract_keyword_queries(title: str, outline: str) -> tuple[list[str],
         async with text_short_slot():
             raw_keywords = await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]})
 
-        keyword_data = json.loads(str(raw_keywords).strip())
-        if not isinstance(keyword_data, dict):
-            return [title], [title]
-        zh_queries = _collect_keyword_queries(
+        keyword_data = parse_keyword_json(raw_keywords)
+        zh_queries = collect_keyword_queries(
             keyword_data,
             ("zh", "zh_related", "zh_extended"),
-            title,
-            WFDATA_ZH_QUERY_LIMIT,
+            fallback=title,
+            limit=WFDATA_ZH_QUERY_LIMIT,
         )
-        en_queries = _collect_keyword_queries(
-            keyword_data,
-            ("en", "en_related", "en_extended"),
-            title,
-            WFDATA_EN_QUERY_LIMIT,
+        en_queries = normalize_english_queries(
+            collect_keyword_queries(
+                keyword_data,
+                ("en", "en_related", "en_extended"),
+                limit=WFDATA_EN_QUERY_LIMIT,
+            ),
+            title=title,
+            limit=WFDATA_EN_QUERY_LIMIT,
         )
         return zh_queries, en_queries
     except Exception as exc:  # noqa: BLE001
         logger.warning("万方参考文献关键词提取失败，使用标题兜底: %s", exc)
-        return [title], [title]
+        await record_process_detail(
+            "references",
+            "万方文献检索关键词提取失败，已使用标题兜底",
+            provider="wfapi",
+            error_type=type(exc).__name__,
+            english_fallback_usable=bool(re.search(r"[A-Za-z]", title)),
+        )
+        return [title], normalize_english_queries([], title=title, limit=WFDATA_EN_QUERY_LIMIT)
 
 
 def _build_search_payload(query: str, rows: int, *, language: str) -> dict[str, Any]:
@@ -254,7 +253,19 @@ def _build_search_payload(query: str, rows: int, *, language: str) -> dict[str, 
 
 
 def _build_relaxed_query(query: str, language: str) -> str:
-    """中文检索无结果时，去掉英文技术词后再尝试一次。"""
+    """严格 AND 查询无结果时生成仍保留主题含义的降级查询。"""
+
+    if language == "eng":
+        terms = [
+            term
+            for term in re.findall(r"[A-Za-z0-9][A-Za-z0-9_.+#/-]*", query)
+            if term.lower() not in _ENGLISH_QUERY_GENERIC_TERMS
+        ]
+        if len(terms) <= 2:
+            return ""
+        core_terms = terms if len(terms) <= 4 else [*terms[:3], terms[-1]]
+        relaxed_query = " ".join(core_terms)
+        return relaxed_query if relaxed_query.lower() != query.strip().lower() else ""
 
     if language != "chi":
         return ""
@@ -298,12 +309,18 @@ def _response_preview(response: httpx.Response) -> str:
 def _parse_search_documents(response: httpx.Response) -> list[dict[str, Any]]:
     payload = response.json()
     if not isinstance(payload, dict):
-        logger.warning("万方参考文献响应不是 JSON 对象: status=%s, preview=%r", response.status_code, _response_preview(response))
+        logger.warning(
+            "万方参考文献响应不是 JSON 对象: status=%s, preview=%r", response.status_code, _response_preview(response)
+        )
         return []
 
     documents = payload.get("documents", [])
     if not isinstance(documents, list):
-        logger.warning("万方参考文献响应缺少 documents 列表: keys=%s, preview=%r", list(payload.keys()), _response_preview(response))
+        logger.warning(
+            "万方参考文献响应缺少 documents 列表: keys=%s, preview=%r",
+            list(payload.keys()),
+            _response_preview(response),
+        )
         return []
     return cast(list[dict[str, Any]], documents)
 

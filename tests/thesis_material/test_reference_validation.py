@@ -1,30 +1,39 @@
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
+from schemas.thesis_material import ReferenceRecord
 from services.thesis.content import reference_service_wfapi as wf
 from services.thesis_material import reference_service as service
 
 TOPIC = "植保无人机在小麦病虫害防治中的应用效果研究"
 
 
-def english_reference(index=1, title="UAV spraying for wheat pest control", doi="10.1000/test"):
+def english_reference(
+    index: int = 1,
+    title: str = "UAV spraying for wheat pest control",
+    doi: str = "10.1000/test",
+) -> ReferenceRecord:
     return service.parse_reference_records(
-        f"[{index}]Smith J.{title}[J].Crop Protection,2024,12(2):10-20."
-        + (f" doi:{doi}." if doi else ""),
+        f"[{index}]Smith J.{title}[J].Crop Protection,2024,12(2):10-20." + (f" doi:{doi}." if doi else ""),
         provider="serpapi",
     )[0]
 
 
-def test_wanfang_preserves_doi_through_format_and_parse():
-    document = {"fields": {
-        "Title": {"stringValue": "UAV spraying for wheat pest control"},
-        "Creator": {"stringValue": "Smith J"}, "PublishYear": {"numberValue": 2024},
-        "PeriodicalTitle": {"stringValue": "Crop Protection"}, "Page": {"stringValue": "10-20"},
-        "DOI": {"stringValue": "10.1000/wheat"},
-    }}
+def test_wanfang_preserves_doi_through_format_and_parse() -> None:
+    document = {
+        "fields": {
+            "Title": {"stringValue": "UAV spraying for wheat pest control"},
+            "Creator": {"stringValue": "Smith J"},
+            "PublishYear": {"numberValue": 2024},
+            "PeriodicalTitle": {"stringValue": "Crop Protection"},
+            "Page": {"stringValue": "10-20"},
+            "DOI": {"stringValue": "10.1000/wheat"},
+        }
+    }
     item = wf._normalize_wf_document(document, prefer_english=True)
     text = wf._format_wf_reference(item, 1)
     record = service.parse_reference_records(text, provider="wfapi")[0]
@@ -36,7 +45,7 @@ def test_wanfang_preserves_doi_through_format_and_parse():
     assert "doi:" not in wf._format_wf_reference(item, 1)
 
 
-def test_doi_is_not_misread_as_page_number():
+def test_doi_is_not_misread_as_page_number() -> None:
     record = service.parse_reference_records(
         "[1]Smith J.UAV spraying for wheat pest control[J].Crop Protection,2024. doi:10.1000/wheat.",
         provider="wfapi",
@@ -45,25 +54,26 @@ def test_doi_is_not_misread_as_page_number():
     assert record.doi == "10.1000/wheat"
 
 
-async def test_unknown_topic_english_is_reviewed_not_automatically_discarded(monkeypatch):
-    calls = []
-    events = []
+async def test_unknown_topic_english_is_reviewed_not_automatically_discarded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    events: list[dict[str, object]] = []
 
-    async def review(title, records):
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
         calls.append((title, [item.title for item in records]))
         return {0}
 
-    async def record_event(stage, message, **details):
+    async def record_event(stage: str, message: str, **details: object) -> None:
         events.append(details)
 
-    monkeypatch.setattr(service, "_review_english_relevance", review)
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
     monkeypatch.setattr(service, "record_process_detail", record_event)
     relevant = english_reference()
     unrelated = english_reference(2, "Stock market portfolio optimization")
     no_doi = english_reference(3, "Drone application in wheat fields", doi="")
     retracted = english_reference(4, "Retracted: UAV spraying for wheat pest control")
-    cache = {}
-    assert service._matched_concepts(service._normalized_search_text(TOPIC)) == set()
+    cache: dict[str, bool] = {}
     result = await service._filter_reference_records(TOPIC, "市场识别", [relevant, unrelated, no_doi, retracted], cache)
     assert result == [relevant]
     assert calls == [(TOPIC, [relevant.title, unrelated.title])]
@@ -75,71 +85,161 @@ async def test_unknown_topic_english_is_reviewed_not_automatically_discarded(mon
     assert len(calls) == 1
 
 
-async def test_semantic_review_failure_does_not_admit_unverified_records(monkeypatch):
-    async def review(title, records):
+async def test_semantic_review_failure_does_not_admit_unverified_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
         raise TimeoutError("unavailable")
 
-    monkeypatch.setattr(service, "_review_english_relevance", review)
-    cache = {}
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
+    cache: dict[str, bool] = {}
     assert await service._filter_reference_records(TOPIC, "", [english_reference()], cache) == []
     assert cache == {}  # A transient failure is not cached as a relevance decision.
 
 
-@pytest.mark.parametrize("response", [
-    '{"keep": [-1]}', '{"keep": [1]}', '{"keep": [true]}',
-    '{"keep": ["0"]}', '{"keep": null}', '{}', '[]', 'not json',
-])
-async def test_semantic_review_rejects_invalid_model_output(monkeypatch, response):
+async def test_known_business_topic_rejects_technology_only_english_even_if_model_would_keep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """已识别业务课题不得因共享 Spring Boot/Vue 等技术词放入跨领域文献。"""
+
+    calls: list[tuple[str, list[ReferenceRecord]]] = []
+
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
+        calls.append((title, records))
+        return set()
+
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
+    topic = "基于Spring Boot与Vue的校园二手交易平台设计与实现"
+    technology_only = english_reference(
+        title="Modern Web Development Technologies: A Comprehensive Review",
+    )
+
+    result = await service._filter_reference_records(topic, "", [technology_only], {})
+
+    assert result == []
+    assert calls == [(topic, [technology_only])]
+
+
+async def test_campus_secondhand_regression_uses_semantic_topic_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """具体故障题目可以保留为回归用例，但由通用语义审核判断场景相关性。"""
+
+    topic = "基于Spring Boot与Vue的校园二手交易平台设计与实现"
+    infant_food = english_reference(
+        title="Second-hand Infant Food Exchange Online in Canada",
+    )
+    campus_resale = english_reference(
+        2,
+        title="Developing a sustainable second-hand ecosystem within a university community",
+    )
+
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
+        assert title == topic
+        assert [record.title for record in records] == [
+            infant_food.title,
+            campus_resale.title,
+        ]
+        return {1}
+
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
+
+    result = await service._filter_reference_records(topic, "", [infant_food, campus_resale], {})
+
+    assert result == [campus_resale]
+
+
+async def test_english_topic_does_not_admit_partial_word_overlap_without_semantic_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """英文课题与候选共享 second-hand 仍不足以证明业务场景相关。"""
+
+    topic = "Campus second-hand marketplace design"
+    unrelated = english_reference(
+        title="Second-hand Infant Food Exchange Online in Canada",
+    )
+    review = AsyncMock(return_value=set())
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
+
+    result = await service._filter_reference_records(topic, "", [unrelated], {})
+
+    assert result == []
+    review.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        '{"keep": [-1]}',
+        '{"keep": [1]}',
+        '{"keep": [true]}',
+        '{"keep": ["0"]}',
+        '{"keep": null}',
+        "{}",
+        "[]",
+        "not json",
+    ],
+)
+async def test_semantic_review_rejects_invalid_model_output(
+    monkeypatch: pytest.MonkeyPatch,
+    response: str,
+) -> None:
     class LLM:
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
             return AIMessage(content=response)
 
-    async def create(*args, **kwargs):
+    async def create(*args: object, **kwargs: object) -> LLM:
         return LLM()
 
     monkeypatch.setattr(service, "create_configured_llm", create)
     with pytest.raises(ValueError):
-        await service._review_english_relevance(TOPIC, [english_reference()])
+        await service._review_reference_relevance(TOPIC, [english_reference()])
 
 
-async def test_semantic_review_only_selects_original_candidates(monkeypatch):
+async def test_semantic_review_only_selects_original_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
     class LLM:
-        async def ainvoke(self, messages):
-            payload = json.loads(messages[1].content)
+        async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+            assert "候选至少要与业务场景直接相关" in messages[0].content
+            assert "仅共享Spring Boot、Vue" in messages[0].content
+            content = messages[1].content
+            assert isinstance(content, str)
+            payload = json.loads(content)
             assert payload["topic"] == TOPIC
             assert payload["candidates"] == [{"index": 0, "title": "UAV spraying for wheat pest control"}]
             return AIMessage(content='```json\n{"keep":[0,0]}\n```')
 
-    async def create(*args, **kwargs):
+    async def create(*args: object, **kwargs: object) -> LLM:
         return LLM()
 
     monkeypatch.setattr(service, "create_configured_llm", create)
-    assert await service._review_english_relevance(TOPIC, [english_reference()]) == {0}
+    assert await service._review_reference_relevance(TOPIC, [english_reference()]) == {0}
 
 
-async def test_retrieval_filters_before_merging_and_keeps_english_quota(monkeypatch):
+async def test_retrieval_filters_before_merging_and_keeps_english_quota(monkeypatch: pytest.MonkeyPatch) -> None:
     chinese = "\n".join(
-        f"[{i}]张三.植保无人机小麦病虫害防治试验{i}[J].农业科学,2024,12(2):10-20."
-        for i in range(1, 18)
+        f"[{i}]张三.植保无人机小麦病虫害防治试验{i}[J].农业科学,2024,12(2):10-20." for i in range(1, 18)
     )
     english = [english_reference(i, f"UAV spraying for wheat pest control trial {i}") for i in range(8)]
 
-    async def primary(*args, **kwargs):
+    async def primary(*args: object, **kwargs: object) -> str:
         # Same English titles in the primary source, but unusable metadata.
         return chinese + "\n" + "\n".join(item.formatted.split(" doi:")[0] for item in english)
 
-    async def fallback(*args, **kwargs):
+    async def fallback(*args: object, **kwargs: object) -> str:
         return "\n".join(item.formatted for item in english)
 
-    async def review(title, records):
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
         return set(range(len(records)))
 
     monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(reference_provider_mode="wfapi"))
     monkeypatch.setattr(service, "generate_references", primary)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", fallback)
-    monkeypatch.setattr(service, "_review_english_relevance", review)
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
     result = await service.retrieve_reference_records(
-        TOPIC, "", target_count=25, include_foreign=True,
+        TOPIC,
+        "",
+        target_count=25,
+        include_foreign=True,
     )
     assert service._language_counts(result) == (17, 8)
     assert len(result) == 25
@@ -147,18 +247,20 @@ async def test_retrieval_filters_before_merging_and_keeps_english_quota(monkeypa
     assert all(item.doi for item in result if item.language == "en")
 
 
-async def test_language_supplement_preserves_semantically_approved_english(monkeypatch):
-    calls = []
+async def test_language_supplement_preserves_semantically_approved_english(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
 
-    async def supplement(*args, **kwargs):
+    async def supplement(*args: object, **kwargs: object) -> str:
         calls.append(kwargs)
         return english_reference().formatted
 
-    async def review(title, records):
+    async def review(title: str, records: list[ReferenceRecord]) -> set[int]:
         return {0}
 
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", supplement)
-    monkeypatch.setattr(service, "_review_english_relevance", review)
+    monkeypatch.setattr(service, "_review_reference_relevance", review)
     result = await service._supplement_language_shortage(TOPIC, "", [], 0, 1, {})
     assert service._language_counts(result) == (0, 1)
     assert len(calls) == 1
@@ -168,7 +270,8 @@ async def test_language_supplement_preserves_semantically_approved_english(monke
 # 配额仅是检索目标，重复补检后仍不足时返回真实的可用数量
 @pytest.mark.parametrize("available_count", [0, 3, 26])
 async def test_reference_shortage_returns_available_records(
-    monkeypatch: pytest.MonkeyPatch, available_count: int,
+    monkeypatch: pytest.MonkeyPatch,
+    available_count: int,
 ) -> None:
     """覆盖零文献、总量不足和英文为零，所有外部检索均使用替身。"""
     calls: list[dict[str, object]] = []
@@ -199,6 +302,7 @@ async def test_reference_shortage_returns_available_records(
 # 检索网络故障与数量不足均可降级，但程序错误不能被伪装为质量提示
 async def test_reference_network_timeout_is_nonfatal(monkeypatch: pytest.MonkeyPatch) -> None:
     """超时返回零文献；不伪造记录或无限重试。"""
+
     async def timeout(*args: object, **kwargs: object) -> str:
         raise TimeoutError("test provider timeout")
 
@@ -233,6 +337,7 @@ async def test_reference_deadline_preserves_validated_batch(monkeypatch: pytest.
 # 真正的内部错误仍应向上抛出，避免隐藏代码缺陷
 async def test_reference_programming_error_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """数量降级不等于捕获所有异常。"""
+
     async def broken(*args: object, **kwargs: object) -> str:
         raise RuntimeError("test internal error")
 
@@ -252,12 +357,13 @@ async def test_reference_chinese_shortage_keeps_available_english(monkeypatch: p
     monkeypatch.setattr(service, "generate_references", search)
     monkeypatch.setattr(service.reference_service_wfapi, "generate_references", search)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", search)
-    monkeypatch.setattr(service, "_review_english_relevance", AsyncMock(return_value=set(range(5))))
+    monkeypatch.setattr(service, "_review_reference_relevance", AsyncMock(return_value=set(range(5))))
     records = await service.retrieve_reference_records(TOPIC, "", target_count=6, include_foreign=True)
     assert service._language_counts(records) == (0, 5)
     quality = service.reference_quality_summary(records, target_count=6, include_foreign=True)
     assert {item["code"] for item in quality["warnings"]} == {
-        "reference_count_shortfall", "reference_language_shortfall",
+        "reference_count_shortfall",
+        "reference_language_shortfall",
     }
 
 

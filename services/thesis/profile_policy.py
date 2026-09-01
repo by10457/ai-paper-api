@@ -46,12 +46,14 @@ def normalize_thesis_profile(profile: dict[str, str]) -> tuple[dict[str, str], l
 
 
 def mark_acknowledgment_as_draft(acknowledgment: str, *, missing_profile_fields: list[str]) -> str:
-    """个人信息缺失时，把模型致谢显式标为待用户按真实经历修改的草稿。"""
+    """个人信息缺失时，不保留模型虚构的个人经历，只输出显式待补充提示。"""
 
     if not missing_profile_fields:
         return acknowledgment
-    notice = "【待补充：以下致谢为通用草稿，请结合本人真实经历、指导教师及协助人员信息修改。】"
-    return f"{notice}\n\n{acknowledgment}" if acknowledgment else notice
+    return (
+        "【待补充：致谢内容需依据本人真实经历填写。请补充指导教师、协助人员及需致谢事项后，"
+        "重新生成或修改本页。】"
+    )
 
 
 __all__ = ["mark_acknowledgment_as_draft", "normalize_thesis_profile"]

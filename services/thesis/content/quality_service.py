@@ -72,6 +72,7 @@ _HEADING = re.compile(r"^#{1,3}\s+")
 _TOP_LEVEL_HEADING = re.compile(r"^#(?!#)\s+")
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[。！？!?；;])")
 _CHAPTER_FACT_BOUNDARIES = {
+    "系统实现与测试": "【事实边界：本章仅给出建议实现方案、测试用例与预期结果；未经用户项目材料和真实测试记录确认，不代表系统已经实现、执行测试或达到指标。】",
     "系统设计": "【事实边界：本章内容为依据题目和需求生成的设计建议，数据结构、接口与安全方案需结合真实项目材料确认。】",
     "系统实现": "【事实边界：本章内容为建议实现方案；未经用户材料确认的组件、版本、部署环境和完成状态均不作为既成事实。】",
     "系统测试": "【事实边界：本章仅给出建议测试方案和预期结果；在补充真实测试记录前，不代表已经执行测试或达到指标。】",
@@ -322,7 +323,8 @@ def sanitize_generated_claims(
             else:
                 lines.append("【待补充真实测试数据：用户未提供可核验测试记录，本段不得作为实测结论。】")
             continue
-        if not allow_empirical_data and "系统测试" in current_chapter and stripped.startswith("|"):
+        is_test_chapter = "系统测试" in current_chapter or ("系统实现" in current_chapter and "测试" in current_chapter)
+        if not allow_empirical_data and is_test_chapter and stripped.startswith("|"):
             cells = line.split("|")
             header_columns = {
                 index
@@ -353,6 +355,14 @@ def sanitize_generated_claims(
                 suggestion_fields.add("test_execution")
             lines.append(rewritten)
             continue
+        # 事实边界只改写自然语言，不得破坏 Markdown 表格协议；否则 Word 构建器
+        # 无法识别连续的竖线行，表格会以原始 Markdown 文本落入最终文档。
+        if stripped.startswith("|") and "|" in stripped[1:]:
+            lines.append(line)
+            continue
+        if re.match(r"^表\s?\d+(?:[-.]\d+)?\s", stripped):
+            lines.append(line)
+            continue
         if not allow_empirical_data and re.search(r"MD5\s*加盐", stripped, re.IGNORECASE):
             line = re.sub(
                 r"MD5\s*加盐(?:方式)?",
@@ -380,26 +390,36 @@ def sanitize_generated_claims(
             suggestion_fields.add("implementation_facts")
             lines.append(f"实现方案建议（待项目材料确认）：{stripped}")
             continue
-        if "研究内容" in current_heading and re.search(r"实现|测试|验证", stripped) and not re.search(
-            r"建议|待确认|拟采用|可采用|设计说明",
-            stripped,
+        if (
+            "研究内容" in current_heading
+            and re.search(r"实现|测试|验证", stripped)
+            and not re.search(
+                r"建议|待确认|拟采用|可采用|设计说明",
+                stripped,
+            )
         ):
             suggestion_fields.add("implementation_facts")
             lines.append(f"研究方案（待项目材料确认）：{stripped}")
             continue
-        if "系统测试" in current_chapter and not stripped.startswith("|") and not re.search(
+        if is_test_chapter and not re.search(
             r"建议|待确认|待执行|拟采用|可采用|设计说明",
             stripped,
         ):
             suggestion_fields.add("test_execution")
             lines.append(f"建议测试方案（待执行）：{stripped}")
             continue
-        if "总结与展望" in current_chapter and re.search(r"完成|实现|验证|测试结果", stripped) and not re.search(
-            r"建议|待确认|拟采用|可采用|设计说明|总结说明",
-            stripped,
+        if (
+            "总结与展望" in current_chapter
+            and re.search(r"完成|实现|验证|测试结果", stripped)
+            and not re.search(
+                r"建议|待确认|拟采用|可采用|设计说明|总结说明",
+                stripped,
+            )
         ):
             suggestion_fields.add("implementation_facts")
-            lines.append(f"总结说明（待项目材料确认）：{stripped}")
+            line = re.sub(r"完成了", "讨论了", line)
+            line = re.sub(r"实现了", "设计拟覆盖", line)
+            lines.append(f"总结说明（待项目材料确认）：{line.strip()}")
             continue
         if "/api/" in stripped and not re.search(r"建议|待确认|拟定|可采用", stripped):
             suggestion_fields.add("interface_details")
@@ -515,6 +535,7 @@ def sanitize_abstract_truth(
     *,
     writing_requirements: str,
     confirmed_technologies: set[str] | None = None,
+    include_disclaimer: bool = True,
 ) -> tuple[dict[str, str], bool]:
     """移除摘要中未经用户证据支持的中英文实测数字。"""
 
@@ -522,6 +543,22 @@ def sanitize_abstract_truth(
         return abstract_data, False
     sanitized = dict(abstract_data)
     confirmed_keys = {_technology_key(item) for item in (confirmed_technologies or set())}
+    software_context = bool(
+        re.search(r"系统|平台|前端|后端|数据库|源码|软件|Spring\s*Boot|Vue", writing_requirements, re.I)
+        or confirmed_keys
+        & {
+            _technology_key(item)
+            for item in (
+                "Spring Boot",
+                "Vue",
+                "MySQL",
+                "Redis",
+                "Nginx",
+                "MyBatis",
+                "Spring Security",
+            )
+        }
+    )
     changed = False
     for key in ("abstract_zh", "abstract_en"):
         text = sanitized.get(key, "")
@@ -538,13 +575,18 @@ def sanitize_abstract_truth(
                 replacements: list[tuple[str, str]] = [
                     (r"Vuex\s*状态管理", "待确认的状态管理方案"),
                     (r"完成系统的总体设计", "拟完成系统总体设计"),
+                    (r"完成(?:了)?系统架构设计", "拟完成系统架构设计"),
                     (r"确定采用", "技术方案拟采用"),
                     (r"MySQL\s*数据库", "待确认的关系型数据库"),
-                    (r"本文设计并实现了(?:一个|一套)?", "本文围绕"),
-                    (r"设计并实现了(?:一个|一套)?", "拟设计"),
+                    (r"本文设计并实现(?:了)?(?:一个|一套)?", "本文围绕"),
+                    (r"设计并实现(?:了)?(?:一个|一套)?", "拟设计"),
                     (r"系统涵盖", "系统功能拟涵盖"),
+                    (r"平台涵盖", "平台功能拟涵盖"),
                     (r"系统后端采用", "后端方案拟采用"),
+                    (r"系统采用", "系统方案拟采用"),
+                    (r"后端使用", "后端方案拟使用"),
                     (r"前端采用", "前端方案拟采用"),
+                    (r"前端使用", "前端方案拟使用"),
                     (r"二者通过", "二者拟通过"),
                     (r"系统完整覆盖了", "系统功能设计拟覆盖"),
                     (r"系统实现了", "系统设计拟实现"),
@@ -557,6 +599,8 @@ def sanitize_abstract_truth(
                     (r"对系统关键功能进行了验证", "规划了系统关键功能验证方案"),
                     (r"对([^。；]+?)进行了验证", r"拟对\1开展验证"),
                     (r"进行了功能验证", "拟开展功能验证"),
+                    (r"进行了初步验证", "规划了初步验证"),
+                    (r"对系统进行了测试", "规划了系统测试"),
                     (r"并明确了", "并提出了"),
                     (r"基于\s*E-R\s*模型构建", "建议基于 E-R 模型设计"),
                     (r"并通过订单状态字段", "并拟通过订单状态字段"),
@@ -582,7 +626,10 @@ def sanitize_abstract_truth(
                     (r"本文工作表明，该平台通过", "从设计目标看，该平台拟通过"),
                     (r"有效改善了", "改善"),
                     (r"提升了", "提升"),
-                    (r"符合绿色校园和可持续发展的理念，具有重要的应用价值", "以绿色校园和可持续发展为目标，具备潜在应用价值"),
+                    (
+                        r"符合绿色校园和可持续发展的理念，具有重要的应用价值",
+                        "以绿色校园和可持续发展为目标，具备潜在应用价值",
+                    ),
                 ]
             else:
                 replacements = [
@@ -613,7 +660,10 @@ def sanitize_abstract_truth(
                     (r"forming a closed loop", "to form a closed loop"),
                     (r"achieving decoupling", "to support decoupling"),
                     (r"the system encompasses", "the proposed system is planned to encompass"),
-                    (r"(?:three|four|five) core data tables? (?:are|is) constructed", "the core data tables are proposed"),
+                    (
+                        r"(?:three|four|five) core data tables? (?:are|is) constructed",
+                        "the core data tables are proposed",
+                    ),
                     (r"during system implementation", "in the proposed implementation"),
                     (r"the system design adopts", "the proposed system design may adopt"),
                     (r"the front[ -]end (?:is )?built on", "the proposed front-end design may use"),
@@ -632,6 +682,9 @@ def sanitize_abstract_truth(
                 ]
             for pattern, replacement in replacements:
                 rewritten, count = re.subn(pattern, replacement, rewritten, flags=re.IGNORECASE)
+                changed = changed or count > 0
+            if key == "abstract_zh":
+                rewritten, count = re.subn(r"拟{2,}", "拟", rewritten)
                 changed = changed or count > 0
             technology_replacements = {
                 "zh": {
@@ -718,21 +771,34 @@ def sanitize_abstract_truth(
             kept.append(rewritten)
         separator = " " if key == "abstract_en" else ""
         sanitized[key] = separator.join(kept).strip()
-        if key == "abstract_en":
+        if key == "abstract_en" and include_disclaimer:
             sanitized[key] = re.sub(r"\bVue\.\s+Js\b", "Vue.js", sanitized[key], flags=re.IGNORECASE)
-            disclaimer = (
-                "Note: Because no source code, implementation records, or test data were provided, "
-                "the functional, database, security, and testing descriptions above are design proposals "
-                "subject to confirmation, not implementation or measured results."
-            )
+            if software_context:
+                disclaimer = (
+                    "Note: Because no source code, implementation records, or test data were provided, "
+                    "the functional, database, security, and testing descriptions above are design proposals "
+                    "subject to confirmation, not implementation or measured results."
+                )
+            else:
+                disclaimer = (
+                    "Note: Because no original data, experiment records, or result materials were provided, "
+                    "the model design, experiment plan, and expected analysis above require confirmation from "
+                    "actual research materials and are not completed experiments or measured results."
+                )
             if disclaimer not in sanitized[key]:
                 sanitized[key] = f"{sanitized[key]} {disclaimer}".strip()
                 changed = True
-        else:
-            disclaimer = (
-                "说明：用户未提供系统源码、实现记录或测试数据，以上功能、数据库、安全与测试内容均为设计建议，"
-                "需据真实项目材料补充确认，不作为已实现或实测结论。"
-            )
+        elif include_disclaimer:
+            if software_context:
+                disclaimer = (
+                    "说明：用户未提供系统源码、实现记录或测试数据，以上功能、数据库、安全与测试内容均为设计建议，"
+                    "需据真实项目材料补充确认，不作为已实现或实测结论。"
+                )
+            else:
+                disclaimer = (
+                    "说明：用户未提供原始数据、实验记录或结果材料，以上模型方案、实验设计与预期分析需据真实研究材料"
+                    "补充确认，不作为已完成实验或实测结论。"
+                )
             if disclaimer not in sanitized[key]:
                 sanitized[key] = f"{sanitized[key]}{disclaimer}".strip()
                 changed = True
@@ -753,9 +819,13 @@ def normalize_chapter_count_statement(full_text: str) -> str:
     numerals = "零一二三四五六七八九十"
     if not 1 <= chapter_count < len(numerals):
         return full_text
-    organization = "本文共分为" + numerals[chapter_count] + "章。" + "；".join(
-        f"第{numerals[index]}章为{title}" for index, title in enumerate(chapter_titles, start=1)
-    ) + "。"
+    organization = (
+        "本文共分为"
+        + numerals[chapter_count]
+        + "章。"
+        + "；".join(f"第{numerals[index]}章为{title}" for index, title in enumerate(chapter_titles, start=1))
+        + "。"
+    )
     statement = re.compile(
         r"^(?=.*(?:本文|论文|全文)(?:共)?分(?:为)?[一二三四五六七八九十\d]+章).+$",
         re.MULTILINE,
@@ -814,13 +884,34 @@ def _insert_missing_reference_clues(
     if not missing_indexes:
         return full_text
     by_index = {item.index: item for item in references}
+    lines = full_text.splitlines()
+    unresolved: list[int] = []
+    for index in missing_indexes:
+        item = by_index.get(index)
+        if item is None:
+            continue
+        matched_line = next(
+            (
+                line_index
+                for line_index, line in enumerate(lines)
+                if item.title in line and not _HEADING.match(line.strip())
+            ),
+            None,
+        )
+        if matched_line is None:
+            unresolved.append(index)
+            continue
+        lines[matched_line] = f"{lines[matched_line].rstrip()}[{index}]"
+    full_text = "\n".join(lines)
     clue_lines: list[str] = []
-    available = [index for index in missing_indexes if index in by_index]
+    available = [index for index in unresolved if index in by_index]
     for start in range(0, len(available), 3):
         group = available[start : start + 3]
         titles = "、".join(f"《{by_index[index].title}》" for index in group)
         citations = "".join(f"[{index}]" for index in group)
         clue_lines.append(f"现有文献题名与来源显示，{titles}可作为本课题的相关研究线索{citations}。")
+    if not clue_lines:
+        return full_text.strip()
     clues = "\n".join(clue_lines)
     lines = full_text.splitlines()
     insert_at = next(
@@ -851,7 +942,9 @@ def normalize_citation_integrity(
     # 模型不负责文末书目；去掉擅自附加的书目区，防止与检索结果形成两份列表。
     full_text = re.sub(
         r"^#{1,6}[ \t]*(?:参考文献|References)[ \t]*\n.*?(?=^#{1,6}[ \t]+|\Z)",
-        "", full_text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
+        "",
+        full_text,
+        flags=re.MULTILINE | re.DOTALL | re.IGNORECASE,
     )
     # 兼容模型生成的合并引用；仅展开实际存在的编号，不为范围表达式制造新来源。
     valid_indexes = {item.index for item in references}

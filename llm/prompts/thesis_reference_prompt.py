@@ -20,6 +20,8 @@ REFERENCE_WFDATA_KEYWORD_PROMPT = ChatPromptTemplate.from_messages(
                 "- 中文检索主要用于万方文献检索，要优先使用中文学术表达，不要只堆砌英文技术词。\n"
                 "- zh 是最直接的中文查询；zh_related 给 3-5 个强相关查询；zh_extended 给 3-5 个更宽泛但仍相关的查询。\n"
                 "- en 给 2-3 个英文主查询；en_related/en_extended 各给 1-3 个英文查询。\n"
+                "- 每个英文查询必须是完整英文，并包含核心研究对象；题目含应用场景时还必须包含对应场景。\n"
+                "- Spring Boot、Vue、Python、深度学习等技术词只能作为限定词，不能单独构成英文查询。\n"
                 "- 每个查询 2-6 个词，不要加引号，不要写 AND/OR/NOT，不要包含“论文”“参考文献”等无效词。\n"
                 "- 查询词可以适当放宽，目标是尽量检索到足够多且相关的参考文献。"
             ),
@@ -39,6 +41,8 @@ REFERENCE_SCHOLAR_KEYWORD_PROMPT = ChatPromptTemplate.from_messages(
                 "要求：\n"
                 "- zh：1 个中文学术查询，用于补充检索中文相关文献。\n"
                 "- en：2-3 个英文查询，用于检索英文论文，优先使用国际通用学术表达。\n"
+                "- 每个英文查询必须包含核心研究对象；题目含应用场景时还必须包含对应场景。\n"
+                "- 开发框架或泛化技术只能作为限定词，不能用 Spring Boot、Vue、AI、system 等词替代研究主题。\n"
                 "- 每个查询 2-6 个词，不要加引号，不要写 AND/OR/NOT。\n"
                 "- 英文查询要覆盖核心技术、应用场景和上位研究方向，不要只翻译论文标题。\n"
                 "- 避免过宽的泛词，例如 research、paper、system、method 单独出现。"

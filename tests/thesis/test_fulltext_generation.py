@@ -129,6 +129,45 @@ async def test_generate_fulltext_batches_seven_chapters(
         assert f"# {index} 第{index}部分" in result
 
 
+async def test_short_paper_does_not_force_three_hundred_words_per_chapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """短篇多章节正文应按总目标分配，避免章节下限反向推高篇幅。"""
+
+    outline = _outline(7)
+    batches = fulltext_service._split_outline_chapters(outline)
+    chain = FakeFulltextChain(iter(_body_for_outline("\n\n".join(batch)) for batch in (batches[:3], batches[3:6], batches[6:])))
+    monkeypatch.setattr(fulltext_service, "_build_fulltext_chain", AsyncMock(return_value=chain))
+
+    await fulltext_service.generate_fulltext(outline, target_word_count=3000)
+
+    assert [item["target_word_count"] for item in chain.inputs] == [756, 756, 252]
+
+
+# 三万字长篇不得继续套用短篇 1.7 倍扩写系数
+async def test_long_paper_uses_lower_prompt_correction_factor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证长篇提示目标接近用户目标，避免正文稳定低于最低验收线。
+
+    Args:
+        monkeypatch: pytest 替换工具。
+    """
+
+    outline = _outline(7)
+    batches = fulltext_service._split_outline_chapters(outline)
+    chain = FakeFulltextChain(iter(_body_for_outline(batch) for batch in batches))
+    monkeypatch.setattr(fulltext_service, "_build_fulltext_chain", AsyncMock(return_value=chain))
+
+    await fulltext_service.generate_fulltext(outline, target_word_count=30000)
+
+    assert fulltext_service._prompt_word_count_correction_factor(3000) == 1.7
+    assert fulltext_service._prompt_word_count_correction_factor(30000) == 0.8
+    assert fulltext_service._chapters_per_call(3000) == 3
+    assert fulltext_service._chapters_per_call(30000) == 1
+    assert [item["target_word_count"] for item in chain.inputs] == [5357] * 7
+
+
 # 批次漏章时应丢弃残缺结果并逐章重生成
 async def test_generate_fulltext_regenerates_incomplete_batch(
     monkeypatch: pytest.MonkeyPatch,

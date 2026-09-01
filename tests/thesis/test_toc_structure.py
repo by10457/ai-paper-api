@@ -18,6 +18,7 @@ from services.thesis.document.docx_builder import (
     _pre_scan_headings,
     build_word_document,
 )
+from services.thesis.document.toc import _add_toc_page
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -129,6 +130,23 @@ class TestNoLegacyTOC:
         """The old '目录生成完毕' prompt text must be absent."""
         assert "目录生成完毕" not in document_xml
         assert "按 F9 更新" not in document_xml
+
+
+def test_dense_toc_uses_compact_line_spacing() -> None:
+    """二十项以上的三级目录应压缩行距，避免仅两项溢到近乎空白的第二页。"""
+
+    document = DocumentFactory()
+    entries = [
+        {"text": f"{index} 目录项", "level": 3, "bookmark": f"_toc_{index}", "bookmark_id": index + 100}
+        for index in range(20)
+    ]
+
+    _add_toc_page(document, entries)
+
+    toc_paragraph = document.paragraphs[1]
+    spacing = toc_paragraph._p.pPr.find(f"{{{NS['w']}}}spacing")
+    assert spacing is not None
+    assert spacing.get(f"{{{NS['w']}}}line") == "360"
 
 
 # ---------------------------------------------------------------------------

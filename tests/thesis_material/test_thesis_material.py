@@ -293,7 +293,7 @@ def test_reference_language_quota_and_selection() -> None:
     assert [item.index for item in selected] == list(range(1, 16))
 
 
-def test_reference_relevance_requires_business_topic_match() -> None:
+def test_reference_lexical_ranking_only_admits_direct_chinese_topic_match() -> None:
     def record(index: int, title: str, language: str) -> ReferenceRecord:
         return ReferenceRecord(
             index=index,
@@ -311,7 +311,7 @@ def test_reference_relevance_requires_business_topic_match() -> None:
 
     records = [
         record(1, "Campus second-hand trading platform design with Spring Boot", "en"),
-        record(2, "高校闲置物品交易平台设计研究", "zh"),
+        record(2, "校园二手交易平台设计研究", "zh"),
         record(3, "Design and implementation of robot assisted chemistry online Q&A using Spring Boot", "en"),
         record(4, "A higher-performance big data-based movie recommendation system", "en"),
         record(5, "On-demand fashion: wardrobe management and trading community", "en"),
@@ -326,10 +326,7 @@ def test_reference_relevance_requires_business_topic_match() -> None:
         records,
     )
     titles = {item.title for item in ranked}
-    assert titles == {
-        "Campus second-hand trading platform design with Spring Boot",
-        "高校闲置物品交易平台设计研究",
-    }
+    assert titles == {"校园二手交易平台设计研究"}
 
 
 def test_reference_relevance_does_not_treat_outline_concepts_as_topic_gates() -> None:

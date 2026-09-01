@@ -16,8 +16,15 @@ logger = logging.getLogger(__name__)
 
 # 单次正文调用最多处理三个一级章节，避免长输出在后半篇被模型截断。
 MAX_CHAPTERS_PER_CALL = 3
-# 历史实测模型正文约为提示目标的 1.7 倍，先校准全文目标再按章节分批。
-PROMPT_WORD_COUNT_CORRECTION_FACTOR = 1.7
+LONG_PAPER_CHAPTERS_PER_CALL = 1
+LONG_PAPER_BATCH_THRESHOLD = 20000
+# 短篇模型常出现约 1.7 倍扩写，长篇分批输出的扩写比例会明显下降。
+SHORT_PAPER_CORRECTION_FACTOR = 1.7
+LONG_PAPER_CORRECTION_FACTOR = 0.8
+CORRECTION_TRANSITION_START = 10000
+CORRECTION_TRANSITION_END = 30000
+SHORT_PAPER_MIN_CHAPTER_TARGET = 180
+DEFAULT_MIN_CHAPTER_TARGET = 300
 # 识别正文和大纲中的一级 Markdown 标题，同时兼容模型省略井号后空格的情况。
 CHAPTER_HEADING_PATTERN = re.compile(r"^#(?!#)[ \t]*(?P<title>\S.*)$")
 # 去除模型标题中的章节编号后比较业务标题。
@@ -54,6 +61,43 @@ def count_visible_words(full_text: str) -> int:
     visible_lines = [line for line in visible_text.splitlines() if not line.strip().startswith("```")]
     normalized = "\n".join(visible_lines)
     return len(CJK_CHARACTER_PATTERN.findall(normalized)) + len(ASCII_WORD_PATTERN.findall(normalized))
+
+
+# 按目标篇幅计算提示字数折算，避免把短篇经验直接套到三万字长文
+def _prompt_word_count_correction_factor(target_word_count: int) -> float:
+    """返回正文提示目标的动态折算系数。
+
+    Args:
+        target_word_count: 用户要求的正文目标字数。
+
+    Returns:
+        短篇使用历史扩写系数，长篇逐步降低到实测长文系数。
+    """
+
+    if target_word_count <= CORRECTION_TRANSITION_START:
+        return SHORT_PAPER_CORRECTION_FACTOR
+    if target_word_count >= CORRECTION_TRANSITION_END:
+        return LONG_PAPER_CORRECTION_FACTOR
+    progress = (target_word_count - CORRECTION_TRANSITION_START) / (
+        CORRECTION_TRANSITION_END - CORRECTION_TRANSITION_START
+    )
+    return SHORT_PAPER_CORRECTION_FACTOR - progress * (SHORT_PAPER_CORRECTION_FACTOR - LONG_PAPER_CORRECTION_FACTOR)
+
+
+# 长篇改为逐章调用，避免多章共享单次输出上限导致总字数稳定不足
+def _chapters_per_call(target_word_count: int) -> int:
+    """返回单次正文模型调用包含的一级章节数。
+
+    Args:
+        target_word_count: 用户要求的正文目标字数。
+
+    Returns:
+        两万字及以上逐章生成，其余论文保持三章一批。
+    """
+
+    if target_word_count >= LONG_PAPER_BATCH_THRESHOLD:
+        return LONG_PAPER_CHAPTERS_PER_CALL
+    return MAX_CHAPTERS_PER_CALL
 
 
 def _lines_outside_code_fences(text: str) -> list[str]:
@@ -338,18 +382,21 @@ async def generate_fulltext(
         raise RuntimeError("大纲不能为空")
 
     chapter_count = len(chapter_outlines)
-    prompt_target_word_count = round(target_word_count / PROMPT_WORD_COUNT_CORRECTION_FACTOR)
-    per_chapter_target = max(round(prompt_target_word_count / chapter_count), 300)
+    correction_factor = _prompt_word_count_correction_factor(target_word_count)
+    prompt_target_word_count = round(target_word_count / correction_factor)
+    minimum_chapter_target = SHORT_PAPER_MIN_CHAPTER_TARGET if target_word_count <= 5000 else DEFAULT_MIN_CHAPTER_TARGET
+    per_chapter_target = max(round(prompt_target_word_count / chapter_count), minimum_chapter_target)
+    chapters_per_call = _chapters_per_call(target_word_count)
     logger.info(
         "正文目标字数校准：user_target=%d, prompt_target=%d, factor=%.1f, chapters=%d",
         target_word_count,
         prompt_target_word_count,
-        PROMPT_WORD_COUNT_CORRECTION_FACTOR,
+        correction_factor,
         chapter_count,
     )
     generated_parts: list[str] = []
-    for start in range(0, chapter_count, MAX_CHAPTERS_PER_CALL):
-        batch = chapter_outlines[start : start + MAX_CHAPTERS_PER_CALL]
+    for start in range(0, chapter_count, chapters_per_call):
+        batch = chapter_outlines[start : start + chapters_per_call]
         batch_target = max(
             round(prompt_target_word_count * len(batch) / chapter_count),
             per_chapter_target * len(batch),

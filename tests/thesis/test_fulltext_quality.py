@@ -2,7 +2,9 @@
 
 import re
 from types import SimpleNamespace
+from typing import cast
 
+from models.paper import PaperOrder
 from schemas.thesis_material import ReferenceRecord
 from services.thesis.business.order_service import PaperOrderService
 from services.thesis.content.fulltext_service import count_visible_words
@@ -21,17 +23,20 @@ from services.thesis.profile_policy import mark_acknowledgment_as_draft, normali
 def test_normalize_generate_input_keeps_full_paper_configuration() -> None:
     """验证目标字数、文献配置和补充要求不会在订单链路中丢失。"""
 
-    order = SimpleNamespace(
-        title="基于Spring Boot与Vue的校园二手交易平台设计与实现",
-        outline_json=[{"chapter": "绪论", "sections": [{"name": "背景", "abstract": "背景"}]}],
-        config_form={
-            "about_msg": "避免编造真实运营数据。",
-            "form_params": {
-                "lengthnum": "5000",
-                "reference_count": 12,
-                "include_foreign": True,
+    order = cast(
+        PaperOrder,
+        SimpleNamespace(
+            title="基于Spring Boot与Vue的校园二手交易平台设计与实现",
+            outline_json=[{"chapter": "绪论", "sections": [{"name": "背景", "abstract": "背景"}]}],
+            config_form={
+                "about_msg": "避免编造真实运营数据。",
+                "form_params": {
+                    "lengthnum": "5000",
+                    "reference_count": 12,
+                    "include_foreign": True,
+                },
             },
-        },
+        ),
     )
 
     normalized = PaperOrderService.normalize_generate_input(order)
@@ -202,6 +207,7 @@ def test_sanitize_generated_claims_marks_conclusion_as_unconfirmed() -> None:
     full_text = """\
 # 7 总结与展望
 系统实现了预期功能，并通过测试验证了主要流程。
+本文完成了系统总体架构设计，实现了商品发布功能。
 """
 
     sanitized, suggestion_fields = sanitize_generated_claims(
@@ -212,6 +218,10 @@ def test_sanitize_generated_claims_marks_conclusion_as_unconfirmed() -> None:
 
     assert "系统实现了预期功能" not in sanitized
     assert "通过测试验证了" not in sanitized
+    assert "完成了系统总体架构设计" not in sanitized
+    assert "实现了商品发布功能" not in sanitized
+    assert "讨论了系统总体架构设计" in sanitized
+    assert "设计拟覆盖商品发布功能" in sanitized
     assert "待项目材料确认" in sanitized
     assert "implementation_facts" in suggestion_fields
 
@@ -272,6 +282,31 @@ def test_sanitize_generated_claims_keeps_unexecuted_test_table_empty() -> None:
     assert "| 一致 |" not in sanitized
     assert sanitized.count("【待补充真实测试数据】") == 3
     assert "test_execution" in suggestion_fields
+
+
+def test_sanitize_generated_claims_preserves_table_in_combined_implementation_test_chapter() -> None:
+    """实现与测试合并章节的 Markdown 表格协议不得被事实边界前缀破坏。"""
+
+    full_text = """\
+# 5 系统实现与测试
+## 5.1 核心功能实现与测试方案
+表 5.1 核心功能测试用例设计
+| 用例编号 | 测试场景 | 预期结果 |
+| --- | --- | --- |
+| TC-01 | 正确账号登录 | 登录成功并跳转首页 |
+"""
+
+    sanitized, suggestion_fields = sanitize_generated_claims(
+        full_text,
+        writing_requirements="避免编造真实运营数据。",
+        confirmed_technologies={"Spring Boot", "Vue"},
+    )
+
+    assert "【事实边界：本章仅给出建议实现方案、测试用例与预期结果" in sanitized
+    assert "表 5.1 核心功能测试用例设计" in sanitized
+    assert "| 用例编号 | 测试场景 | 预期结果 |" in sanitized
+    assert "实现方案建议（待项目材料确认）：|" not in sanitized
+    assert "fact_boundary" in suggestion_fields
 
 
 def test_sanitize_generated_claims_removes_unverified_test_statistics() -> None:
@@ -393,12 +428,36 @@ def test_normalize_citation_integrity_closes_reference_loop() -> None:
     assert all(f"[{index}]" in full_text for index in range(1, 4))
 
 
+def test_normalize_citation_integrity_attaches_missing_citation_to_existing_title() -> None:
+    """正文已提到真实题名时应补引用，不应再插入一段重复的研究线索。"""
+
+    references = [
+        ReferenceRecord(
+            index=1,
+            title="校园二手商品交易平台设计",
+            authors=["测试作者"],
+            year="2025",
+            formatted="[1]测试作者.校园二手商品交易平台设计[J].测试期刊,2025(1):1-5.",
+            language="zh",
+        )
+    ]
+
+    full_text, normalized_references = normalize_citation_integrity(
+        "# 1 绪论\n现有文献题名与来源显示，《校园二手商品交易平台设计》可作为研究线索。",
+        references,
+    )
+
+    assert full_text.count("校园二手商品交易平台设计") == 1
+    assert "研究线索。[1]" in full_text
+    assert len(normalized_references) == 1
+
+
 # 零文献时单编号、合并编号及模型擅自添加的书目都必须清理
 def test_zero_references_removes_all_citation_forms_and_generated_bibliography() -> None:
     """保留正文数字和后续章节，不把模型编号作为真实来源。"""
     text, records = normalize_citation_integrity(
-        "# 1 绪论\n研究方向[1][2,3][1-9][2，4]，目标为25篇。\n"
-        "# 参考文献\n[1]虚构作者.虚构书目。\n# 2 方法\n方法计划。", [],
+        "# 1 绪论\n研究方向[1][2,3][1-9][2，4]，目标为25篇。\n# 参考文献\n[1]虚构作者.虚构书目。\n# 2 方法\n方法计划。",
+        [],
     )
     assert records == []
     assert "[" not in text
@@ -440,8 +499,27 @@ def test_mark_acknowledgment_as_draft_when_profile_is_missing() -> None:
 
     acknowledgment = mark_acknowledgment_as_draft("感谢导师和同学。", missing_profile_fields=["author"])
 
-    assert acknowledgment.startswith("【待补充：以下致谢为通用草稿")
-    assert "结合本人真实经历" in acknowledgment
+    assert acknowledgment.startswith("【待补充：致谢内容需依据本人真实经历填写")
+    assert "感谢导师和同学" not in acknowledgment
+
+
+def test_sanitize_abstract_truth_uses_research_disclaimer_for_experiment_paper() -> None:
+    """非软件项目论文不得附加源码、数据库和安全等无关免责声明。"""
+
+    sanitized, changed = sanitize_abstract_truth(
+        {
+            "abstract_zh": "本文提出图像分类模型及实验方案。",
+            "abstract_en": "This paper proposes an image-classification model and experiment plan.",
+        },
+        writing_requirements="未提供训练数据、实验环境和测试结果，不得编造准确率。",
+        confirmed_technologies={"CNN", "Vision Transformer"},
+    )
+
+    assert changed is True
+    assert "原始数据、实验记录或结果材料" in sanitized["abstract_zh"]
+    assert "系统源码" not in sanitized["abstract_zh"]
+    assert "original data, experiment records, or result materials" in sanitized["abstract_en"]
+    assert "source code" not in sanitized["abstract_en"]
 
 
 def test_sanitize_abstract_truth_downgrades_unconfirmed_results() -> None:
@@ -530,6 +608,21 @@ def test_sanitize_abstract_truth_marks_proposals_and_normalizes_english_spacing(
     assert ". The" in sanitized["abstract_en"]
     assert "Vue.js" in sanitized["abstract_en"]
     assert "the an HTTP client" not in sanitized["abstract_en"]
+
+
+def test_sanitize_abstract_truth_does_not_duplicate_proposal_marker() -> None:
+    """模型已使用“拟”时，事实降级不得生成“拟拟设计”等病句。"""
+
+    sanitized, changed = sanitize_abstract_truth(
+        {"abstract_zh": "本文拟设计并实现校园二手交易平台。", "abstract_en": ""},
+        writing_requirements="未提供系统实现材料。",
+        confirmed_technologies={"Spring Boot", "Vue"},
+        include_disclaimer=False,
+    )
+
+    assert "拟拟" not in sanitized["abstract_zh"]
+    assert "本文拟设计校园二手交易平台" in sanitized["abstract_zh"]
+    assert changed is True
 
 
 def test_normalize_chapter_count_statement_uses_actual_headings() -> None:

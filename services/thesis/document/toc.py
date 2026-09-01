@@ -279,6 +279,9 @@ def _add_toc_page(
 
     # Per-level left indentation
     indent_map = {1: Cm(0), 2: Cm(0.74), 3: Cm(1.48)}
+    # 三级目录在短篇论文中也可能超过 20 项。继续使用 22 磅固定行距会把
+    # 最后两三项挤到几乎空白的第二页；仅对密集目录收紧行距，正文格式不变。
+    toc_line_spacing = 18 if len(toc_entries) >= 20 else 22
 
     for entry in toc_entries:
         p = document.add_paragraph()
@@ -286,7 +289,7 @@ def _add_toc_page(
         p.paragraph_format.left_indent = indent_map.get(_toc_int(entry["level"]), Cm(0))
         p.paragraph_format.space_before = Pt(2)
         p.paragraph_format.space_after = Pt(2)
-        _apply_fixed_line_spacing(p.paragraph_format, pt=22)
+        _apply_fixed_line_spacing(p.paragraph_format, pt=toc_line_spacing)
 
         # Right-aligned tab stop with dot leader at right margin (15.5 cm)
         p.paragraph_format.tab_stops.add_tab_stop(Cm(15.5), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)

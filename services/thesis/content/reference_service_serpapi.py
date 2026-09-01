@@ -28,6 +28,7 @@ from llm.prompts.thesis_reference_prompt import (
     REFERENCE_FILTER_PROMPT,
     REFERENCE_SCHOLAR_KEYWORD_PROMPT,
 )
+from services.thesis.content.reference_query import normalize_english_queries, parse_keyword_json
 from services.thesis.generation.concurrency import crossref_slot, serpapi_slot, text_short_slot
 from services.thesis.generation.progress import record_process_detail
 
@@ -472,7 +473,7 @@ async def _filter_results(
                     }
                 ),
             )
-        keep_indices = json.loads(raw.strip()).get("keep", [])
+        keep_indices = parse_keyword_json(raw).get("keep", [])
         return [results[i] for i in keep_indices if isinstance(i, int) and i < len(results)]
     except Exception as exc:  # noqa: BLE001
         logger.warning("%s 文献筛选失败，回退前几条: %s", label, exc)
@@ -486,19 +487,30 @@ async def _extract_scholar_keyword_queries(llm: BaseChatModel, title: str, outli
         keyword_chain = REFERENCE_SCHOLAR_KEYWORD_PROMPT | llm | StrOutputParser()
         async with text_short_slot():
             raw_keywords = cast(str, await keyword_chain.ainvoke({"title": title, "outline": outline[:2000]}))
-        keyword_data = json.loads(raw_keywords.strip())
-        if not isinstance(keyword_data, dict):
-            return ScholarKeywordQueries(zh_query=title, en_queries=[title])
+        keyword_data = parse_keyword_json(raw_keywords)
 
         zh_query = str(keyword_data.get("zh") or title).strip() or title
         en_queries = keyword_data.get("en") or [title]
         if not isinstance(en_queries, list):
             en_queries = [title]
         normalized_en_queries = [str(query).strip() for query in en_queries[:2] if str(query).strip()]
-        return ScholarKeywordQueries(zh_query=zh_query, en_queries=normalized_en_queries or [title])
+        return ScholarKeywordQueries(
+            zh_query=zh_query,
+            en_queries=normalize_english_queries(normalized_en_queries, title=title, limit=3),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("参考文献关键词提取失败，使用标题兜底: %s", exc)
-        return ScholarKeywordQueries(zh_query=title, en_queries=[title])
+        await record_process_detail(
+            "references",
+            "SerpAPI 文献检索关键词提取失败，已使用标题兜底",
+            provider="serpapi",
+            error_type=type(exc).__name__,
+            english_fallback_usable=bool(re.search(r"[A-Za-z]", title)),
+        )
+        return ScholarKeywordQueries(
+            zh_query=title,
+            en_queries=normalize_english_queries([], title=title, limit=3),
+        )
 
 
 def _build_reference_targets(wxnum: int, *, include_chinese: bool, include_english: bool) -> ReferenceTargets:
@@ -582,7 +594,9 @@ async def _filter_scholar_results(
     buffer = 5
     if include_chinese and include_english:
         return await asyncio.gather(
-            _filter_results(llm, title, zh_results, "中文", keep_count=targets.zh + buffer, fallback_num=max(10, wxnum)),
+            _filter_results(
+                llm, title, zh_results, "中文", keep_count=targets.zh + buffer, fallback_num=max(10, wxnum)
+            ),
             _filter_results(
                 llm,
                 title,
