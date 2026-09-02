@@ -18,8 +18,10 @@ logger = logging.getLogger(__name__)
 MAX_CHAPTERS_PER_CALL = 3
 LONG_PAPER_CHAPTERS_PER_CALL = 1
 LONG_PAPER_BATCH_THRESHOLD = 20000
-# 短篇模型常出现约 1.7 倍扩写，长篇分批输出的扩写比例会明显下降。
-SHORT_PAPER_CORRECTION_FACTOR = 1.7
+# 当前正文模型在 4000-10000 字分批生成时的实测扩写倍率约为 1.35-1.55。
+# 使用早期 1.7 倍经验会让提示目标稳定偏低，并在最终 90% 字数校验处造成整单失败。
+# 取略保守的 1.2，偏长结果仍由质量层无损收敛到目标区间。
+SHORT_PAPER_CORRECTION_FACTOR = 1.2
 LONG_PAPER_CORRECTION_FACTOR = 0.8
 CORRECTION_TRANSITION_START = 10000
 CORRECTION_TRANSITION_END = 30000
@@ -27,6 +29,8 @@ SHORT_PAPER_MIN_CHAPTER_TARGET = 180
 DEFAULT_MIN_CHAPTER_TARGET = 300
 # 识别正文和大纲中的一级 Markdown 标题，同时兼容模型省略井号后空格的情况。
 CHAPTER_HEADING_PATTERN = re.compile(r"^#(?!#)[ \t]*(?P<title>\S.*)$")
+# 识别任意 Markdown 标题，用于约束模型不得突破用户确认大纲的最大层级。
+MARKDOWN_HEADING_PATTERN = re.compile(r"^(?P<marks>#{1,6})[ \t]+(?P<title>\S.*)$")
 # 去除模型标题中的章节编号后比较业务标题。
 CHAPTER_NUMBER_PREFIX_PATTERN = re.compile(r"^\s*(?:第\s*[一二三四五六七八九十百零\d]+\s*章|\d+)(?:[\s、:：.\-]+)?")
 # 模型供应商常见的输出长度终止原因。
@@ -112,6 +116,36 @@ def _lines_outside_code_fences(text: str) -> list[str]:
         if not is_code_block:
             lines.append(line)
     return lines
+
+
+def _outline_max_heading_depth(outline: str) -> int:
+    """返回用户确认大纲包含的最大 Markdown 标题层级。"""
+
+    depths = [
+        len(match.group("marks"))
+        for line in _lines_outside_code_fences(outline)
+        if (match := MARKDOWN_HEADING_PATTERN.match(line.strip()))
+    ]
+    return max(depths, default=1)
+
+
+def _constrain_heading_depth(text: str, outline: str) -> str:
+    """把超出确认大纲层级的模型自增标题还原为普通正文。"""
+
+    max_depth = _outline_max_heading_depth(outline)
+    normalized_lines: list[str] = []
+    is_code_block = False
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            is_code_block = not is_code_block
+            normalized_lines.append(line)
+            continue
+        match = None if is_code_block else MARKDOWN_HEADING_PATTERN.match(line.strip())
+        if match is not None and len(match.group("marks")) > max_depth:
+            normalized_lines.append(match.group("title").strip())
+        else:
+            normalized_lines.append(line)
+    return "\n".join(normalized_lines).strip()
 
 
 async def _build_fulltext_chain() -> Any:
@@ -435,7 +469,7 @@ async def generate_fulltext(
         else:
             generated_parts.append(generated.text)
 
-    full_text = "\n\n".join(generated_parts).strip()
+    full_text = _constrain_heading_depth("\n\n".join(generated_parts), outline)
     missing = _missing_chapters(chapter_outlines, full_text)
     if missing:
         missing_titles = "、".join(_outline_chapter_title(item) or "未知章节" for item in missing)

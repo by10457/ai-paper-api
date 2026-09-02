@@ -104,6 +104,14 @@ def _fallback_generators(
     return [(REFERENCE_MODE_SERPAPI, reference_service_serpapi.generate_references)]
 
 
+def _normalized_doi(value: str) -> str:
+    """归一化 DOI，避免同一文献因题名或 DOI 展示形式不同重复入选。"""
+
+    normalized = value.strip().casefold()
+    normalized = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi\s*[:：]?\s*)", "", normalized)
+    return normalized.rstrip(". ,，。")
+
+
 def _merge_records(
     existing: list[ReferenceRecord],
     supplement: list[ReferenceRecord],
@@ -111,11 +119,15 @@ def _merge_records(
 ) -> list[ReferenceRecord]:
     merged: list[ReferenceRecord] = []
     seen_titles: set[str] = set()
+    seen_dois: set[str] = set()
     for item in [*existing, *supplement]:
-        title_key = re.sub(r"\s+", "", item.title).lower()
-        if not title_key or title_key in seen_titles:
+        title_key = _normalized_search_text(item.title)
+        doi_key = _normalized_doi(item.doi)
+        if not title_key or title_key in seen_titles or (doi_key and doi_key in seen_dois):
             continue
         seen_titles.add(title_key)
+        if doi_key:
+            seen_dois.add(doi_key)
         index = len(merged) + 1
         formatted = re.sub(r"^\[\d+\]", f"[{index}]", item.formatted, count=1)
         merged.append(item.model_copy(update={"index": index, "formatted": formatted}))
@@ -257,6 +269,7 @@ def _select_records(
 ) -> list[ReferenceRecord]:
     """优先满足语言偏好，再用实际可用文献补足总数并连续编号。"""
 
+    records = _merge_records([], records)
     selected = [item for item in records if item.language == "zh"][:chinese_count]
     selected.extend(item for item in records if item.language == "en")
     selected = selected[: chinese_count + english_count]
@@ -560,9 +573,9 @@ async def retrieve_reference_records(
                 generate_references(title, context, wxnum=target_count, include_english=include_foreign),
                 primary_provider,
             )
-            records = await _filter_reference_records(
+            records = _merge_records([], await _filter_reference_records(
                 title, context, parse_reference_records(text, provider=primary_provider), semantic_decisions,
-            )
+            ))
             for provider, generator in _fallback_generators(primary_provider):
                 if _meets_quota(records, target_count, target_zh, target_en):
                     break

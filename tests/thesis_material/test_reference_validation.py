@@ -15,10 +15,12 @@ TOPIC = "植保无人机在小麦病虫害防治中的应用效果研究"
 def english_reference(
     index: int = 1,
     title: str = "UAV spraying for wheat pest control",
-    doi: str = "10.1000/test",
+    doi: str | None = None,
 ) -> ReferenceRecord:
+    actual_doi = f"10.1000/test.{index}" if doi is None else doi
     return service.parse_reference_records(
-        f"[{index}]Smith J.{title}[J].Crop Protection,2024,12(2):10-20." + (f" doi:{doi}." if doi else ""),
+        f"[{index}]Smith J.{title}[J].Crop Protection,2024,12(2):10-20."
+        + (f" doi:{actual_doi}." if actual_doi else ""),
         provider="serpapi",
     )[0]
 

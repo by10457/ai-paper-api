@@ -101,6 +101,18 @@ def test_missing_chapters_ignores_headings_inside_code_fences() -> None:
     assert fulltext_service._missing_chapters(chapters, generated) == [chapters[1]]
 
 
+def test_constrain_heading_depth_strips_model_added_third_level_heading() -> None:
+    """关闭三级大纲时，模型自行添加的三级标题只能作为普通正文保留。"""
+
+    outline = "# 1 绪论\n## 1.1 研究背景"
+    generated = "# 1 绪论\n## 1.1 研究背景\n### 1.1.1 模型自行拆分\n正文内容。"
+
+    result = fulltext_service._constrain_heading_depth(generated, outline)
+
+    assert "### 1.1.1 模型自行拆分" not in result
+    assert "1.1.1 模型自行拆分" in result
+
+
 # 七章大纲应按三章一批生成，并完整保留全部章节
 async def test_generate_fulltext_batches_seven_chapters(
     monkeypatch: pytest.MonkeyPatch,
@@ -123,8 +135,8 @@ async def test_generate_fulltext_batches_seven_chapters(
     result = await fulltext_service.generate_fulltext(outline, target_word_count=7000)
 
     assert len(chain.inputs) == 3
-    assert [item["target_word_count"] for item in chain.inputs] == [1765, 1765, 588]
-    assert [item["target_word_count_max"] for item in chain.inputs] == [2065, 2065, 888]
+    assert [item["target_word_count"] for item in chain.inputs] == [2500, 2500, 833]
+    assert [item["target_word_count_max"] for item in chain.inputs] == [2875, 2875, 1133]
     for index in range(1, 8):
         assert f"# {index} 第{index}部分" in result
 
@@ -141,7 +153,7 @@ async def test_short_paper_does_not_force_three_hundred_words_per_chapter(
 
     await fulltext_service.generate_fulltext(outline, target_word_count=3000)
 
-    assert [item["target_word_count"] for item in chain.inputs] == [756, 756, 252]
+    assert [item["target_word_count"] for item in chain.inputs] == [1071, 1071, 357]
 
 
 # 三万字长篇不得继续套用短篇 1.7 倍扩写系数
@@ -161,7 +173,7 @@ async def test_long_paper_uses_lower_prompt_correction_factor(
 
     await fulltext_service.generate_fulltext(outline, target_word_count=30000)
 
-    assert fulltext_service._prompt_word_count_correction_factor(3000) == 1.7
+    assert fulltext_service._prompt_word_count_correction_factor(3000) == 1.2
     assert fulltext_service._prompt_word_count_correction_factor(30000) == 0.8
     assert fulltext_service._chapters_per_call(3000) == 3
     assert fulltext_service._chapters_per_call(30000) == 1

@@ -7,9 +7,9 @@ from typing import Any
 from tortoise import timezone
 from tortoise.functions import Sum
 
+from core import database as database_module
 from core import redis as redis_module
 from core.config import settings
-from core.database import db_connected
 from models.admin import ModelCallLog, ModelConfig
 from models.paper import PaperOrder
 from models.user import User
@@ -29,7 +29,7 @@ class AdminOverviewService:
 
         has_model_config = await ModelConfig.filter(is_enabled=True).exists()
         health = {
-            "mysql": "ok" if db_connected else "degraded",
+            "mysql": AdminOverviewService._mysql_health(),
             "redis": "ok" if redis_module.redis_client is not None else "degraded",
             "storage": AdminOverviewService._storage_health(),
             "model": "ok" if has_model_config else "unconfigured",
@@ -85,3 +85,9 @@ class AdminOverviewService:
         if provider == "cos":
             return "ok" if settings.COS_BUCKET and settings.COS_REGION else "unconfigured"
         return "unconfigured"
+
+    @staticmethod
+    def _mysql_health() -> str:
+        """读取数据库模块的实时连接状态，避免缓存导入时的布尔值。"""
+
+        return "ok" if database_module.db_connected else "degraded"

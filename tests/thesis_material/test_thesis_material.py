@@ -267,7 +267,18 @@ def test_merge_reference_records_deduplicates_and_renumbers() -> None:
     first = [ReferenceRecord(index=1, title="文献甲", formatted="[1]作者.文献甲[J].期刊,2024.")]
     second = [
         ReferenceRecord(index=1, title="文献甲", formatted="[1]作者.文献甲[J].期刊,2024."),
-        ReferenceRecord(index=2, title="文献乙", formatted="[2]作者.文献乙[J].期刊,2023."),
+        ReferenceRecord(
+            index=2,
+            title="文献乙",
+            doi="10.1000/example",
+            formatted="[2]作者.文献乙[J].期刊,2023. doi:10.1000/example.",
+        ),
+        ReferenceRecord(
+            index=3,
+            title="文献乙的近似题名",
+            doi="https://doi.org/10.1000/EXAMPLE",
+            formatted="[3]作者.文献乙的近似题名[J].期刊,2023. doi:10.1000/example.",
+        ),
     ]
     merged = _merge_records(first, second, 10)
     assert [item.index for item in merged] == [1, 2]
