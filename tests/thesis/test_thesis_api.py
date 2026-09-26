@@ -39,7 +39,6 @@ def test_outline_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) ->
         target_word_count: int,
         chinese_reference_count: int,
         english_reference_count: int,
-        three_level: bool,
         aboutmsg: str,
     ) -> dict:
         return {

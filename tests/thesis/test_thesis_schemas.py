@@ -85,7 +85,7 @@ def test_outline_schemas_expose_shared_configuration() -> None:
     """直接接口与管理端接口的文献配置保持一致。"""
     for schema in (OutlineRequest, PaperOutlineCreateRequest):
         fields = schema.model_json_schema()["properties"]
-        assert {"chinese_reference_count", "english_reference_count", "target_word_count", "three_level"} <= fields.keys()
+        assert {"chinese_reference_count", "english_reference_count", "target_word_count"} <= fields.keys()
         assert not {"codetype", "wxquote", "language", "wxnum", "reference_count", "include_foreign"} & fields.keys()
 
 
@@ -399,7 +399,7 @@ def test_split_by_render_method() -> None:
 # 所有生成入口拒绝个人信息，校验发生在服务与持久化之前
 @pytest.mark.parametrize("field", [
     "author", "advisor", "degree_type", "major", "school", "year_month",
-    "student_id", "student_class", "student_profile", "form_params",
+    "student_id", "student_class", "student_profile", "form_params", "three_level",
 ])
 def test_generation_requests_reject_personal_fields(field: str) -> None:
     """验证旧个人信息与任意快照入口不再被接收。

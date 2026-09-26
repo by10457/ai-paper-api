@@ -30,7 +30,7 @@ POST /api/v1/thesis-materials/task-books
 
 标题是唯一必填字段，长度为 2-200 个字符。接口不接收学生、学校和导师等封面资料；开题报告、任务书的 DOCX 固定使用“【待补充：学号】”等明显占位，由用户下载后自行填写。提交响应和最终结构化结果仍返回固定的 `missing_profile_fields`，调用方应在下载前提醒用户。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
 
-三类接口还可接收 `source_outline`（与论文 `outline_json` 相同的 `OutlineChapter[]` 结构）和 `thesis_config`（公共论文表单快照：`target_word_count`、`three_level`、`aboutmsg`）。传入用户确认的大纲时直接复用；省略时先生成论文大纲，再建立材料自己的 `material_outline`。两份大纲均保存到请求快照与结构化结果，重试复用。开题报告的论文写作提纲严格沿用源大纲的章节顺序；综述和任务书保留各自文档结构。材料篇幅由顶层 `target_word_count` 控制。
+三类接口还可接收 `source_outline`（与论文 `outline_json` 相同的 `OutlineChapter[]` 结构）和 `thesis_config`（公共论文表单快照：`target_word_count`、`aboutmsg`）。传入用户确认的大纲时直接复用；省略时先生成论文大纲，再建立材料自己的 `material_outline`。两份大纲均保存到请求快照与结构化结果，重试复用。开题报告的论文写作提纲严格沿用源大纲的章节顺序；综述和任务书保留各自文档结构。材料篇幅由顶层 `target_word_count` 控制。
 
 `reference_options` 改为分别指定 `chinese_reference_count`、`english_reference_count`，单项允许 0；合计范围分别为开题报告 8–40、文献综述 12–60、任务书 5–30。默认中英文数量分别为 10/5、15/5、10/0。正文默认执行文献标注与引用校验，缺少的语言文献明确提示，不跨语言补齐。已移除 `target_count`、`include_foreign` 和 `thesis_config` 中的 `codetype`、`wxquote`，调用方需同步升级。
 

@@ -69,7 +69,6 @@ POST /api/v1/thesis/outline
   "target_word_count": 8000,
   "chinese_reference_count": 20,
   "english_reference_count": 5,
-  "three_level": true,
   "aboutmsg": ""
 }
 ```
@@ -95,7 +94,7 @@ Idempotency-Key: <业务订单号>
 ```
 
 - 大纲、直连论文生成和管理端 `/thesis/outlines` 统一使用 `chinese_reference_count`、`english_reference_count`：分别为非负整数，合计 1–100 篇，默认 25/0。管理端创建大纲时把这两个字段和 `target_word_count` 放在请求顶层；后续订单自动沿用记录快照。
-- 已移除 `codetype`、`wxquote`、`language`、`wxnum`、`reference_count`、`include_foreign` 请求字段，不提供旧字段转换；调用方需同步升级。正文默认标注真实文献，代码及语言由模型按课题和已确认技术栈判断；未确认实现必须标为示例或建议。`three_level` 和 `target_word_count` 保持原义。
+- 已移除 `codetype`、`wxquote`、`language`、`wxnum`、`reference_count`、`include_foreign` 请求字段，不提供旧字段转换；调用方需同步升级。正文默认标注真实文献，代码及语言由模型按课题和已确认技术栈判断；未确认实现必须标为示例或建议。`target_word_count` 保留；不再接收 `three_level`，AI 默认规划两级，仅按篇幅和内容需要局部细化到三级。
 - 两种语言按指定数量分别检索、筛选，某种语言不足时不会用另一种语言补齐；设为 0 的语言不检索。有限补检后不足仍继续生成，`result_data.reference_quality` 返回目标/实际数量与 `complete/limited/unavailable` 状态，`result_data.quality_warnings` 提供非阻断提示。调用方应提醒用户补充资料，不应把提示转换为失败、退款或自动重试。
 - 零文献时返回 `reference_count=0`、`citation_integrity=no_references`，文档明确标记“待补充参考文献”；正文不保留无来源编号。
 - 任务完成后从状态接口的 `result_data.effective_config` 核对实际生效值，不要只依赖前端表单回显。

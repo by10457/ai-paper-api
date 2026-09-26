@@ -54,7 +54,6 @@ async def create_outline_record(user: User, req: PaperOutlineCreateRequest) -> P
                 int(req.target_word_count or 8000),
                 req.chinese_reference_count,
                 req.english_reference_count,
-                req.three_level,
                 req.about_msg,
             )
     except Exception as exc:  # noqa: BLE001

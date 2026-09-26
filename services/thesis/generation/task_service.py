@@ -86,7 +86,6 @@ async def generate_outline_for_request(req: OutlineRequest) -> OutlineResponse:
             req.target_word_count,
             req.chinese_reference_count,
             req.english_reference_count,
-            req.three_level,
             req.aboutmsg,
         )
     except Exception as exc:  # noqa: BLE001

@@ -111,8 +111,7 @@ PAPER_GENERATION_CONCURRENCY=20
 ]
 ```
 
-- `three_level=true` 时，大纲模型会为每个二级小节生成 2-3 个 `subsections`，调用方应允许用户继续编辑三级标题和写作要点。
-- `three_level=false` 时，`subsections` 返回空数组。
+- 不再传 `three_level`：AI 根据目标篇幅和内容复杂度判断，默认两级，必要时局部细化三级；允许混合层级。`subsections` 为空代表无需细分，编辑器仍支持修改三级结构。
 - 为兼容旧客户端，请求省略 `subsections` 时按空数组处理。
 - 用户确认后的 `subsections` 会转换为 Markdown `###` 标题并进入正文生成；调用链不得在转发或保存大纲时丢弃该字段。
 

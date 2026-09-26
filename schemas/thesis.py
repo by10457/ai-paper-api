@@ -57,7 +57,6 @@ class OutlineRequest(ReferenceConfig):
         default=8000,
         description="目标正文字数",
     )
-    three_level: bool = Field(default=False, description="是否使用三级目录结构")
     aboutmsg: str = Field(default="", max_length=1000, description="写作方向补充说明")
 
 
@@ -136,6 +135,7 @@ class GenerateRequest(ReferenceConfig):
     callback_url: str = Field(default="", max_length=1024, description="生成完成后的业务回调地址")
     callback_secret: str = Field(default="", max_length=255, description="生成回调密钥，不填则使用服务默认配置")
 
+
 class GenerateSubmitResponse(BaseModel):
     """提交任务后立即返回。"""
 
@@ -175,7 +175,6 @@ class PaperOutlineCreateRequest(ReferenceConfig):
     title: str = Field(..., min_length=2, max_length=200)
     about_msg: str = ""
     target_word_count: int | None = Field(default=None, ge=1000, le=50000)
-    three_level: bool = False
     literatures: list[str] = Field(default_factory=list)
     gallery_resources: list[str] = Field(default_factory=list)
 

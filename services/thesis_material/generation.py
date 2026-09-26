@@ -242,7 +242,6 @@ async def prepare_material_plan(document_type: str, request_payload: dict[str, A
                 ),
                 chinese_reference_count=int(references.get("chinese_reference_count", 10)),
                 english_reference_count=int(references.get("english_reference_count", 0)),
-                three_level=bool(config.get("three_level")),
                 aboutmsg=str(config.get("aboutmsg") or ""),
             )
         )

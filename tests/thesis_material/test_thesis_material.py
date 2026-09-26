@@ -252,7 +252,6 @@ def test_material_requests_accept_confirmed_outline_and_common_config() -> None:
         "source_outline": outline,
         "thesis_config": {
             "target_word_count": 8000,
-            "three_level": True,
             "aboutmsg": "围绕校园服务流程",
         },
     }
@@ -338,7 +337,7 @@ async def test_proposal_uses_confirmed_outline_without_regenerating_it(monkeypat
                     ],
                 }
             ],
-            "thesis_config": {"aboutmsg": "聚焦校园场景", "three_level": True},
+            "thesis_config": {"aboutmsg": "聚焦校园场景"},
         }
     ).model_dump(mode="json")
     request["material_outline"] = {"sections": [{"title": "用户指定材料结构"}]}

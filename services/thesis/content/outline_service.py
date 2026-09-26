@@ -1,7 +1,6 @@
 """负责根据论文题目和写作配置生成可编辑的结构化论文大纲。"""
 
 import json
-import logging
 import re
 from typing import Any, cast
 
@@ -12,8 +11,6 @@ from llm.prompts.thesis_outline_prompt import THESIS_OUTLINE_PROMPT
 from schemas.thesis import OutlineChapter, OutlinePayload, OutlineSection
 from services.thesis.content.quality_service import extract_confirmed_technologies, sanitize_abstract_truth
 from services.thesis.generation.concurrency import text_short_slot
-
-logger = logging.getLogger(__name__)
 
 
 async def _build_outline_chain() -> Any:
@@ -54,7 +51,6 @@ def _limit_outline_density(
     chapters: list[OutlineChapter],
     *,
     target_word_count: int,
-    three_level: bool,
 ) -> None:
     """按目标正文篇幅限制标题密度，避免短文被标题和固定结构挤满。"""
 
@@ -76,42 +72,29 @@ def _limit_outline_density(
     for chapter, quota in zip(chapters, quotas, strict=True):
         chapter.sections = _take_edge_items(chapter.sections, quota)
 
-    if not three_level:
-        for chapter in chapters:
-            for section in chapter.sections:
-                section.subsections = []
-        return
-
     sections: list[OutlineSection] = [section for chapter in chapters for section in chapter.sections]
-    subsection_quotas = [0 for _ in sections]
+    # 按完整的小节组分配预算，避免把两个子主题裁剪成单独一个三级标题。
     remaining = subsection_limit
-    while remaining:
-        changed = False
-        for index, section in enumerate(sections):
-            if subsection_quotas[index] >= min(len(section.subsections), 2):
-                continue
-            subsection_quotas[index] += 1
-            remaining -= 1
-            changed = True
-            if remaining == 0:
-                break
-        if not changed:
-            break
-    for section, quota in zip(sections, subsection_quotas, strict=True):
-        section.subsections = _take_edge_items(section.subsections, quota) if quota else []
+    for section in sections:
+        desired = min(len(section.subsections), 3)
+        if desired < 2 or remaining < 2:
+            section.subsections = []
+            continue
+        quota = min(desired, remaining)
+        section.subsections = _take_edge_items(section.subsections, quota)
+        remaining -= quota
 
 
 def _parse_and_validate_outline(
     raw: str,
     *,
     target_word_count: int,
-    three_level: bool,
     title: str = "",
     aboutmsg: str = "",
 ) -> dict[str, Any]:
     parsed = json.loads(_strip_json_fence(raw))
     payload = OutlinePayload.model_validate(parsed)
-    _limit_outline_density(payload.outline, target_word_count=target_word_count, three_level=three_level)
+    _limit_outline_density(payload.outline, target_word_count=target_word_count)
     sanitized, _ = sanitize_abstract_truth(
         {"abstract_zh": payload.abstract},
         writing_requirements=aboutmsg,
@@ -142,24 +125,13 @@ def _parse_and_validate_outline(
 def _build_outline_instructions(
     chinese_reference_count: int,
     english_reference_count: int,
-    three_level: bool,
     aboutmsg: str,
-    target_word_count: int,
 ) -> dict[str, str]:
     return {
         "code_instruction": "依据题目与研究内容判断是否需要代码或系统实现章节；不得为非编程课题强行添加代码。",
         "reference_instruction": (
             f"参考文献规划目标：中文{chinese_reference_count}篇、英文{english_reference_count}篇；"
             "按研究需要规划相关研究章节，不编造具体文献。"
-        ),
-        "three_level_instruction": (
-            (
-                "短篇论文的每个二级章节必须且只生成1个三级小节，三级小节总数不得超过12个"
-                if target_word_count <= 5000
-                else "每个二级章节的subsections至少包含1个三级小节，避免为凑层级过度拆分"
-            )
-            if three_level
-            else "保持常规二级章节结构，每个二级章节的 subsections 必须为空数组"
         ),
         "aboutmsg_instruction": (
             f"写作方向补充说明：{aboutmsg.strip()}" if aboutmsg and aboutmsg.strip() else "无额外写作方向补充说明"
@@ -172,7 +144,6 @@ async def generate_outline(
     target_word_count: int = 8000,
     chinese_reference_count: int = 25,
     english_reference_count: int = 0,
-    three_level: bool = False,
     aboutmsg: str = "",
 ) -> dict[str, Any]:
     """阶段①：根据论文标题生成结构化 JSON 大纲。"""
@@ -181,38 +152,14 @@ async def generate_outline(
     inputs = {
         "title": title,
         "target_word_count": target_word_count,
-        **_build_outline_instructions(
-            chinese_reference_count, english_reference_count, three_level, aboutmsg, target_word_count
-        ),
+        **_build_outline_instructions(chinese_reference_count, english_reference_count, aboutmsg),
     }
     async with text_short_slot():
         result = await chain.ainvoke(inputs)
     payload = _parse_and_validate_outline(
         cast(str, result),
         target_word_count=target_word_count,
-        three_level=three_level,
         title=title,
         aboutmsg=aboutmsg,
     )
-    if three_level and any(
-        not section["subsections"] for chapter in payload["outline"] for section in chapter["sections"]
-    ):
-        logger.warning("三级大纲首次生成存在空三级小节，执行一次结构重试")
-        retry_inputs = dict(inputs)
-        retry_inputs["three_level_instruction"] = (
-            f"{inputs['three_level_instruction']}；每个二级章节都必须至少生成1个三级小节，不能返回空数组"
-        )
-        async with text_short_slot():
-            retry_result = await chain.ainvoke(retry_inputs)
-        payload = _parse_and_validate_outline(
-            cast(str, retry_result),
-            target_word_count=target_word_count,
-            three_level=three_level,
-            title=title,
-            aboutmsg=aboutmsg,
-        )
-    if three_level and any(
-        not section["subsections"] for chapter in payload["outline"] for section in chapter["sections"]
-    ):
-        raise RuntimeError("三级大纲生成不完整，请重试")
     return payload

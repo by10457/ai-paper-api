@@ -171,7 +171,6 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
         target_word_count: int,
         chinese_reference_count: int,
         english_reference_count: int,
-        three_level: bool,
         aboutmsg: str,
     ) -> dict:
         assert target_word_count == 8000

@@ -52,7 +52,6 @@ class ThesisSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     target_word_count: int | None = Field(default=None, ge=1)
-    three_level: bool = False
     aboutmsg: str = Field(default="", max_length=1000)
 
 
