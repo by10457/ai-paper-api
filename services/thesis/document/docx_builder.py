@@ -35,6 +35,7 @@ from services.thesis.document.toc import (
     _parse_markdown_heading,
     _pre_scan_headings,
 )
+from services.thesis.profile_policy import thesis_profile_placeholders
 
 
 def build_word_document(
@@ -43,14 +44,6 @@ def build_word_document(
     image_paths: dict[int, str | None],
     output_path: str = "public/output/thesis/thesis.docx",
     title: str = "论文题目",
-    author: str = "作者姓名",
-    advisor: str = "指导教师",
-    degree_type: str = "学士",
-    major: str = "专业名称",
-    school: str = "XX大学XX学院",
-    year_month: str = "",
-    student_id: str = "",
-    student_class: str = "",
     abstract_zh: str = "",
     abstract_en: str = "",
     keywords_zh: str = "",
@@ -61,6 +54,7 @@ def build_word_document(
     """将论文正文、图片与前后置页面构造成 Word 文档。"""
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     document = DocumentFactory()
+    profile, _ = thesis_profile_placeholders()
 
     _setup_page(document)
     _init_styles(document)
@@ -69,15 +63,21 @@ def build_word_document(
     _add_cover_page(
         document,
         title,
-        author,
-        advisor,
-        degree_type,
-        major,
-        school,
-        year_month,
+        profile["author"],
+        profile["advisor"],
+        profile["degree_type"],
+        profile["major"],
+        profile["school"],
+        profile["year_month"],
     )
-    _add_integrity_page(document, title, author, advisor, major, school, student_id, student_class)
-    _add_copyright_page(document, title, author, advisor, major, school, student_id, student_class)
+    _add_integrity_page(
+        document, title, profile["author"], profile["advisor"], profile["major"],
+        profile["school"], profile["student_id"], profile["student_class"],
+    )
+    _add_copyright_page(
+        document, title, profile["author"], profile["advisor"], profile["major"],
+        profile["school"], profile["student_id"], profile["student_class"],
+    )
 
     # Section 2：中文摘要，从罗马页码 I 开始。
     # LibreOffice 会忽略连续分节上的页码重启，摘要必须使用真正的新页分节。
@@ -206,10 +206,8 @@ def build_word_document(
     ref_bookmark = next((entry for entry in toc_entries if entry["text"] == "参考文献"), None)
     ack_bookmark = next((entry for entry in toc_entries if entry["text"] == "致谢"), None)
 
-    document.add_page_break()
     _add_references_page(document, references, bookmark=ref_bookmark)
 
-    document.add_page_break()
     _add_acknowledgment_page(document, acknowledgment, bookmark=ack_bookmark)
 
     # 修正文档核心属性，让 Windows 资源管理器正确识别并显示 Word 图标。
@@ -218,10 +216,10 @@ def build_word_document(
     now = datetime.datetime.now()
     core = document.core_properties
     core.title = title
-    core.author = author
+    core.author = "AI Paper"
     core.created = now
     core.modified = now
-    core.last_modified_by = author
+    core.last_modified_by = "AI Paper"
     core.revision = 1
     core.description = ""
 

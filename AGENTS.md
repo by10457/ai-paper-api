@@ -35,6 +35,7 @@ services/thesis/        论文业务、内容、生成、文档、图片和存�
 tasks/                  scheduler、worker 与任务恢复入口
 tests/                  横切模块测试；论文领域测试位于 tests/thesis/
 sql/init.sql             当前阶段统一维护的初始化表结构与本地演示数据
+migrations/              版本化 Python 迁移；start.sh 部署前自动执行
 public/                 前端静态产物和本地论文文件
 doc/                    部署、生成流程、模型、存储、接口与运维文档
 ```
@@ -62,10 +63,10 @@ doc/                    部署、生成流程、模型、存储、接口与运�
 
 ## 数据库变更
 
-- 当前项目尚未建立 `migrations/`，全新安装以 `sql/init.sql` 为准；不要自行新增补丁式 SQL 目录，也不要擅自初始化或混用 Aerich。需要进入版本化迁移阶段时先确认团队策略。
+- 全新安装以 `sql/init.sql` 为准；增量更新写入 `migrations/models/<递增序号>_<日期>_<说明>.py`，提供 `async upgrade(db)`。`start.sh` 在替换应用容器前自动执行，失败阻断部署。不混用 Aerich；已执行版本不得修改或重命名，新变更只追加版本。
 - 新增 model 时检查 `models/__init__.py` 和 `core/config.py` 的 Tortoise 注册；字段定义需要同步类型、null、default、长度、索引/唯一约束、外键动作和中文注释。
 - `sql/init.sql` 同时含 DDL 和本地演示用户数据。保持外键创建顺序和可重复执行语义；只有业务明确需要时才改初始化数据，禁止写入生产账号或真实密钥。
-- 对已有开发库不能重新执行完整 `sql/init.sql` 来代替结构升级；使用经过审查的临时增量 SQL 精确修改，再用 `SHOW CREATE TABLE` 或 `information_schema` 验证。
+- 对已有数据库不能重新执行完整 `sql/init.sql` 来代替结构升级；使用经过审查的 `migrations/models/` 版本迁移精确修改，再用 `SHOW CREATE TABLE` 或 `information_schema` 验证。
 - 数据库设计、审查和只读排查不授权执行 DDL/DML。写入本地开发库前必须得到明确授权并再次确认目标；不得连接或修改生产库。
 - 默认先使用 `.agents/skills/mysql-schema-changes/scripts/local-mysql.sh` 的 `status`、`query`、`schema` 做只读检查；只有获准落库后才使用 `apply`。
 - 当前实际库存在既有 collation 差异。修改前读取相关表和外键列的 charset/collation，保持兼容，不借普通变更顺手全库归一化。

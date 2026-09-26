@@ -37,8 +37,8 @@ def test_outline_success(client: TestClient, monkeypatch: pytest.MonkeyPatch) ->
     async def fake_generate_outline(
         title: str,
         target_word_count: int,
-        codetype: str,
-        language: str,
+        chinese_reference_count: int,
+        english_reference_count: int,
         three_level: bool,
         aboutmsg: str,
     ) -> dict:
@@ -117,8 +117,6 @@ def test_generate_and_status_flow(client: TestClient, monkeypatch: pytest.Monkey
                 }
             ],
             "target_word_count": 12000,
-            "student_id": "20260001",
-            "student_class": "软件工程1班",
         },
     )
 

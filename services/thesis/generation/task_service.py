@@ -84,8 +84,8 @@ async def generate_outline_for_request(req: OutlineRequest) -> OutlineResponse:
         outline_data = await generate_outline(
             req.title,
             req.target_word_count,
-            req.codetype,
-            req.language,
+            req.chinese_reference_count,
+            req.english_reference_count,
             req.three_level,
             req.aboutmsg,
         )
@@ -164,22 +164,10 @@ async def _run_order_generation_task(generation_task: PaperGenerationTask) -> No
         generation_task.task_id,
         normalized.title,
         json_outline_to_markdown(normalized.outline_json),
-        {
-            "target_word_count": normalized.target_word_count,
-            "author": normalized.author,
-            "advisor": normalized.advisor,
-            "degree_type": normalized.degree_type,
-            "major": normalized.major,
-            "school": normalized.school,
-            "year_month": normalized.year_month,
-            "student_id": normalized.student_id,
-            "student_class": normalized.student_class,
-            "writing_requirements": normalized.writing_requirements,
-        },
-        normalized.codetype,
-        normalized.wxquote,
-        normalized.language,
-        normalized.wxnum,
+        target_word_count=normalized.target_word_count,
+        writing_requirements=normalized.writing_requirements,
+        chinese_reference_count=normalized.chinese_reference_count,
+        english_reference_count=normalized.english_reference_count,
         generation_task_id=generation_task.id,
         callback_url=order.callback_url or "",
         callback_secret=order.callback_secret or "",
@@ -281,11 +269,10 @@ async def run_generate_task(
     task_id: str,
     title: str,
     outline: str,
-    cover_kwargs: dict[str, Any] | None = None,
-    codetype: str = "否",
-    wxquote: str = "标注",
-    language: str = "否",
-    wxnum: int = 25,
+    target_word_count: int = 8000,
+    writing_requirements: str = "",
+    chinese_reference_count: int = 25,
+    english_reference_count: int = 0,
     generation_task_id: int | None = None,
     callback_url: str = "",
     callback_secret: str = "",
@@ -293,18 +280,16 @@ async def run_generate_task(
 ) -> None:
     """后台执行论文生成、上传和业务回调，并同步任务状态。"""
 
-    cover_kwargs = cover_kwargs or {}
     try:
         generate_document = load_generate_document()
         result = await generate_document(
             task_id=task_id,
             title=title,
             outline=outline,
-            codetype=codetype,
-            wxquote=wxquote,
-            language=language,
-            wxnum=wxnum,
-            **cover_kwargs,
+            chinese_reference_count=chinese_reference_count,
+            english_reference_count=english_reference_count,
+            target_word_count=target_word_count,
+            writing_requirements=writing_requirements,
         )
         await _mark_generation_completed(
             task_id,

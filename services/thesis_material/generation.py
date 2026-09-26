@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 from core.config import get_settings
+from schemas.thesis import OutlineRequest
 from services.thesis.generation.progress import publish_progress, stage_context
+from services.thesis.generation.task_service import generate_outline_for_request
 from services.thesis_material.document_builder import build_thesis_material_document
 from services.thesis_material.llm_service import (
     LITERATURE_BODY_FIELDS,
@@ -26,25 +29,73 @@ from services.thesis_material.profile_policy import missing_profile_fields
 from services.thesis_material.reference_service import reference_quality_summary, retrieve_reference_records
 
 _CITATION = re.compile(r"\[(\d+)\]")
+_NUMERIC_CITATION = re.compile(r"\[\s*\d+(?:\s*[,，\-–]\s*\d+)*\s*\]")
+_NON_BODY_FIELDS = {
+    "title",
+    "references",
+    "approval",
+    "source_outline",
+    "thesis_config",
+    "writing_outline",
+    "material_outline",
+    "source_outline_origin",
+    "missing_profile_fields",
+}
+PersistPlanCallable = Callable[[dict[str, Any]], Awaitable[None]]
+
+_MATERIAL_SECTIONS: dict[str, tuple[tuple[str, str], ...]] = {
+    "proposal_report": (
+        ("research_purpose", "研究目的"),
+        ("research_status_and_trends", "研究现状与发展趋势"),
+        ("research_content", "研究内容"),
+        ("research_methods", "研究重点、难点与方法"),
+        ("feasibility_and_innovation", "可行性与创新点"),
+        ("writing_outline", "论文写作提纲"),
+        ("schedule", "进度计划"),
+        ("references", "参考文献"),
+    ),
+    "literature_review": (
+        ("abstract", "摘要"),
+        ("introduction", "引言"),
+        ("domestic_research", "国内研究现状"),
+        ("foreign_research", "国外研究现状"),
+        ("themes", "主题分类与代表性研究"),
+        ("method_comparison", "研究方法比较"),
+        ("research_gaps", "现有研究不足"),
+        ("future_trends", "发展趋势"),
+        ("conclusion", "结论"),
+        ("references", "参考文献"),
+    ),
+    "task_book": (
+        ("design_background", "课题背景"),
+        ("design_goals", "设计目标"),
+        ("module_tasks", "主要任务"),
+        ("schedule_items", "进度安排"),
+        ("deliverable_forms", "成果形式"),
+        ("deliverable_requirements", "成果要求"),
+        ("main_indicators", "主要指标"),
+        ("references", "参考资料"),
+    ),
+}
 
 PROPOSAL_SCHEDULE = (
-    ("明确选题，查阅资料并完成开题报告", "开题报告"),
-    ("学习相关技术并完成需求分析", "需求分析文档"),
-    ("完成总体设计和功能模块划分", "总体设计方案"),
-    ("完成数据库和数据关系设计", "数据库设计文档"),
-    ("实现后端或核心功能模块", "核心功能代码"),
-    ("实现界面并完成接口联调", "可运行系统"),
-    ("执行功能、性能与安全测试并修复问题", "测试报告"),
-    ("整理成果并完成论文初稿", "论文初稿"),
-    ("根据意见修改定稿并准备答辩", "论文定稿与答辩材料"),
+    ("明确选题与研究问题，查阅基础资料", "选题说明与资料清单"),
+    ("梳理相关研究并完成开题报告", "开题报告"),
+    ("确定研究对象、方法与实施范围", "研究或设计方案"),
+    ("收集资料并开展阶段性研究或设计", "阶段成果记录"),
+    ("继续实施课题并整理主要成果", "研究资料或设计成果"),
+    ("检查成果并开展必要的验证与分析", "验证与分析记录"),
+    ("归纳研究发现、局限与改进方向", "研究总结"),
+    ("撰写并检查论文初稿", "论文初稿"),
+    ("根据指导意见修订定稿并准备答辩", "论文定稿与答辩材料"),
 )
 
 TASK_BOOK_SCHEDULE = (
-    ("查阅资料并完成需求分析", "需求分析文档"),
-    ("完成原型、业务流程和数据设计", "原型与设计文档"),
-    ("实现课题核心功能", "可运行项目代码"),
-    ("编写测试计划并完成系统测试", "测试报告"),
-    ("整理并完成毕业设计成果", "毕业设计成果"),
+    ("查阅资料并明确课题目标与范围", "资料清单与目标说明"),
+    ("确定研究方法或设计方案", "课题实施方案"),
+    ("开展课题主要研究或设计工作", "阶段成果"),
+    ("检查成果并完成必要的验证与分析", "验证与分析记录"),
+    ("整理、修订并提交毕业设计成果", "毕业设计成果"),
 )
 
 
@@ -53,31 +104,40 @@ async def generate_thesis_material_document(
     task_id: str,
     document_type: str,
     request_payload: dict[str, Any],
+    persist_plan: PersistPlanCallable | None = None,
 ) -> dict[str, Any]:
     """生成结构化内容和 DOCX，返回任务完成所需元数据。"""
 
     title = str(request_payload.get("title") or "").strip()
     if not title:
         raise RuntimeError("文档标题不能为空")
+    await publish_progress(task_id, "planning", "正在确定论文大纲和材料结构", progress=10)
+    with stage_context("planning"):
+        await prepare_material_plan(document_type, request_payload)
+        if persist_plan is not None:
+            await persist_plan(request_payload)
+    await publish_progress(
+        task_id,
+        "planning",
+        "材料大纲已确定",
+        progress=18,
+        source_outline=request_payload["source_outline"],
+        material_outline=request_payload["material_outline"],
+    )
+    options = request_payload.get("reference_options") or {}
+    chinese_count = int(options.get("chinese_reference_count", 10))
+    english_count = int(options.get("english_reference_count", 0))
     references = []
     if document_type in {"proposal_report", "literature_review", "task_book"}:
-        await publish_progress(task_id, "retrieving_references", "正在检索和整理真实参考文献", progress=12)
-        options = request_payload.get("reference_options") or {}
-        defaults = {
-            "proposal_report": 15,
-            "literature_review": 20,
-            "task_book": 10,
-        }
-        target = int(options.get("target_count") or defaults[document_type])
+        await publish_progress(task_id, "retrieving_references", "正在检索和整理真实参考文献", progress=22)
         with stage_context("retrieving_references"):
             references = await retrieve_reference_records(
                 title,
                 _research_context_text(request_payload),
-                target_count=target,
-                include_foreign=document_type != "task_book",
+                chinese_reference_count=chinese_count,
+                english_reference_count=english_count,
             )
 
-    await publish_progress(task_id, "planning", "正在规划文档结构", progress=28)
     await publish_progress(task_id, "generating_sections", "正在分段生成文档内容", progress=40)
     with stage_context("generating_sections"):
         if document_type == "proposal_report":
@@ -95,14 +155,20 @@ async def generate_thesis_material_document(
 
     result["document_type"] = document_type
     result["title"] = title
-    result["student_profile"] = request_payload.get("student_profile") or {}
-    result["missing_profile_fields"] = missing_profile_fields(document_type, request_payload)
+    result["missing_profile_fields"] = missing_profile_fields(document_type)
     result["references"] = [item.model_dump(mode="json") for item in references]
+    result["source_outline"] = request_payload["source_outline"]
+    result["source_outline_origin"] = request_payload["source_outline_origin"]
+    result["material_outline"] = request_payload["material_outline"]
+    if request_payload.get("thesis_config"):
+        result["thesis_config"] = request_payload["thesis_config"]
 
     await publish_progress(task_id, "validating", "正在校验结构、引用和个人信息", progress=72)
     with stage_context("validating"):
         if document_type in {"proposal_report", "literature_review"}:
             normalize_citation_claims(result)
+        elif document_type in {"proposal_report", "literature_review", "task_book"}:
+            _remove_inline_citations(document_type, result)
         await repair_length_constraints(document_type, request_payload, result)
         for _ in range(1 if document_type in {"proposal_report", "literature_review"} else 0):
             missing_reference_indexes = _missing_reference_indexes(document_type, result, len(references))
@@ -127,7 +193,9 @@ async def generate_thesis_material_document(
             )
     _validate_result(document_type, result, len(references), request_payload)
     result["reference_quality"] = reference_quality_summary(
-        references, target_count=target, include_foreign=document_type != "task_book",
+        references,
+        chinese_reference_count=chinese_count,
+        english_reference_count=english_count,
     )
     result["quality_warnings"] = result["reference_quality"]["warnings"]
     result["word_count"] = _word_count_metadata(document_type, request_payload, result)
@@ -155,6 +223,61 @@ async def generate_thesis_material_document(
         "fallback_count": 0,
         "truncation_warning": False,
     }
+
+
+async def prepare_material_plan(document_type: str, request_payload: dict[str, Any]) -> None:
+    """旧请求先生成论文大纲，再形成可在任务重试中复用的材料结构。"""
+
+    if document_type not in _MATERIAL_SECTIONS:
+        raise RuntimeError(f"不支持的文档类型: {document_type}")
+    source_outline = request_payload.get("source_outline")
+    if not source_outline:
+        config = request_payload.get("thesis_config") or {}
+        references = request_payload.get("reference_options") or {}
+        outline_response = await generate_outline_for_request(
+            OutlineRequest(
+                title=str(request_payload["title"]),
+                target_word_count=int(
+                    config.get("target_word_count") or request_payload.get("target_word_count") or 8000
+                ),
+                chinese_reference_count=int(references.get("chinese_reference_count", 10)),
+                english_reference_count=int(references.get("english_reference_count", 0)),
+                three_level=bool(config.get("three_level")),
+                aboutmsg=str(config.get("aboutmsg") or ""),
+            )
+        )
+        source_outline = [chapter.model_dump(mode="json") for chapter in outline_response.outline]
+        request_payload["source_outline"] = source_outline
+        request_payload["source_outline_origin"] = "generated"
+    else:
+        request_payload.setdefault("source_outline_origin", "user_confirmed")
+    if request_payload.get("material_outline"):
+        return
+    chapter_titles = [str(chapter["chapter"]) for chapter in source_outline]
+    request_payload["material_outline"] = {
+        "document_type": document_type,
+        "source_chapters": chapter_titles,
+        "sections": [
+            {
+                "key": key,
+                "title": title,
+                "focus_chapters": _material_section_focus(key, chapter_titles),
+            }
+            for key, title in _MATERIAL_SECTIONS[document_type]
+        ],
+    }
+
+
+def _material_section_focus(key: str, chapter_titles: list[str]) -> list[str]:
+    """按材料章节用途引用已确认论文大纲的相关部分。"""
+
+    if key in {"references", "schedule", "schedule_items"}:
+        return []
+    if key in {"abstract", "introduction", "research_purpose", "design_background"}:
+        return chapter_titles[:2]
+    if key in {"conclusion", "future_trends", "research_gaps"}:
+        return chapter_titles[-2:]
+    return chapter_titles
 
 
 def _build_schedule(
@@ -207,7 +330,7 @@ def _validate_result(
 ) -> None:
     request = request or {}
     if document_type in {"proposal_report", "literature_review"}:
-        text_parts = _collect_text(result, ignored_keys={"references", "student_profile", "approval"})
+        text_parts = _collect_text(result, ignored_keys=_NON_BODY_FIELDS)
         citations = {int(value) for value in _CITATION.findall("\n".join(text_parts))}
         invalid = sorted(index for index in citations if index < 1 or index > reference_count)
         if invalid:
@@ -223,9 +346,7 @@ def _validate_result(
         validation_minimum = max(80, round(length_range.target * 0.35))
         validation_maximum = round(length_range.target * 2)
         if not validation_minimum <= length <= validation_maximum:
-            raise RuntimeError(
-                f"字段{field}字数{length}不在{validation_minimum}-{validation_maximum}范围内"
-            )
+            raise RuntimeError(f"字段{field}字数{length}不在{validation_minimum}-{validation_maximum}范围内")
     if document_type == "literature_review":
         themes = result.get("themes")
         if not isinstance(themes, list) or len(themes) != plan.theme_count or plan.theme is None:
@@ -240,9 +361,7 @@ def _validate_result(
     if document_type in {"proposal_report", "literature_review"}:
         body_length = _material_body_char_count(document_type, result)
         if not plan.body_minimum <= body_length <= plan.body_maximum:
-            raise RuntimeError(
-                f"正文总字数{body_length}不在{plan.body_minimum}-{plan.body_maximum}范围内"
-            )
+            raise RuntimeError(f"正文总字数{body_length}不在{plan.body_minimum}-{plan.body_maximum}范围内")
     if document_type == "task_book":
         if len(result.get("design_goals", [])) not in range(5, 11):
             raise RuntimeError("任务书设计目标数量不合法")
@@ -252,8 +371,55 @@ def _validate_result(
             raise RuntimeError("任务书主要指标数量不合法")
     if document_type == "proposal_report":
         outline = result.get("writing_outline")
-        if not isinstance(outline, list) or not 5 <= len(outline) <= 8:
+        source_outline = request.get("source_outline") or []
+        expected = len(source_outline)
+        if (
+            not isinstance(outline, list)
+            or (expected and len(outline) != expected)
+            or (not expected and not 1 <= len(outline) <= 20)
+        ):
             raise RuntimeError("开题报告写作提纲数量不合法")
+
+
+def _remove_inline_citations(document_type: str, result: dict[str, Any]) -> None:
+    """不标注模式仅移除正文编号，保留完整的真实文献列表。"""
+
+    if document_type == "task_book":
+        for field in (
+            "design_background",
+            "design_goals",
+            "module_tasks",
+            "deliverable_forms",
+            "deliverable_requirements",
+            "main_indicators",
+        ):
+            if field in result:
+                result[field] = _strip_numeric_citations(result[field])
+        return
+    fields = (
+        tuple(build_length_plan(document_type, {}).fields)
+        if document_type == "proposal_report"
+        else LITERATURE_BODY_FIELDS
+    )
+    for field in fields:
+        if isinstance(result.get(field), str):
+            result[field] = _NUMERIC_CITATION.sub("", result[field])
+    if document_type == "literature_review":
+        themes = result.get("themes")
+        if isinstance(themes, list):
+            for theme in themes:
+                if isinstance(theme, dict) and isinstance(theme.get("content"), str):
+                    theme["content"] = _NUMERIC_CITATION.sub("", theme["content"])
+
+
+def _strip_numeric_citations(value: Any) -> Any:
+    if isinstance(value, str):
+        return _NUMERIC_CITATION.sub("", value)
+    if isinstance(value, list):
+        return [_strip_numeric_citations(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_numeric_citations(item) for key, item in value.items()}
+    return value
 
 
 def _missing_reference_indexes(
@@ -263,7 +429,7 @@ def _missing_reference_indexes(
 ) -> list[int]:
     if reference_count <= 0:
         return []
-    text_parts = _collect_text(result, ignored_keys={"references", "student_profile", "approval"})
+    text_parts = _collect_text(result, ignored_keys=_NON_BODY_FIELDS)
     citations = {int(value) for value in _CITATION.findall("\n".join(text_parts))}
     required_coverage = _required_reference_coverage(document_type, reference_count)
     needed = max(required_coverage - len(citations), 0)
@@ -379,18 +545,11 @@ def _material_body_char_count(document_type: str, result: dict[str, Any]) -> int
     elif document_type == "literature_review":
         fields = LITERATURE_BODY_FIELDS
     else:
-        return sum(
-            text_length(str(result.get(field) or ""))
-            for field in ("design_background",)
-        )
+        return sum(text_length(str(result.get(field) or "")) for field in ("design_background",))
     total = sum(text_length(str(result.get(field) or "")) for field in fields)
     themes = result.get("themes")
     if document_type == "literature_review" and isinstance(themes, list):
-        total += sum(
-            text_length(str(theme.get("content") or ""))
-            for theme in themes
-            if isinstance(theme, dict)
-        )
+        total += sum(text_length(str(theme.get("content") or "")) for theme in themes if isinstance(theme, dict))
     return total
 
 
@@ -405,20 +564,36 @@ def _ensure_body_minimum_after_normalization(
     missing = plan.body_minimum - _material_body_char_count(document_type, result)
     if missing <= 0:
         return
+    candidates: tuple[str, ...]
     if document_type == "proposal_report":
         field = "research_content"
         candidates = (
-            "研究过程还将结合校园实际交易流程，对功能边界、数据一致性与交互可用性进行验证。",
-            "各模块的分析、设计与测试结果将形成可追溯关系，保证研究内容能够被复核。",
-            "最终方案将根据功能验证结果进行修订，并明确尚待后续研究的问题。",
+            "研究过程还将结合课题对象的实际条件，明确研究边界，并对所采用的方法与资料来源进行检查。",
+            "各阶段的分析、实施与验证结果将形成可追溯关系，使研究内容和论证过程能够被复核。",
+            "最终方案将根据验证结果进行修订，并明确尚待后续研究的问题。",
         )
     elif document_type == "literature_review":
         field = "conclusion"
         candidates = (
-            "综合现有研究，后续仍需结合校园业务流程，对系统架构、交易治理与用户体验开展协同验证。",
-            "相关方案的适用边界应通过可复核的功能测试和实际使用反馈进一步说明。",
-            "上述研究线索为本课题的需求分析、技术选择和评价设计提供了审慎依据。",
+            "综合现有研究，后续仍需结合本课题的具体研究对象与应用条件，对主要观点开展进一步验证。",
+            "相关结论的适用边界应通过可复核的资料、方法和实际反馈进一步说明。",
+            "上述研究线索为本课题的问题界定、方法选择和评价设计提供了审慎依据。",
         )
+        source_outline = request.get("source_outline")
+        if isinstance(source_outline, list):
+            # 固定补充语仍不足时，依据用户确认的章节提出后续核查方向，不补造研究结论。
+            for chapter in source_outline:
+                if isinstance(chapter, dict) and (title := str(chapter.get("chapter") or "").strip()):
+                    candidates += (
+                        f"围绕“{title}”涉及的问题，后续需要对研究对象、证据来源与方法边界逐项核查，"
+                        "并明确可复核的评价路径。",
+                    )
+            for chapter in source_outline:
+                if not isinstance(chapter, dict):
+                    continue
+                for section in chapter.get("sections") or []:
+                    if isinstance(section, dict) and (title := str(section.get("name") or "").strip()):
+                        candidates += (f"针对“{title}”，后续研究需要说明资料选择依据、比较维度及论证的适用范围。",)
     else:
         return
     supplements: list[str] = []
@@ -455,7 +630,6 @@ def _word_count_metadata(
             "writing_outline",
             "schedule",
             "references",
-            "student_profile",
             "approval",
             "signature_area",
         ],

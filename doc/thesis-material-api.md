@@ -28,7 +28,15 @@ POST /api/v1/thesis-materials/literature-reviews
 POST /api/v1/thesis-materials/task-books
 ```
 
-标题是唯一必填字段，长度为 2-200 个字符。学校、学生、导师和日期等资料均为可选；未提供时，DOCX 使用“【待补充：学号】”这类不可误认为真实数据的提示。提交响应和最终结构化结果同时返回 `missing_profile_fields`，调用方应在付费提交前后提醒用户补齐。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
+标题是唯一必填字段，长度为 2-200 个字符。接口不接收学生、学校和导师等封面资料；开题报告、任务书的 DOCX 固定使用“【待补充：学号】”等明显占位，由用户下载后自行填写。提交响应和最终结构化结果仍返回固定的 `missing_profile_fields`，调用方应在下载前提醒用户。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
+
+三类接口还可接收 `source_outline`（与论文 `outline_json` 相同的 `OutlineChapter[]` 结构）和 `thesis_config`（公共论文表单快照：`target_word_count`、`three_level`、`aboutmsg`）。传入用户确认的大纲时直接复用；省略时先生成论文大纲，再建立材料自己的 `material_outline`。两份大纲均保存到请求快照与结构化结果，重试复用。开题报告的论文写作提纲严格沿用源大纲的章节顺序；综述和任务书保留各自文档结构。材料篇幅由顶层 `target_word_count` 控制。
+
+`reference_options` 改为分别指定 `chinese_reference_count`、`english_reference_count`，单项允许 0；合计范围分别为开题报告 8–40、文献综述 12–60、任务书 5–30。默认中英文数量分别为 10/5、15/5、10/0。正文默认执行文献标注与引用校验，缺少的语言文献明确提示，不跨语言补齐。已移除 `target_count`、`include_foreign` 和 `thesis_config` 中的 `codetype`、`wxquote`，调用方需同步升级。
+
+```json
+{"reference_options": {"chinese_reference_count": 10, "english_reference_count": 5}}
+```
 
 最小请求：
 
@@ -45,7 +53,7 @@ POST /api/v1/thesis-materials/task-books
   "document_type":"proposal_report",
   "status":"queued",
   "charged_points":20,
-  "missing_profile_fields":["student_no","class_name","major","internal_advisor","year_month"]
+  "missing_profile_fields":["school","name","student_no","class_name","major","internal_advisor","year_month"]
 }
 ```
 
@@ -79,13 +87,13 @@ GET /api/v1/admin/thesis-material-orders/{order_id}
 
 ## 结果结构
 
-开题报告包含研究目的、文献综述、主要内容、重点难点、研究方法、可行性与创新点、严格三级写作提纲、进度计划、参考文献和审核区。文献综述包含摘要、关键词、国内外研究、3-6 个主题比较、方法比较、研究不足、趋势、结论和参考文献。任务书包含设计背景、技术栈建议、设计目标、模块任务、进度计划、成果形式、成果要求、主要指标、参考资料和审核区。
+开题报告包含研究目的、文献综述、主要内容、重点难点、研究方法、可行性与创新点、与源大纲同层级的写作提纲、进度计划、参考文献和审核区。文献综述包含摘要、关键词、国内外研究、3-6 个主题比较、方法比较、研究不足、趋势、结论和参考文献。任务书包含设计背景、技术栈建议、设计目标、模块任务、进度计划、成果形式、成果要求、主要指标、参考资料和审核区。
 
 参考文献只来自已配置的万方、SerpAPI/Google Scholar、CrossRef 等真实来源。系统以业务主题匹配作为准入门槛，再使用技术主题重合度排序，并过滤撤稿、著录信息不完整和仅技术栈相似但业务无关的记录。目标总量与中外文比例均尽力满足，有限补检仍不足时按实际数量继续生成，不用弱相关文献凑数；任务书优先使用相关中文资料。共享检索预算与降级规则见 [论文生成流程](thesis-generation.md#参考文献)。请求中参考文献数量的范围仍是目标配置范围，不代表实际结果的交付下限。
 
 结构化结果包含 `reference_quality` 和 `quality_warnings`，明确目标数量、实际总数及语言构成。零文献返回空列表，DOCX 明示“待补充参考文献”，综述内容仅作待核实研究方向/检索计划，不声称已有来源支持。引用覆盖校验按实际文献执行，零文献不要求引用；已完成状态不因这些提示而转换为失败。
 
-任务书在用户没有通过 `research_context.additional_requirements` 明确提供数值指标时，不会把模型自行提出的响应时间、并发量、覆盖率、成果字数或演示时长等阈值当成已确认要求。若模型仍给出示例数值，正文会标记“建议值（待导师确认）”，结构化结果通过 `generated_suggestion_fields` 标识 `design_goals`、`deliverable_requirements` 或 `main_indicators` 等对应字段。
+任务书仅在用户通过 `research_context.additional_requirements` 或 `thesis_config.aboutmsg` 明确给出对应数值指标时，才将其视为已确认要求；单独出现的 Spring Boot 3 等技术版本号不算。模型额外提出的响应时间、并发量、覆盖率、成果字数或演示时长等阈值会在正文中标记“建议值（待导师确认）”，结构化结果通过 `generated_suggestion_fields` 标识 `design_goals`、`deliverable_requirements` 或 `main_indicators` 等对应字段。
 
 ## 错误码
 

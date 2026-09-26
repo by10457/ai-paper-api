@@ -140,19 +140,18 @@ def _parse_and_validate_outline(
 
 
 def _build_outline_instructions(
-    codetype: str,
-    language: str,
+    chinese_reference_count: int,
+    english_reference_count: int,
     three_level: bool,
     aboutmsg: str,
     target_word_count: int,
 ) -> dict[str, str]:
     return {
-        "codetype_instruction": (
-            f"本论文涉及 {codetype} 代码实现，大纲中需包含代码/系统实现相关章节"
-            if codetype and codetype != "否"
-            else "本论文不要求代码实现章节。"
+        "code_instruction": "依据题目与研究内容判断是否需要代码或系统实现章节；不得为非编程课题强行添加代码。",
+        "reference_instruction": (
+            f"参考文献规划目标：中文{chinese_reference_count}篇、英文{english_reference_count}篇；"
+            "按研究需要规划相关研究章节，不编造具体文献。"
         ),
-        "language_instruction": ("需要考虑外文文献综述内容" if language == "是" else "不强制要求外文文献综述内容"),
         "three_level_instruction": (
             (
                 "短篇论文的每个二级章节必须且只生成1个三级小节，三级小节总数不得超过12个"
@@ -171,8 +170,8 @@ def _build_outline_instructions(
 async def generate_outline(
     title: str,
     target_word_count: int = 8000,
-    codetype: str = "否",
-    language: str = "否",
+    chinese_reference_count: int = 25,
+    english_reference_count: int = 0,
     three_level: bool = False,
     aboutmsg: str = "",
 ) -> dict[str, Any]:
@@ -182,7 +181,9 @@ async def generate_outline(
     inputs = {
         "title": title,
         "target_word_count": target_word_count,
-        **_build_outline_instructions(codetype, language, three_level, aboutmsg, target_word_count),
+        **_build_outline_instructions(
+            chinese_reference_count, english_reference_count, three_level, aboutmsg, target_word_count
+        ),
     }
     async with text_short_slot():
         result = await chain.ainvoke(inputs)

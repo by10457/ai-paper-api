@@ -312,7 +312,6 @@ def _add_abstract_en_page(document: DocxDocument, abstract: str, keywords: str) 
         )
 
 
-
 def _add_acknowledgment_page(
     document: DocxDocument,
     acknowledgment: str,
@@ -320,6 +319,7 @@ def _add_acknowledgment_page(
 ) -> None:
     """致谢页。"""
     p_title = document.add_paragraph()
+    p_title.paragraph_format.page_break_before = True
     p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_title.paragraph_format.first_line_indent = Pt(0)
     p_title.paragraph_format.space_after = Pt(12)
@@ -348,6 +348,7 @@ def _add_references_page(
 ) -> None:
     """参考文献页。"""
     p_title = document.add_paragraph()
+    p_title.paragraph_format.page_break_before = True
     p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_title.paragraph_format.first_line_indent = Pt(0)
     p_title.paragraph_format.space_after = Pt(12)

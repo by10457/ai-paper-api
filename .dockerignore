@@ -27,6 +27,8 @@
 !public/**
 !sql/
 !sql/**
+!migrations/
+!migrations/**
 
 # Runtime/local files are provided by bind mounts or env files.
 .env

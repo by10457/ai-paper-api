@@ -513,16 +513,12 @@ async def _extract_scholar_keyword_queries(llm: BaseChatModel, title: str, outli
         )
 
 
-def _build_reference_targets(wxnum: int, *, include_chinese: bool, include_english: bool) -> ReferenceTargets:
-    """按中英文开关计算参考文献目标数量。"""
-
-    target_total = max(1, wxnum)
-    if include_chinese and include_english:
-        target_en = max(3, round(target_total / 3))
-        return ReferenceTargets(total=target_total, zh=target_total - target_en, en=target_en)
-    if include_english:
-        return ReferenceTargets(total=target_total, zh=0, en=target_total)
-    return ReferenceTargets(total=target_total, zh=target_total, en=0)
+def _build_reference_targets(chinese_reference_count: int, english_reference_count: int) -> ReferenceTargets:
+    """按请求的中英文篇数生成 Scholar 检索配额。"""
+    return ReferenceTargets(
+        total=chinese_reference_count + english_reference_count,
+        zh=chinese_reference_count, en=english_reference_count,
+    )
 
 
 async def _search_scholar_results(
@@ -798,15 +794,16 @@ async def _format_scholar_references(
 async def generate_references(
     title: str,
     outline: str,
-    wxnum: int = 25,
-    include_english: bool = True,
-    *,
-    include_chinese: bool = True,
+    chinese_reference_count: int = 25,
+    english_reference_count: int = 0,
 ) -> str:
     """
     使用 SerpAPI + CrossRef 生成参考文献列表。
     SERPAPI_KEY 未配置时直接返回空字符串。
     """
+    include_chinese = chinese_reference_count > 0
+    include_english = english_reference_count > 0
+    wxnum = chinese_reference_count + english_reference_count
     settings = get_settings()
     if not settings.serpapi_key:
         logger.info("SERPAPI_KEY 未配置，跳过参考文献生成")
@@ -835,7 +832,7 @@ async def generate_references(
         logger.warning("参考文献搜索结果为空，跳过生成")
         return ""
 
-    targets = _build_reference_targets(wxnum, include_chinese=include_chinese, include_english=include_english)
+    targets = _build_reference_targets(chinese_reference_count, english_reference_count)
     zh_filtered, en_filtered = await _filter_scholar_results(
         llm,
         title,

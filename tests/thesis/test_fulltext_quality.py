@@ -4,6 +4,8 @@ import re
 from types import SimpleNamespace
 from typing import cast
 
+import pytest
+
 from models.paper import PaperOrder
 from schemas.thesis_material import ReferenceRecord
 from services.thesis.business.order_service import PaperOrderService
@@ -16,7 +18,7 @@ from services.thesis.content.quality_service import (
     sanitize_abstract_truth,
     sanitize_generated_claims,
 )
-from services.thesis.profile_policy import mark_acknowledgment_as_draft, normalize_thesis_profile
+from services.thesis.profile_policy import acknowledgment_placeholder, thesis_profile_placeholders
 
 
 # 订单归一化应识别规范字段和常见下游别名
@@ -30,11 +32,9 @@ def test_normalize_generate_input_keeps_full_paper_configuration() -> None:
             outline_json=[{"chapter": "绪论", "sections": [{"name": "背景", "abstract": "背景"}]}],
             config_form={
                 "about_msg": "避免编造真实运营数据。",
-                "form_params": {
-                    "lengthnum": "5000",
-                    "reference_count": 12,
-                    "include_foreign": True,
-                },
+                "target_word_count": 5000,
+                "chinese_reference_count": 8,
+                "english_reference_count": 4,
             },
         ),
     )
@@ -42,8 +42,8 @@ def test_normalize_generate_input_keeps_full_paper_configuration() -> None:
     normalized = PaperOrderService.normalize_generate_input(order)
 
     assert normalized.target_word_count == 5000
-    assert normalized.wxnum == 12
-    assert normalized.language == "是"
+    assert normalized.chinese_reference_count == 8
+    assert normalized.english_reference_count == 4
     assert normalized.writing_requirements == "避免编造真实运营数据。"
 
 
@@ -376,6 +376,21 @@ def test_sanitize_generated_claims_marks_unconfirmed_api_style() -> None:
     assert "unconfirmed_technology" in suggestion_fields
 
 
+def test_sanitize_generated_claims_preserves_code_fence_balance() -> None:
+    """代码围栏不能被事实清理移除，否则后续章节会被 Word 构建器当作代码。"""
+
+    original = "# 1 系统实现\n```java\nclass Demo {}\n```\n# 2 系统测试\n测试方案待确认。"
+
+    sanitized, _ = sanitize_generated_claims(
+        original,
+        writing_requirements="用户确认使用 Java",
+        confirmed_technologies={"Java"},
+    )
+
+    assert sanitized.count("```") == 2
+    assert "```java\nclass Demo {}\n```\n# 2 系统测试" in sanitized
+
+
 # 超长正文应收敛到目标容差且保留完整标题结构
 def test_constrain_fulltext_length_preserves_headings() -> None:
     """验证正文篇幅收敛不会删除用户确认的大纲标题。"""
@@ -396,6 +411,28 @@ def test_constrain_fulltext_length_preserves_headings() -> None:
     assert 450 <= count_visible_words(constrained) <= 550
     for heading in ("# 1 绪论", "## 1.1 研究背景", "# 2 系统设计", "## 2.1 总体架构"):
         assert heading in constrained
+
+
+def test_constrain_fulltext_length_allows_small_shortfall_with_quality_warning() -> None:
+    """略低于 90% 的完整正文应交付并由任务元数据标记字数告警。"""
+
+    text = "# 1 绪论\n" + "研究内容与方法。" * 56
+    actual = count_visible_words(text)
+    target = round(actual / 0.884)
+
+    assert 0.85 <= actual / target < 0.9
+    assert constrain_fulltext_length(text, target_word_count=target) == text
+
+
+def test_constrain_fulltext_length_still_rejects_severely_short_body() -> None:
+    """正文严重不足时仍应拒绝，避免把残缺论文包装成成功产物。"""
+
+    text = "# 1 绪论\n" + "研究内容与方法。" * 40
+    actual = count_visible_words(text)
+    target = round(actual / 0.75)
+
+    with pytest.raises(RuntimeError, match="低于最低要求"):
+        constrain_fulltext_length(text, target_word_count=target)
 
 
 # 引用应按首次出现顺序重排并形成正文与文末列表闭环
@@ -469,17 +506,7 @@ def test_zero_references_removes_all_citation_forms_and_generated_bibliography()
 def test_normalize_thesis_profile_marks_missing_fields() -> None:
     """验证论文封面和声明页不会继续输出隐蔽旧占位值。"""
 
-    profile, missing_fields = normalize_thesis_profile(
-        {
-            "author": "作者姓名",
-            "advisor": "指导教师",
-            "major": "专业名称",
-            "school": "XX大学XX学院",
-            "year_month": "",
-            "student_id": "",
-            "student_class": "",
-        }
-    )
+    profile, missing_fields = thesis_profile_placeholders()
 
     assert set(missing_fields) == {
         "author",
@@ -489,6 +516,7 @@ def test_normalize_thesis_profile_marks_missing_fields() -> None:
         "year_month",
         "student_id",
         "student_class",
+        "degree_type",
     }
     assert profile["author"] == "【待补充：作者姓名】"
     assert profile["school"] == "【待补充：学院（系）】"
@@ -497,7 +525,7 @@ def test_normalize_thesis_profile_marks_missing_fields() -> None:
 def test_mark_acknowledgment_as_draft_when_profile_is_missing() -> None:
     """个人信息缺失时，致谢不得伪装成用户真实经历。"""
 
-    acknowledgment = mark_acknowledgment_as_draft("感谢导师和同学。", missing_profile_fields=["author"])
+    acknowledgment = acknowledgment_placeholder()
 
     assert acknowledgment.startswith("【待补充：致谢内容需依据本人真实经历填写")
     assert "感谢导师和同学" not in acknowledgment

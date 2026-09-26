@@ -2,7 +2,7 @@ import asyncio
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import AsyncMock
 
 import pytest
@@ -31,12 +31,15 @@ from services.thesis_material.generation import (
     _ensure_body_minimum_after_normalization,
     _ensure_reference_coverage_after_normalization,
     _material_body_char_count,
+    _missing_reference_indexes,
     _validate_result,
     _word_count_metadata,
+    prepare_material_plan,
 )
 from services.thesis_material.llm_service import (
     _literature_body_length,
     _mark_unconfirmed_generated_metrics,
+    _normalize_keywords,
     _repair_missing_text_fields,
     _trim_to_character_limit,
     _trim_to_complete_sentences,
@@ -46,17 +49,37 @@ from services.thesis_material.llm_service import (
     repair_reference_coverage,
 )
 from services.thesis_material.order_service import ThesisMaterialOrderService
-from services.thesis_material.profile_policy import missing_profile_fields, profile_with_placeholders
+from services.thesis_material.profile_policy import (
+    missing_profile_fields,
+    profile_with_placeholders,
+)
 from services.thesis_material.reference_service import (
     _merge_records,
     _rank_records_by_relevance,
     _select_records,
-    _target_language_quota,
     parse_reference_records,
 )
 
 
-def test_literature_missing_text_field_is_repaired(monkeypatch) -> None:
+def test_literature_keywords_accept_delimited_text_and_outline_fallback() -> None:
+    outline = [
+        {"chapter": "研究背景与意义", "sections": [{"name": "校园二手交易业务流程"}]},
+        {"chapter": "平台架构设计", "sections": [{"name": "前后端分离架构"}]},
+    ]
+
+    assert _normalize_keywords(
+        "校园二手交易；Spring Boot、Vue",
+        title="校园二手交易平台研究",
+        source_outline=outline,
+    ) == ["校园二手交易", "Spring Boot", "Vue"]
+    assert _normalize_keywords(
+        None,
+        title="校园二手交易平台研究",
+        source_outline=outline,
+    ) == ["校园二手交易平台研究", "校园二手交易业务流程", "前后端分离架构"]
+
+
+def test_literature_missing_text_field_is_repaired(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
     async def fake_ask_json(system: str, prompt: str, *, max_tokens: int = 5000) -> dict[str, str]:
@@ -92,7 +115,7 @@ def test_final_reference_coverage_uses_verifiable_title_statements() -> None:
         )
         for index in range(1, 13)
     ]
-    result = {
+    result: dict[str, Any] = {
         field: "校园交易平台相关研究。" * 40
         for field in (
             "abstract",
@@ -106,10 +129,7 @@ def test_final_reference_coverage_uses_verifiable_title_statements() -> None:
         )
     }
     result["domestic_research"] += "".join(f"已有文献线索[{index}]。" for index in range(1, 11))
-    result["themes"] = [
-        {"title": f"主题{index}", "content": "校园二手交易研究比较。" * 40}
-        for index in range(1, 4)
-    ]
+    result["themes"] = [{"title": f"主题{index}", "content": "校园二手交易研究比较。" * 40} for index in range(1, 4)]
 
     _ensure_reference_coverage_after_normalization(
         "literature_review",
@@ -124,7 +144,7 @@ def test_final_reference_coverage_uses_verifiable_title_statements() -> None:
 
 
 def test_thesis_material_routes_are_registered() -> None:
-    routes = {route.path for route in app.routes}
+    routes = {getattr(route, "path", "") for route in app.routes}
     assert "/api/v1/thesis-materials/products" in routes
     assert "/api/v1/thesis-materials/proposal-reports" in routes
     assert "/api/v1/thesis-materials/literature-reviews" in routes
@@ -181,6 +201,24 @@ def test_outline_text_rebuilds_numbering_without_duplicates() -> None:
     ]
 
 
+def test_outline_text_keeps_same_named_user_sections_in_original_order() -> None:
+    outline = [
+        {
+            "title": "绪论",
+            "sections": [
+                {"title": "研究背景", "subsections": []},
+                {"title": "研究背景", "subsections": ["不同场景"]},
+            ],
+        }
+    ]
+    assert _outline_text(outline).splitlines() == [
+        "1 绪论",
+        "1.1 研究背景",
+        "1.2 研究背景",
+        "1.2.1 不同场景",
+    ]
+
+
 def test_generated_text_normalizes_chinese_punctuation() -> None:
     assert _normalize_generated_text("模块 A ；边界： 不处理。 ；完成") == "模块 A；边界： 不处理；完成"
 
@@ -189,11 +227,156 @@ def test_title_is_only_required_request_field() -> None:
     proposal = ProposalReportRequest(title="智慧校园管理平台的设计与实现")
     review = LiteratureReviewRequest(title="生成式人工智能教育应用研究综述")
     task_book = TaskBookRequest(title="校园饭卡管理系统的设计与实现")
-    assert proposal.reference_options.target_count == 15
-    assert review.reference_options.target_count == 20
-    assert task_book.reference_options.target_count == 10
-    assert task_book.reference_options.include_foreign is False
-    assert task_book.student_profile.name is None
+    assert proposal.reference_options.model_dump() == {"chinese_reference_count": 10, "english_reference_count": 5}
+    assert review.reference_options.model_dump() == {"chinese_reference_count": 15, "english_reference_count": 5}
+    assert task_book.reference_options.chinese_reference_count == 10
+    assert task_book.reference_options.english_reference_count == 0
+    assert "student_profile" not in task_book.model_dump()
+
+
+def test_material_requests_accept_confirmed_outline_and_common_config() -> None:
+    outline = [
+        {
+            "chapter": "第1章 绪论",
+            "sections": [
+                {
+                    "name": "1.1 研究背景",
+                    "abstract": "概述研究背景",
+                    "subsections": [{"name": "1.1.1 现实需求", "abstract": "说明现实需求"}],
+                }
+            ],
+        }
+    ]
+    payload = {
+        "title": "校园服务平台研究",
+        "source_outline": outline,
+        "thesis_config": {
+            "target_word_count": 8000,
+            "three_level": True,
+            "aboutmsg": "围绕校园服务流程",
+        },
+    }
+    for request_type in (ProposalReportRequest, LiteratureReviewRequest, TaskBookRequest):
+        request = request_type.model_validate(payload)
+        snapshot = request.model_dump(mode="json")
+        assert snapshot["source_outline"][0]["chapter"] == "绪论"
+        assert "codetype" not in snapshot["thesis_config"]
+    assert ProposalReportRequest.model_validate(payload).target_word_count == 4000
+    assert LiteratureReviewRequest.model_validate(payload).target_word_count == 6000
+
+
+def test_task_book_recognizes_user_supplied_numeric_requirements_in_common_config() -> None:
+    request = {"thesis_config": {"aboutmsg": "由导师确认并发 50 人作为测试要求"}}
+    assert llm_service._has_user_numeric_requirements(request) is True
+    assert llm_service._has_user_numeric_requirements({"thesis_config": {"target_word_count": 8000}}) is False
+    assert llm_service._has_user_numeric_requirements({"thesis_config": {"aboutmsg": "使用Spring Boot 3"}}) is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_material_request_generates_and_reuses_source_outline(monkeypatch: pytest.MonkeyPatch) -> None:
+    outline = {
+        "title": "通用课题",
+        "outline": [
+            {
+                "chapter": "研究背景",
+                "sections": [{"name": "研究意义", "abstract": "研究意义", "subsections": []}],
+            }
+        ],
+    }
+    generator = AsyncMock(
+        return_value=SimpleNamespace(
+            outline=[SimpleNamespace(model_dump=lambda mode: outline["outline"][0])],
+        )
+    )
+    monkeypatch.setattr(material_generation, "generate_outline_for_request", generator)
+    request: dict[str, Any] = {"title": "通用课题", "target_word_count": 2500}
+
+    await prepare_material_plan("proposal_report", request)
+    first_plan = request["material_outline"]
+    await prepare_material_plan("proposal_report", request)
+
+    generator.assert_awaited_once()
+    assert request["source_outline_origin"] == "generated"
+    assert request["source_outline"][0]["chapter"] == "研究背景"
+    assert first_plan is request["material_outline"]
+    assert first_plan["sections"][0]["key"] == "research_purpose"
+    assert first_plan["sections"][0]["focus_chapters"] == ["研究背景"]
+
+
+def test_invalid_source_outline_is_rejected_before_paid_submission() -> None:
+    with pytest.raises(ValidationError):
+        ProposalReportRequest.model_validate(
+            {
+                "title": "校园服务平台研究",
+                "source_outline": [{"chapter": "绪论", "sections": []}],
+            }
+        )
+
+
+def test_default_material_schedule_does_not_assume_a_software_project() -> None:
+    proposal = "\n".join(item[0] for item in PROPOSAL_SCHEDULE)
+    task_book = "\n".join(item[0] for item in TASK_BOOK_SCHEDULE)
+    for technical_phrase in ("数据库", "后端", "接口联调", "系统测试"):
+        assert technical_phrase not in proposal
+        assert technical_phrase not in task_book
+
+
+@pytest.mark.asyncio
+async def test_proposal_uses_confirmed_outline_without_regenerating_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = ProposalReportRequest.model_validate(
+        {
+            "title": "校园服务平台研究",
+            "source_outline": [
+                {
+                    "chapter": "第一章 绪论",
+                    "sections": [
+                        {
+                            "name": "1.1 研究背景",
+                            "abstract": "背景",
+                            "subsections": [{"name": "1.1.1 业务需求", "abstract": "需求"}],
+                        }
+                    ],
+                }
+            ],
+            "thesis_config": {"aboutmsg": "聚焦校园场景", "three_level": True},
+        }
+    ).model_dump(mode="json")
+    request["material_outline"] = {"sections": [{"title": "用户指定材料结构"}]}
+    prompts: list[str] = []
+
+    async def fake_ask_text(_system: str, prompt: str, *, max_tokens: int = 5000) -> str:
+        del max_tokens
+        prompts.append(prompt)
+        return "正文"
+
+    async def fake_ask_json(_system: str, prompt: str, *, max_tokens: int = 5000) -> dict[str, str]:
+        del max_tokens
+        prompts.append(prompt)
+        return {
+            key: "正文"
+            for key in (
+                "research_content",
+                "key_points",
+                "difficulties",
+                "research_methods",
+                "feasibility_and_innovation",
+            )
+        }
+
+    monkeypatch.setattr(llm_service, "_ask_text", fake_ask_text)
+    monkeypatch.setattr(llm_service, "_ask_json", fake_ask_json)
+    result = await llm_service.generate_proposal_content(request, [])
+
+    assert result["writing_outline"] == [
+        {
+            "title": "绪论",
+            "sections": [{"title": "研究背景", "subsections": ["业务需求"]}],
+        }
+    ]
+    assert "已有用户确认的论文大纲" in prompts[-1]
+    assert "聚焦校园场景" in prompts[-1]
+    assert "codetype" not in prompts[-1]
+    assert "用户指定材料结构" in prompts[-1]
 
 
 def test_submit_response_exposes_missing_profile_fields() -> None:
@@ -201,13 +384,12 @@ def test_submit_response_exposes_missing_profile_fields() -> None:
     assert "missing_profile_fields" in fields
 
 
-def test_missing_profile_fields_are_explicit_and_placeholders_are_not_fake_data() -> None:
-    request = {"student_profile": {"school": "测试大学", "name": "张三"}}
-    missing = missing_profile_fields("proposal_report", request)
-    profile = profile_with_placeholders(request)
-    assert "school" not in missing
+def test_missing_profile_fields_are_fixed_and_placeholders_are_not_fake_data() -> None:
+    missing = missing_profile_fields("proposal_report")
+    profile = profile_with_placeholders()
+    assert "school" in missing
     assert "student_no" in missing
-    assert profile["school"] == "测试大学"
+    assert profile["school"] == "【待补充：学校】"
     assert profile["student_no"] == "【待补充：学号】"
 
 
@@ -217,9 +399,11 @@ def test_thesis_material_order_number_uses_domain_prefix() -> None:
 
 def test_schedule_rejects_reversed_dates() -> None:
     try:
-        ProposalReportRequest(
-            title="智慧校园管理平台的设计与实现",
-            schedule_options={"start_date": "2026-05-01", "end_date": "2026-04-01"},
+        ProposalReportRequest.model_validate(
+            {
+                "title": "智慧校园管理平台的设计与实现",
+                "schedule_options": {"start_date": "2026-05-01", "end_date": "2026-04-01"},
+            }
         )
     except ValidationError as exc:
         assert "开始日期不能晚于结束日期" in str(exc)
@@ -285,9 +469,8 @@ def test_merge_reference_records_deduplicates_and_renumbers() -> None:
     assert merged[1].formatted.startswith("[2]")
 
 
-def test_reference_language_quota_and_selection() -> None:
-    assert _target_language_quota(15) == (10, 5)
-    assert _target_language_quota(20) == (14, 6)
+@pytest.mark.parametrize("chinese,english", [(10, 5), (0, 5), (3, 1), (10, 0)])
+def test_reference_language_quota_and_selection(chinese: int, english: int) -> None:
     records = [
         ReferenceRecord(index=index, title=f"中文{index}", language="zh", formatted=f"[{index}]中文{index}")
         for index in range(1, 11)
@@ -297,15 +480,15 @@ def test_reference_language_quota_and_selection() -> None:
         )
         for index in range(1, 6)
     ]
-    selected = _select_records(records, 15, 10, 5)
-    assert len(selected) == 15
-    assert sum(item.language == "zh" for item in selected) == 10
-    assert sum(item.language == "en" for item in selected) == 5
-    assert [item.index for item in selected] == list(range(1, 16))
+    selected = _select_records(records, chinese + english, chinese, english)
+    assert len(selected) == chinese + english
+    assert sum(item.language == "zh" for item in selected) == chinese
+    assert sum(item.language == "en" for item in selected) == english
+    assert [item.index for item in selected] == list(range(1, chinese + english + 1))
 
 
 def test_reference_lexical_ranking_only_admits_direct_chinese_topic_match() -> None:
-    def record(index: int, title: str, language: str) -> ReferenceRecord:
+    def record(index: int, title: str, language: Literal["zh", "en"]) -> ReferenceRecord:
         return ReferenceRecord(
             index=index,
             title=title,
@@ -314,9 +497,9 @@ def test_reference_lexical_ranking_only_admits_direct_chinese_topic_match() -> N
             source="Journal of Information Systems",
             volume="12",
             issue="2",
-                pages="10-20",
-                doi="10.1000/test" if language == "en" else "",
-                language=language,
+            pages="10-20",
+            doi="10.1000/test" if language == "en" else "",
+            language=language,
             formatted=f"[{index}]Author A.{title}[J].Journal of Information Systems,2024,12(2):10-20.",
         )
 
@@ -385,38 +568,124 @@ def test_reference_validation_requires_minimum_coverage() -> None:
         raise AssertionError("正文引用量不足时应校验失败")
 
 
+def test_source_outline_citations_do_not_count_as_generated_body_citations() -> None:
+    result = {
+        "source_outline": [{"chapter": "研究背景[1]", "sections": []}],
+        "thesis_config": {"aboutmsg": "请审查文献[2]"},
+        "writing_outline": [{"title": "研究背景[3]", "sections": []}],
+    }
+    assert _missing_reference_indexes("proposal_report", result, 2) == [1, 2]
+
+
+def test_task_book_no_citation_mode_removes_nested_body_indexes_only() -> None:
+    result: dict[str, Any] = {
+        "design_background": "课题背景[1]。",
+        "module_tasks": [{"name": "资料整理[2]", "responsibilities": "说明依据[3]"}],
+        "references": [{"formatted": "[1]真实资料"}],
+    }
+    material_generation._remove_inline_citations("task_book", result)
+    assert result["design_background"] == "课题背景。"
+    assert result["module_tasks"][0]["name"] == "资料整理"
+    assert result["references"][0]["formatted"] == "[1]真实资料"
+
+
 # 共享文献服务降级后，材料的后置引用校验也必须按实际零篇处理
 @pytest.mark.parametrize("document_type", ["proposal_report", "literature_review"])
 async def test_material_generation_without_references_is_explicit_draft(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, document_type: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    document_type: str,
 ) -> None:
     """替换外部服务，保留真实长度、引用校验和 DOCX 构建。"""
-    request = {"title": "测试材料", "target_word_count": 3500}
+    request = {
+        "title": "测试材料",
+        "target_word_count": 3500,
+        "reference_options": {"chinese_reference_count": 12, "english_reference_count": 0},
+        "source_outline": [
+            {"chapter": f"章节{index}", "sections": [{"name": "背景", "abstract": "背景", "subsections": []}]}
+            for index in range(5)
+        ],
+    }
     plan = build_length_plan(document_type, request)
     content: dict[str, Any] = {field: "测" * value.target for field, value in plan.fields.items()}
     content["writing_outline"] = [{"title": f"章节{index}", "children": []} for index in range(5)]
     content["keywords"] = ["测试", "计划"]
     if plan.theme is not None:
-        content["themes"] = [{"title": f"待核实方向{index}", "content": "测" * plan.theme.target} for index in range(plan.theme_count)]
-    monkeypatch.setattr(material_generation, "retrieve_reference_records", AsyncMock(return_value=[]))
+        content["themes"] = [
+            {"title": f"待核实方向{index}", "content": "测" * plan.theme.target} for index in range(plan.theme_count)
+        ]
+    reference_lookup = AsyncMock(return_value=[])
+    monkeypatch.setattr(material_generation, "retrieve_reference_records", reference_lookup)
     monkeypatch.setattr(material_generation, "publish_progress", AsyncMock())
     monkeypatch.setattr(material_generation, "generate_proposal_content", AsyncMock(return_value=content))
     monkeypatch.setattr(material_generation, "generate_literature_review_content", AsyncMock(return_value=content))
-    monkeypatch.setattr(material_generation, "get_settings", lambda: SimpleNamespace(THESIS_MATERIAL_OUTPUT_ROOT=str(tmp_path)))
+    monkeypatch.setattr(
+        material_generation, "get_settings", lambda: SimpleNamespace(THESIS_MATERIAL_OUTPUT_ROOT=str(tmp_path))
+    )
     monkeypatch.setattr(llm_service, "_ask_text", AsyncMock(side_effect=AssertionError("合规字数不得调用模型")))
     result = await material_generation.generate_thesis_material_document(
-        task_id="isolated-material", document_type=document_type, request_payload=request,
+        task_id="isolated-material",
+        document_type=document_type,
+        request_payload=request,
     )
     assert result["result_data"]["references"] == []
     assert result["result_data"]["reference_quality"]["status"] == "unavailable"
     assert result["result_data"]["quality_warnings"][0]["code"] == "references_unavailable"
+    assert reference_lookup.await_args is not None
+    assert reference_lookup.await_args.kwargs["english_reference_count"] == 0
+    assert reference_lookup.await_args.kwargs["chinese_reference_count"] == 12
     with zipfile.ZipFile(result["docx_path"]) as archive:
         xml = archive.read("word/document.xml").decode()
     assert "未检索到可用的真实文献" in xml
     assert "[1]" not in xml
 
 
-def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_default_inline_citations_keeps_verified_reference_list(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    request = ProposalReportRequest.model_validate(
+        {
+            "title": "通用课题研究",
+            "target_word_count": 2500,
+            "source_outline": [
+                {
+                    "chapter": "绪论",
+                    "sections": [{"name": "研究背景", "abstract": "背景", "subsections": []}],
+                }
+            ],
+            "reference_options": {"chinese_reference_count": 8, "english_reference_count": 0},
+        }
+    ).model_dump(mode="json")
+    plan = build_length_plan("proposal_report", request)
+    content: dict[str, Any] = {field: "测" * length.target for field, length in plan.fields.items()}
+    content["research_purpose"] += "相关资料[1]。"
+    content["writing_outline"] = [{"title": "绪论", "sections": [{"title": "研究背景", "subsections": []}]}]
+    reference = ReferenceRecord(index=1, title="可核验研究", formatted="[1]测试作者.可核验研究[J].测试期刊,2025:1-3.")
+    monkeypatch.setattr(material_generation, "retrieve_reference_records", AsyncMock(return_value=[reference]))
+    monkeypatch.setattr(material_generation, "publish_progress", AsyncMock())
+    monkeypatch.setattr(material_generation, "generate_proposal_content", AsyncMock(return_value=content))
+    monkeypatch.setattr(
+        material_generation, "get_settings", lambda: SimpleNamespace(THESIS_MATERIAL_OUTPUT_ROOT=str(tmp_path))
+    )
+    monkeypatch.setattr(llm_service, "_ask_text", AsyncMock(side_effect=AssertionError("合规字数不得调用模型")))
+
+    output = await material_generation.generate_thesis_material_document(
+        task_id="no-inline-cites",
+        document_type="proposal_report",
+        request_payload=request,
+    )
+
+    result = output["result_data"]
+    assert "[1]" in result["research_purpose"]
+    assert len(result["references"]) == 1
+    with zipfile.ZipFile(output["docx_path"]) as archive:
+        xml = archive.read("word/document.xml").decode()
+    assert "可核验研究" in xml
+
+
+def test_length_repair_only_regenerates_invalid_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     request = {"title": "测试课题", "target_word_count": 2500}
     plan = build_length_plan("proposal_report", request)
@@ -427,7 +696,7 @@ def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
         return "修" * plan.fields["research_purpose"].target
 
     monkeypatch.setattr("services.thesis_material.llm_service._ask_text", fake_ask_text)
-    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
     result["research_purpose"] = "长" * 1200
 
     asyncio.run(repair_length_constraints("proposal_report", request, result))
@@ -437,7 +706,49 @@ def test_length_repair_only_regenerates_invalid_fields(monkeypatch) -> None:
     assert len(result["research_status_and_trends"]) == plan.fields["research_status_and_trends"].target
 
 
-def test_target_word_count_drives_dynamic_section_budgets(monkeypatch) -> None:
+def test_literature_minor_section_shortfall_keeps_valid_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = {"title": "测试课题", "target_word_count": 6000}
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    short_conclusion = "正" * round(plan.fields["conclusion"].minimum * 0.88)
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["conclusion"] = short_conclusion
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
+    ]
+    monkeypatch.setattr(llm_service, "_ask_text", AsyncMock(return_value=short_conclusion))
+
+    asyncio.run(repair_length_constraints("literature_review", request, result))
+
+    assert result["conclusion"] == short_conclusion
+    _validate_result("literature_review", result, 0, request)
+
+
+def test_literature_final_shortfall_uses_confirmed_outline() -> None:
+    request = {
+        "title": "测试课题",
+        "target_word_count": 6000,
+        "source_outline": [
+            {"chapter": "系统需求分析"},
+            {"chapter": "系统设计"},
+            {"chapter": "系统测试"},
+        ],
+    }
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result: dict[str, Any] = {field: "正" * length.minimum for field, length in plan.fields.items()}
+    result["domestic_research"] = result["domestic_research"][:-220]
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.minimum} for index in range(plan.theme_count)
+    ]
+
+    _ensure_body_minimum_after_normalization("literature_review", request, result)
+
+    assert _literature_body_length(result) >= plan.body_minimum
+    assert "系统需求分析" in result["conclusion"]
+
+
+def test_target_word_count_drives_dynamic_section_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     async def unexpected_llm_call(*_args: object, **_kwargs: object) -> str:
         raise AssertionError("处于动态预算内时不应调用模型")
 
@@ -445,7 +756,7 @@ def test_target_word_count_drives_dynamic_section_budgets(monkeypatch) -> None:
     request = {"title": "测试课题", "target_word_count": 3500}
     plan = build_length_plan("literature_review", request)
     assert plan.theme is not None
-    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
     result["themes"] = [
         {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
     ]
@@ -459,7 +770,7 @@ def test_target_word_count_drives_dynamic_section_budgets(monkeypatch) -> None:
     assert 3400 <= _literature_body_length(result) <= 3600
 
 
-def test_reference_coverage_repair_preserves_dynamic_theme_count(monkeypatch) -> None:
+def test_reference_coverage_repair_preserves_dynamic_theme_count(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_ask_text(*_args: object, **_kwargs: object) -> str:
         return "补充比较[12]。"
 
@@ -489,7 +800,7 @@ def test_section_validation_allows_small_post_processing_drift() -> None:
     request = {"target_word_count": 3500}
     plan = build_length_plan("literature_review", request)
     assert plan.theme is not None
-    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
     result["introduction"] += "[1]"
     result["foreign_research"] = "正" * (plan.fields["foreign_research"].maximum + 20) + "[2]"
     result["themes"] = [
@@ -502,7 +813,7 @@ def test_section_validation_allows_small_post_processing_drift() -> None:
 def test_word_count_metadata_excludes_outline_schedule_and_references() -> None:
     request = {"target_word_count": 2500}
     plan = build_length_plan("proposal_report", request)
-    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
     result.update({"writing_outline": ["不计入" * 1000], "schedule": ["不计入" * 1000]})
     metadata = _word_count_metadata("proposal_report", request, result)
     assert metadata["actual"] == _material_body_char_count("proposal_report", result)
@@ -514,10 +825,9 @@ def test_post_normalization_shortage_uses_uncited_topic_supplement() -> None:
     request = {"target_word_count": 3500}
     plan = build_length_plan("literature_review", request)
     assert plan.theme is not None
-    result = {field: "正" * length.target for field, length in plan.fields.items()}
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
     result["themes"] = [
-        {"title": f"主题{index}", "content": "正" * plan.theme.target}
-        for index in range(plan.theme_count)
+        {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
     ]
     result["domestic_research"] = result["domestic_research"][:-400]
 
@@ -525,6 +835,39 @@ def test_post_normalization_shortage_uses_uncited_topic_supplement() -> None:
 
     assert _material_body_char_count("literature_review", result) >= plan.body_minimum
     assert "[" not in result["conclusion"]
+
+
+def test_literature_final_shortfall_can_use_all_confirmed_sections() -> None:
+    request = {
+        "title": "校园二手交易平台研究",
+        "target_word_count": 6000,
+        "source_outline": [
+            {
+                "chapter": f"研究主题{index}",
+                "sections": [{"name": f"研究子题{index}-{section}"} for section in range(2)],
+            }
+            for index in range(6)
+        ],
+    }
+    plan = build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result: dict[str, Any] = {field: "正" * length.target for field, length in plan.fields.items()}
+    result["themes"] = [
+        {"title": f"主题{index}", "content": "正" * plan.theme.target} for index in range(plan.theme_count)
+    ]
+    excess = _material_body_char_count("literature_review", result) - plan.body_minimum + 450
+    for field in ("domestic_research", "foreign_research", "method_comparison", "introduction"):
+        removed = min(len(result[field]), excess)
+        result[field] = result[field][:-removed]
+        excess -= removed
+        if excess <= 0:
+            break
+    assert _material_body_char_count("literature_review", result) == plan.body_minimum - 450
+
+    _ensure_body_minimum_after_normalization("literature_review", request, result)
+
+    assert _material_body_char_count("literature_review", result) >= plan.body_minimum
+    assert "研究子题" in result["conclusion"]
 
 
 def test_task_book_generated_numeric_metrics_are_marked_as_unconfirmed() -> None:
@@ -554,6 +897,14 @@ def test_task_book_generated_numeric_metrics_are_marked_as_unconfirmed() -> None
     _mark_unconfirmed_generated_metrics({"research_context": {}}, all_fields)
     assert all_fields["generated_suggestion_fields"] == ["deliverable_requirements"]
     assert all_fields["deliverable_requirements"][0].startswith("建议值（待导师确认）：")
+
+    partly_confirmed = {"main_indicators": ["支持并发50人", "接口响应不超过300ms"]}
+    _mark_unconfirmed_generated_metrics(
+        {"thesis_config": {"aboutmsg": "导师要求并发50人"}},
+        partly_confirmed,
+    )
+    assert partly_confirmed["main_indicators"][0] == "支持并发50人"
+    assert partly_confirmed["main_indicators"][1].startswith("建议值（待导师确认）：")
 
 
 def test_unsupported_citation_conclusion_is_rewritten_from_reference_title() -> None:
@@ -634,7 +985,7 @@ def test_build_three_document_types(tmp_path: Path) -> None:
             formatted="[1]张三.测试文献[J].测试期刊,2024,1(1):1-5.",
         )
     ]
-    request = {"student_profile": {}, "research_context": {}}
+    request: dict[str, Any] = {"research_context": {}}
     proposal_result = {
         "research_purpose": "研究目的[1]。",
         "research_status_and_trends": "研究现状[1]。",
@@ -684,6 +1035,14 @@ def test_build_three_document_types(tmp_path: Path) -> None:
         )
         paths.append(path)
     assert all(path.exists() for path in paths)
+    for path in (paths[0], paths[2]):
+        document = Document(str(path))
+        visible_text = "\n".join(
+            [paragraph.text for paragraph in document.paragraphs]
+            + [cell.text for table in document.tables for row in table.rows for cell in row.cells]
+        )
+        assert "【待补充：学校】" in visible_text
+        assert "【待补充：学生姓名】" in visible_text
     for path in paths:
         with zipfile.ZipFile(path) as package:
             package_xml = "\n".join(
@@ -695,12 +1054,12 @@ def test_build_three_document_types(tmp_path: Path) -> None:
         assert 'w:eastAsia="宋体"' in package_xml
         assert 'w:eastAsia="黑体"' in package_xml
     assert "指导教师意见" in "\n".join(
-        cell.text for table in Document(paths[0]).tables for row in table.rows for cell in row.cells
+        cell.text for table in Document(str(paths[0])).tables for row in table.rows for cell in row.cells
     )
     assert "审核意见" in "\n".join(
-        cell.text for table in Document(paths[2]).tables for row in table.rows for cell in row.cells
+        cell.text for table in Document(str(paths[2])).tables for row in table.rows for cell in row.cells
     )
-    task_document = Document(paths[2])
+    task_document = Document(str(paths[2]))
     task_paragraph = task_document.tables[-1].cell(0, 0).paragraphs[0]
     assert round(float(task_paragraph.paragraph_format.line_spacing), 2) == 1.15
     assert task_paragraph.runs[0].font.size.pt == 10
@@ -736,12 +1095,12 @@ def test_proposal_uses_short_non_splitting_rows_and_grouped_approval(tmp_path: P
     build_thesis_material_document(
         document_type="proposal_report",
         title="测试课题",
-        request={"student_profile": {}},
+        request={},
         result=result,
         references=[reference],
         output_path=path,
     )
-    document = Document(path)
+    document = Document(str(path))
     assert len(document.tables) == 9
     assert all("w:cantSplit" in row._tr.xml for table in document.tables for row in table.rows)
     assert max(len(row.cells[0].text) for table in document.tables for row in table.rows) <= 450

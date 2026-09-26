@@ -31,8 +31,11 @@ DEFAULT_MIN_CHAPTER_TARGET = 300
 CHAPTER_HEADING_PATTERN = re.compile(r"^#(?!#)[ \t]*(?P<title>\S.*)$")
 # 识别任意 Markdown 标题，用于约束模型不得突破用户确认大纲的最大层级。
 MARKDOWN_HEADING_PATTERN = re.compile(r"^(?P<marks>#{1,6})[ \t]+(?P<title>\S.*)$")
-# 去除模型标题中的章节编号后比较业务标题。
-CHAPTER_NUMBER_PREFIX_PATTERN = re.compile(r"^\s*(?:第\s*[一二三四五六七八九十百零\d]+\s*章|\d+)(?:[\s、:：.\-]+)?")
+# 去除阿拉伯数字及“一、”等中文列表序号；重复序号需逐层剥离。
+CHAPTER_NUMBER_PREFIX_PATTERN = re.compile(
+    r"^\s*(?:(?:第\s*[一二三四五六七八九十百零\d]+\s*章|\d+)(?:[\s、:：.\-]+)?|"
+    r"[一二三四五六七八九十百零]+[、:：.\-]\s*)"
+)
 # 模型供应商常见的输出长度终止原因。
 TOKEN_LIMIT_FINISH_REASONS = {"length", "max_tokens", "max_output_tokens"}
 # Word/WPS 对中文通常逐字计数，对英文和数字按连续词计数。
@@ -220,7 +223,9 @@ def _normalize_chapter_title(title: str) -> str:
         去除章节编号、空白和常见分隔符后的标题键。
     """
 
-    without_number = CHAPTER_NUMBER_PREFIX_PATTERN.sub("", title.strip(), count=1)
+    without_number = title.strip()
+    while (stripped := CHAPTER_NUMBER_PREFIX_PATTERN.sub("", without_number, count=1)) != without_number:
+        without_number = stripped
     return re.sub(r"[\s、:：.\-]+", "", without_number).casefold()
 
 
@@ -246,6 +251,45 @@ def _missing_chapters(chapter_outlines: list[str], text: str) -> list[str]:
         for chapter in chapter_outlines
         if (title := _outline_chapter_title(chapter)) and _normalize_chapter_title(title) not in generated_titles
     ]
+
+
+# 按顺序核对一级标题，防止模型添加同号或额外章节却通过“包含”检查。
+def _chapter_sequence_matches(chapter_outlines: list[str], text: str) -> bool:
+    """判断正文一级标题是否与本批大纲完全一致。
+
+    Args:
+        chapter_outlines: 本批次的一级章节大纲。
+        text: 模型生成或清理后的正文。
+
+    Returns:
+        标题数量、语义和顺序均一致时返回 True。
+    """
+    expected = [_normalize_chapter_title(_outline_chapter_title(chapter)) for chapter in chapter_outlines]
+    actual = [
+        _normalize_chapter_title(match.group("title"))
+        for line in _lines_outside_code_fences(text)
+        if (match := CHAPTER_HEADING_PATTERN.match(line.strip()))
+    ]
+    return actual == expected
+
+
+# 正文经事实清理后再次核对章节，防止后处理破坏 Markdown 结构而静默交付缺章文档。
+def validate_fulltext_chapters(outline: str, full_text: str) -> None:
+    """验证最终正文仍覆盖用户确认大纲的每个一级章节。
+
+    Args:
+        outline: 用户确认的 Markdown 大纲。
+        full_text: 即将写入 Word 的最终 Markdown 正文。
+
+    Raises:
+        RuntimeError: 最终正文缺少一级章节。
+    """
+    missing = _missing_chapters(_split_outline_chapters(outline), full_text)
+    if missing:
+        missing_titles = "、".join(_outline_chapter_title(item) or "未知章节" for item in missing)
+        raise RuntimeError(f"正文生成章节不完整，缺少：{missing_titles}")
+    if not _chapter_sequence_matches(_split_outline_chapters(outline), full_text):
+        raise RuntimeError("正文生成章节结构与大纲不符")
 
 
 # 从字符串或模型消息中提取正文和结束原因
@@ -300,7 +344,6 @@ async def _invoke_fulltext(
     outline: str,
     target_word_count: int,
     references: str,
-    codetype: str,
     writing_requirements: str,
     confirmed_technologies: str,
     evidence_instruction: str,
@@ -312,7 +355,6 @@ async def _invoke_fulltext(
         outline: 本批次章节大纲。
         target_word_count: 本批次目标字数。
         references: 可引用的参考文献文本。
-        codetype: 代码语言类型。
 
     Returns:
         模型正文和结束原因。
@@ -326,11 +368,6 @@ async def _invoke_fulltext(
                 "target_word_count": target_word_count,
                 "target_word_count_max": target_word_count_max,
                 "references": references,
-                "codetype_instruction": (
-                    f"本论文涉及 {codetype} 代码实现，请在系统设计与实现章节中嵌入核心代码片段"
-                    if codetype and codetype != "否"
-                    else ""
-                ),
                 "writing_requirements": writing_requirements or "未提供补充材料",
                 "confirmed_technologies": confirmed_technologies or "未确认具体技术栈",
                 "evidence_instruction": evidence_instruction,
@@ -345,7 +382,6 @@ async def _regenerate_chapters(
     chapter_outlines: list[str],
     target_word_count: int,
     references: str,
-    codetype: str,
     writing_requirements: str,
     confirmed_technologies: str,
     evidence_instruction: str,
@@ -357,7 +393,6 @@ async def _regenerate_chapters(
         chapter_outlines: 需要恢复的章节大纲。
         target_word_count: 每个章节的目标字数。
         references: 可引用的参考文献文本。
-        codetype: 代码语言类型。
 
     Returns:
         按大纲顺序排列的完整章节正文。
@@ -373,13 +408,16 @@ async def _regenerate_chapters(
             chapter_outline,
             target_word_count,
             references,
-            codetype,
             writing_requirements,
             confirmed_technologies,
             evidence_instruction,
         )
         missing = _missing_chapters([chapter_outline], generated.text)
-        if _is_token_limited(generated.finish_reason) or missing:
+        if (
+            _is_token_limited(generated.finish_reason)
+            or missing
+            or not _chapter_sequence_matches([chapter_outline], generated.text)
+        ):
             chapter_title = _outline_chapter_title(chapter_outline) or "未知章节"
             raise RuntimeError(f"正文生成章节不完整：{chapter_title}")
         results.append(generated.text)
@@ -390,7 +428,6 @@ async def generate_fulltext(
     outline: str,
     target_word_count: int = 8000,
     references: str = "",
-    codetype: str = "否",
     writing_requirements: str = "",
     confirmed_technologies: str = "",
     evidence_instruction: str = "未提供真实测试数据，禁止输出实测结论或数据图。",
@@ -401,7 +438,6 @@ async def generate_fulltext(
         outline: 用户确认后的 Markdown 大纲。
         target_word_count: 全文目标字数。
         references: 可引用的参考文献文本。
-        codetype: 代码语言类型，不生成代码时为“否”。
 
     Returns:
         按大纲顺序拼接的完整论文正文。
@@ -440,13 +476,16 @@ async def generate_fulltext(
             "\n\n".join(batch),
             batch_target,
             references,
-            codetype,
             writing_requirements,
             confirmed_technologies,
             evidence_instruction,
         )
         missing = _missing_chapters(batch, generated.text)
-        if _is_token_limited(generated.finish_reason) or missing:
+        if (
+            _is_token_limited(generated.finish_reason)
+            or missing
+            or not _chapter_sequence_matches(batch, generated.text)
+        ):
             logger.warning(
                 "正文批次不完整，改为逐章重生成：start=%d, chapter_count=%d, finish_reason=%s, missing=%s",
                 start + 1,
@@ -460,7 +499,6 @@ async def generate_fulltext(
                     batch,
                     per_chapter_target,
                     references,
-                    codetype,
                     writing_requirements,
                     confirmed_technologies,
                     evidence_instruction,
@@ -470,8 +508,5 @@ async def generate_fulltext(
             generated_parts.append(generated.text)
 
     full_text = _constrain_heading_depth("\n\n".join(generated_parts), outline)
-    missing = _missing_chapters(chapter_outlines, full_text)
-    if missing:
-        missing_titles = "、".join(_outline_chapter_title(item) or "未知章节" for item in missing)
-        raise RuntimeError(f"正文生成章节不完整，缺少：{missing_titles}")
+    validate_fulltext_chapters(outline, full_text)
     return full_text

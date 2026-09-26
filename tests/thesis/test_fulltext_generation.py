@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 from langchain_core.messages import AIMessage
 
+from schemas.thesis import OutlineChapter
 from services.thesis.content import fulltext_service
 
 
@@ -43,10 +44,7 @@ def _outline(chapter_count: int) -> str:
         可供正文服务解析的 Markdown 大纲。
     """
 
-    return "\n\n".join(
-        f"# {index} 第{index}部分\n## {index}.1 核心内容"
-        for index in range(1, chapter_count + 1)
-    )
+    return "\n\n".join(f"# {index} 第{index}部分\n## {index}.1 核心内容" for index in range(1, chapter_count + 1))
 
 
 # 构造完整覆盖指定大纲批次的模型正文
@@ -101,6 +99,67 @@ def test_missing_chapters_ignores_headings_inside_code_fences() -> None:
     assert fulltext_service._missing_chapters(chapters, generated) == [chapters[1]]
 
 
+def test_missing_chapters_accepts_repeated_chinese_list_numbering() -> None:
+    """大纲残留的中文序号与模型改写的数字序号不应误判为漏章。"""
+
+    chapters = fulltext_service._split_outline_chapters("# 1 一、引言\n## 1.1 研究背景")
+
+    assert fulltext_service._missing_chapters(chapters, "# 1 引言\n正文。") == []
+    assert fulltext_service._missing_chapters(chapters, "# 一、引言\n正文。") == []
+    assert fulltext_service._normalize_chapter_title("一体化治理研究") == "一体化治理研究"
+
+
+def test_outline_chapter_strips_chinese_list_numbering() -> None:
+    """结构化大纲只保留章节语义标题，避免编号重复和后续匹配失败。"""
+
+    chapter = OutlineChapter.model_validate(
+        {"chapter": "一、引言", "sections": [{"name": "研究背景", "abstract": "背景。"}]}
+    )
+
+    assert chapter.chapter == "引言"
+
+
+def test_validate_final_fulltext_detects_chapter_hidden_by_unclosed_code_fence() -> None:
+    """后处理若破坏代码围栏，最终结构检查必须阻止缺章文档交付。"""
+
+    outline = _outline(2)
+    broken = "# 1 第1部分\n```python\nprint('demo')\n# 2 第2部分\n正文。"
+
+    with pytest.raises(RuntimeError, match="章节不完整"):
+        fulltext_service.validate_fulltext_chapters(outline, broken)
+
+
+def test_validate_final_fulltext_rejects_extra_chapter() -> None:
+    """即使预期章节都存在，模型插入额外一级标题也不能悄悄交付。"""
+
+    outline = _outline(2)
+    generated = "# 1 第1部分\n正文。\n# 1 额外章节\n正文。\n# 2 第2部分\n正文。"
+
+    with pytest.raises(RuntimeError, match="章节结构与大纲不符"):
+        fulltext_service.validate_fulltext_chapters(outline, generated)
+
+
+async def test_generate_fulltext_regenerates_batch_with_extra_chapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """批次虽含全部预期章节但多出一级标题时应逐章重生成。"""
+
+    responses: Iterator[str | AIMessage] = iter(
+        [
+            "# 1 第1部分\n# 1 额外章节\n# 2 第2部分",
+            "# 1 第1部分\n## 1.1 核心内容\n正文。",
+            "# 2 第2部分\n## 2.1 核心内容\n正文。",
+        ]
+    )
+    chain = FakeFulltextChain(responses)
+    monkeypatch.setattr(fulltext_service, "_build_fulltext_chain", AsyncMock(return_value=chain))
+
+    result = await fulltext_service.generate_fulltext(_outline(2), target_word_count=2000)
+
+    assert len(chain.inputs) == 3
+    assert "额外章节" not in result
+
+
 def test_constrain_heading_depth_strips_model_added_third_level_heading() -> None:
     """关闭三级大纲时，模型自行添加的三级标题只能作为普通正文保留。"""
 
@@ -125,10 +184,7 @@ async def test_generate_fulltext_batches_seven_chapters(
 
     outline = _outline(7)
     batches = fulltext_service._split_outline_chapters(outline)
-    responses = iter(
-        _body_for_outline("\n\n".join(batch))
-        for batch in (batches[:3], batches[3:6], batches[6:])
-    )
+    responses = iter(_body_for_outline("\n\n".join(batch)) for batch in (batches[:3], batches[3:6], batches[6:]))
     chain = FakeFulltextChain(responses)
     monkeypatch.setattr(fulltext_service, "_build_fulltext_chain", AsyncMock(return_value=chain))
 
@@ -148,7 +204,9 @@ async def test_short_paper_does_not_force_three_hundred_words_per_chapter(
 
     outline = _outline(7)
     batches = fulltext_service._split_outline_chapters(outline)
-    chain = FakeFulltextChain(iter(_body_for_outline("\n\n".join(batch)) for batch in (batches[:3], batches[3:6], batches[6:])))
+    chain = FakeFulltextChain(
+        iter(_body_for_outline("\n\n".join(batch)) for batch in (batches[:3], batches[3:6], batches[6:]))
+    )
     monkeypatch.setattr(fulltext_service, "_build_fulltext_chain", AsyncMock(return_value=chain))
 
     await fulltext_service.generate_fulltext(outline, target_word_count=3000)

@@ -25,20 +25,3 @@ ABSTRACT_COMBINED_PROMPT = ChatPromptTemplate.from_messages(
         ("human", "{text_sample}"),
     ]
 )
-
-ACKNOWLEDGMENT_PROMPT = ChatPromptTemplate.from_messages(
-    [
-        (
-            "system",
-            (
-                "你是一位即将毕业的大学生，正在撰写本科毕业论文的致谢部分。\n\n"
-                "要求：\n"
-                "1. 字数 200-350 字\n"
-                "2. 感谢对象包括：指导教师、同学、家人\n"
-                "3. 语言真诚自然，不过度煽情，不使用模板套话\n"
-                "4. 只输出致谢正文，不加「致谢」标题"
-            ),
-        ),
-        ("human", "论文标题：{title}\n指导教师：{advisor}"),
-    ]
-)

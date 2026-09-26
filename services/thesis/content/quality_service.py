@@ -246,6 +246,9 @@ def sanitize_generated_claims(
 
     allow_empirical_data = has_user_empirical_evidence(writing_requirements)
     sanitized, removed_chart = _remove_unverified_charts(full_text, allow_empirical_data)
+    # 结构化图块不应被 Markdown 代码围栏包裹，普通代码围栏则必须完整保留。
+    sanitized = re.sub(r"(?m)^```(?:mermaid|json)[ \t]*\n(?=<<FIGURE>>)", "", sanitized)
+    sanitized = re.sub(r"(?m)(?<=<</FIGURE>>)\n```[ \t]*$", "", sanitized)
     suggestion_fields: set[str] = {"chart_data"} if removed_chart else set()
     protected_figures: list[str] = []
     confirmed_keys = {_technology_key(item) for item in confirmed_technologies}
@@ -288,15 +291,22 @@ def sanitize_generated_claims(
     current_chapter = ""
     current_heading = ""
     test_result_columns: set[int] = set()
+    is_code_block = False
     for line in sanitized.splitlines():
         stripped = line.strip()
+        # 围栏必须成对保留；丢掉结束围栏会让后续章节在 Word 中误入代码块。
+        if stripped.startswith("```"):
+            lines.append(line)
+            is_code_block = not is_code_block
+            continue
+        if is_code_block:
+            lines.append(line)
+            continue
         if _TOP_LEVEL_HEADING.match(stripped):
             current_chapter = stripped
             test_result_columns.clear()
         if _HEADING.match(stripped):
             current_heading = stripped
-        if stripped in {"```", "```json", "```mermaid"}:
-            continue
         if _HEADING.match(stripped):
             lines.append(line)
             if _TOP_LEVEL_HEADING.match(stripped):
@@ -476,7 +486,7 @@ def _trim_line_to_word_limit(line: str, maximum: int) -> str:
 
 # 在保留标题、表格、图和引用句的前提下收敛正文总量
 def constrain_fulltext_length(full_text: str, *, target_word_count: int) -> str:
-    """把完整论文正文控制在目标字数正负 10% 内。
+    """收敛超长正文；略短的完整正文交由任务质量告警标记。
 
     Args:
         full_text: 已完成真实性清理的 Markdown 正文。
@@ -486,14 +496,16 @@ def constrain_fulltext_length(full_text: str, *, target_word_count: int) -> str:
         保留大纲标题和结构化内容的收敛正文。
 
     Raises:
-        RuntimeError: 模型正文低于最低交付字数，或受保护内容本身已超过上限。
+        RuntimeError: 模型正文低于 85% 硬下限，或受保护内容本身已超过上限。
     """
 
     minimum = round(target_word_count * 0.9)
+    hard_minimum = round(target_word_count * 0.85)
     maximum = round(target_word_count * 1.1)
     current = count_visible_words(full_text)
-    if current < minimum:
-        raise RuntimeError(f"正文有效字数{current}低于最低要求{minimum}")
+    # 90% 是质量目标而非重试边界；小幅不足在结果中标记 truncation_warning。
+    if current < hard_minimum:
+        raise RuntimeError(f"正文有效字数{current}低于最低要求{hard_minimum}")
     if current <= maximum:
         return full_text.strip()
 

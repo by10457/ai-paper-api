@@ -119,6 +119,7 @@ COPY --chown=app:app tasks ./tasks
 COPY --chown=app:app utils ./utils
 COPY --chown=app:app public ./public
 COPY --chown=app:app sql ./sql
+COPY --chown=app:app migrations ./migrations
 
 USER app
 
@@ -138,6 +139,7 @@ COPY --chown=app:app tasks ./tasks
 COPY --chown=app:app utils ./utils
 COPY --chown=app:app public ./public
 COPY --chown=app:app sql ./sql
+COPY --chown=app:app migrations ./migrations
 
 USER app
 

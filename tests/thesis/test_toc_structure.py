@@ -53,12 +53,6 @@ def _build_sample_docx() -> Path:
         title=SAMPLE_TITLE,
         full_text=SAMPLE_BODY,
         output_path=str(out),
-        author="测试用户",
-        advisor="导师",
-        degree_type="学士",
-        major="软件工程",
-        school="计算机学院",
-        year_month="2026年5月",
         abstract_zh="中文摘要内容。",
         keywords_zh="关键词1；关键词2",
         abstract_en="English abstract content.",
@@ -75,6 +69,21 @@ def _read_document_xml(docx_path: Path) -> str:
     """Extract word/document.xml as a UTF-8 string."""
     with zipfile.ZipFile(docx_path) as zf:
         return zf.read("word/document.xml").decode("utf-8")
+
+
+def test_back_matter_starts_on_new_page_without_standalone_break() -> None:
+    """A standalone break can spill to the next page and create a blank page."""
+    sample = _build_sample_docx()
+    try:
+        document = DocumentFactory(str(sample))
+        for title in ("参考文献", "致    谢"):
+            position = next(index for index, item in enumerate(document.paragraphs) if item.text == title)
+            paragraph = document.paragraphs[position]
+            assert paragraph.paragraph_format.page_break_before is True
+            previous = document.paragraphs[position - 1]
+            assert 'w:type="page"' not in previous._p.xml
+    finally:
+        sample.unlink(missing_ok=True)
 
 
 # 读取目录 PAGEREF 域当前保存的缓存页码
@@ -144,7 +153,9 @@ def test_dense_toc_uses_compact_line_spacing() -> None:
     _add_toc_page(document, entries)
 
     toc_paragraph = document.paragraphs[1]
-    spacing = toc_paragraph._p.pPr.find(f"{{{NS['w']}}}spacing")
+    paragraph_properties = toc_paragraph._p.pPr
+    assert paragraph_properties is not None
+    spacing = paragraph_properties.find(f"{{{NS['w']}}}spacing")
     assert spacing is not None
     assert spacing.get(f"{{{NS['w']}}}line") == "360"
 

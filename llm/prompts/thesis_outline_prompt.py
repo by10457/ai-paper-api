@@ -52,8 +52,8 @@ THESIS_OUTLINE_PROMPT = ChatPromptTemplate.from_messages(
             (
                 "论文标题：{title}\n"
                 "目标正文字数：{target_word_count}字\n"
-                "{codetype_instruction}\n"
-                "{language_instruction}\n"
+                "{code_instruction}\n"
+                "{reference_instruction}\n"
                 "{three_level_instruction}\n"
                 "{aboutmsg_instruction}"
             ),

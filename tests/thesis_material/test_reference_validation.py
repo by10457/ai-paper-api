@@ -240,8 +240,8 @@ async def test_retrieval_filters_before_merging_and_keeps_english_quota(monkeypa
     result = await service.retrieve_reference_records(
         TOPIC,
         "",
-        target_count=25,
-        include_foreign=True,
+        chinese_reference_count=17,
+        english_reference_count=8,
     )
     assert service._language_counts(result) == (17, 8)
     assert len(result) == 25
@@ -266,7 +266,9 @@ async def test_language_supplement_preserves_semantically_approved_english(
     result = await service._supplement_language_shortage(TOPIC, "", [], 0, 1, {})
     assert service._language_counts(result) == (0, 1)
     assert len(calls) == 1
-    assert calls[0]["include_chinese"] is False
+    assert calls[0]["chinese_reference_count"] == 0
+    assert isinstance(calls[0]["english_reference_count"], int)
+    assert calls[0]["english_reference_count"] > 0
 
 
 # 配额仅是检索目标，重复补检后仍不足时返回真实的可用数量
@@ -290,12 +292,12 @@ async def test_reference_shortage_returns_available_records(
     monkeypatch.setattr(service.reference_service_wfapi, "generate_references", search)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", search)
 
-    records = await service.retrieve_reference_records(TOPIC, "", target_count=25, include_foreign=True)
+    records = await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=17, english_reference_count=8)
 
-    assert len(records) == min(available_count, 25)
+    assert len(records) == min(available_count, 17)
     assert [item.index for item in records] == list(range(1, len(records) + 1))
     assert len(calls) <= 4  # 首检、备用源及中英文各一次无新增补检后停止。
-    quality = service.reference_quality_summary(records, target_count=25, include_foreign=True)
+    quality = service.reference_quality_summary(records, chinese_reference_count=17, english_reference_count=8)
     assert quality["status"] == ("unavailable" if not records else "limited")
     assert quality["actual_count"] == len(records)
     assert quality["warnings"]
@@ -313,7 +315,7 @@ async def test_reference_network_timeout_is_nonfatal(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(service.reference_service_wfapi, "generate_references", timeout)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", timeout)
 
-    assert await service.retrieve_reference_records(TOPIC, "", target_count=25, include_foreign=True) == []
+    assert await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=17, english_reference_count=8) == []
 
 
 # 总预算到期时保留已经通过验证的首批文献
@@ -332,7 +334,7 @@ async def test_reference_deadline_preserves_validated_batch(monkeypatch: pytest.
     monkeypatch.setattr(service, "generate_references", primary)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", fallback)
     monkeypatch.setattr(service, "REFERENCE_TOTAL_TIMEOUT_SECONDS", 0)
-    records = await service.retrieve_reference_records(TOPIC, "", target_count=25, include_foreign=True)
+    records = await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=17, english_reference_count=8)
     assert len(records) == 1
 
 
@@ -345,12 +347,12 @@ async def test_reference_programming_error_is_not_swallowed(monkeypatch: pytest.
 
     monkeypatch.setattr(service, "generate_references", broken)
     with pytest.raises(RuntimeError, match="test internal error"):
-        await service.retrieve_reference_records(TOPIC, "", target_count=25, include_foreign=True)
+        await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=17, english_reference_count=8)
 
 
-# 中文不足时也允许用合格外文继续生成，不强制中文比例
+# 中文不足时仅保留英文配额内的真实文献，不跨语言补齐
 async def test_reference_chinese_shortage_keeps_available_english(monkeypatch: pytest.MonkeyPatch) -> None:
-    """实际五篇外文低于六篇目标时，返回五篇并产生数量与语言提示。"""
+    """五篇英文候选只选请求的两篇，中文不足产生明确提示。"""
     from unittest.mock import AsyncMock
 
     batch = "\n".join(english_reference(i, f"UAV spraying for wheat pest control {i}").formatted for i in range(1, 6))
@@ -360,9 +362,9 @@ async def test_reference_chinese_shortage_keeps_available_english(monkeypatch: p
     monkeypatch.setattr(service.reference_service_wfapi, "generate_references", search)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", search)
     monkeypatch.setattr(service, "_review_reference_relevance", AsyncMock(return_value=set(range(5))))
-    records = await service.retrieve_reference_records(TOPIC, "", target_count=6, include_foreign=True)
-    assert service._language_counts(records) == (0, 5)
-    quality = service.reference_quality_summary(records, target_count=6, include_foreign=True)
+    records = await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=4, english_reference_count=2)
+    assert service._language_counts(records) == (0, 2)
+    quality = service.reference_quality_summary(records, chinese_reference_count=4, english_reference_count=2)
     assert {item["code"] for item in quality["warnings"]} == {
         "reference_count_shortfall",
         "reference_language_shortfall",
@@ -380,6 +382,6 @@ async def test_reference_chinese_only_target_does_not_trigger_foreign_search(mon
     monkeypatch.setattr(service, "generate_references", primary)
     monkeypatch.setattr(service.reference_service_wfapi, "generate_references", fallback)
     monkeypatch.setattr(service.reference_service_serpapi, "generate_references", fallback)
-    records = await service.retrieve_reference_records(TOPIC, "", target_count=1, include_foreign=False)
-    assert service.reference_quality_summary(records, target_count=1, include_foreign=False)["warnings"] == []
-    primary.assert_awaited_once_with(TOPIC, "", wxnum=1, include_english=False)
+    records = await service.retrieve_reference_records(TOPIC, "", chinese_reference_count=1, english_reference_count=0)
+    assert service.reference_quality_summary(records, chinese_reference_count=1, english_reference_count=0)["warnings"] == []
+    primary.assert_awaited_once_with(TOPIC, "", chinese_reference_count=1, english_reference_count=0)

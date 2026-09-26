@@ -16,7 +16,7 @@ def test_reference_provider_defaults_to_wfapi(monkeypatch) -> None:
     monkeypatch.setattr(reference_service.reference_service_serpapi, "generate_references", fake_serpapi_generate_references)
     get_settings.cache_clear()
 
-    references = asyncio.run(reference_service.generate_references("题目", "大纲", wxnum=5))
+    references = asyncio.run(reference_service.generate_references("题目", "大纲", chinese_reference_count=5))
 
     assert references == "[1]中文文献."
     get_settings.cache_clear()
@@ -27,7 +27,8 @@ def test_reference_provider_mixed_renumbers_lines(monkeypatch) -> None:
         return "[1]中文文献一.\n[2]中文文献二."
 
     async def fake_serpapi_generate_references(*args, **kwargs) -> str:
-        assert kwargs["include_chinese"] is False
+        assert kwargs["chinese_reference_count"] == 0
+        assert kwargs["english_reference_count"] == 1
         return "[1]English reference."
 
     monkeypatch.setenv("REFERENCE_PROVIDER_MODE", "mixed")
@@ -35,7 +36,7 @@ def test_reference_provider_mixed_renumbers_lines(monkeypatch) -> None:
     monkeypatch.setattr(reference_service.reference_service_serpapi, "generate_references", fake_serpapi_generate_references)
     get_settings.cache_clear()
 
-    references = asyncio.run(reference_service.generate_references("题目", "大纲", wxnum=3))
+    references = asyncio.run(reference_service.generate_references("题目", "大纲", chinese_reference_count=2, english_reference_count=1))
 
     assert references == "[1]中文文献一.\n[2]中文文献二.\n[3]English reference."
     get_settings.cache_clear()

@@ -51,15 +51,9 @@ async def create_outline_record(user: User, req: PaperOutlineCreateRequest) -> P
         with use_runtime_context(user_id=user.id, stage="outline"):
             outline_data = await generate_outline(
                 req.title,
-                int(req.target_word_count or req.form_params.get("lengthnum") or 8000),
-                str(req.form_params.get("codetype") or "否"),
-                (
-                    "是"
-                    if req.include_foreign is True
-                    else "否"
-                    if req.include_foreign is False
-                    else str(req.form_params.get("language") or "否")
-                ),
+                int(req.target_word_count or 8000),
+                req.chinese_reference_count,
+                req.english_reference_count,
                 req.three_level,
                 req.about_msg,
             )

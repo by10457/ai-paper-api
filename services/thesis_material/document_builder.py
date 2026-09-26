@@ -81,7 +81,7 @@ def _build_proposal(
     references: list[ReferenceRecord],
 ) -> DocumentObject:
     doc = _new_document()
-    profile = profile_with_placeholders(request)
+    profile = profile_with_placeholders()
     context = request.get("research_context") or {}
     _cover_title(doc, profile["school"], "毕业设计（论文）开题报告", title)
     cover_fields = [
@@ -164,7 +164,7 @@ def _build_task_book(
     references: list[ReferenceRecord],
 ) -> DocumentObject:
     doc = _new_document()
-    profile = profile_with_placeholders(request)
+    profile = profile_with_placeholders()
     _cover_title(doc, profile["school"], "毕业设计任务书", "")
     info = doc.add_table(rows=6, cols=6)
     info.style = "Table Grid"
@@ -296,12 +296,11 @@ def _schedule_text(items: list[dict[str, Any]]) -> str:
 
 
 def _outline_text(items: list[dict[str, Any]]) -> str:
-    """把模型生成的结构化论文提纲转换成三级编号文本。"""
+    """按原始顺序呈现提纲，不因重复标题丢弃用户确认的小节。"""
 
     lines: list[str] = []
     for chapter_index, item in enumerate(items, start=1):
         lines.append(f"{chapter_index} {_strip_outline_number(str(item.get('title') or ''))}")
-        seen_section_titles: set[str] = set()
         raw_sections = item.get("sections")
         sections: list[Any] = raw_sections if isinstance(raw_sections, list) else []
         for section_index, section in enumerate(sections, start=1):
@@ -314,9 +313,8 @@ def _outline_text(items: list[dict[str, Any]]) -> str:
             else:
                 section_title = _strip_outline_number(str(section))
                 subsection_items = []
-            if not section_title or section_title in seen_section_titles:
+            if not section_title:
                 continue
-            seen_section_titles.add(section_title)
             lines.append(f"{chapter_index}.{section_index} {section_title}")
             for subsection_index, subsection in enumerate(subsection_items, start=1):
                 lines.append(
@@ -328,9 +326,8 @@ def _outline_text(items: list[dict[str, Any]]) -> str:
             if not isinstance(section, dict):
                 continue
             section_title = _strip_outline_number(str(section.get("title") or ""))
-            if not section_title or section_title in seen_section_titles:
+            if not section_title:
                 continue
-            seen_section_titles.add(section_title)
             lines.append(f"{chapter_index}.{section_index} {section_title}")
             raw_third_level_items = section.get("items")
             third_level_items: list[Any] = raw_third_level_items if isinstance(raw_third_level_items, list) else []

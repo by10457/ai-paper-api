@@ -41,7 +41,7 @@ def test_wfapi_splits_25_references_into_17_chinese_and_8_english(monkeypatch: p
     monkeypatch.setattr(reference_service_wfapi, "_extract_keyword_queries", fake_extract_keyword_queries)
     monkeypatch.setattr(reference_service_wfapi, "_search_wfdata", fake_search_wfdata)
 
-    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", wxnum=25, include_english=True))
+    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", chinese_reference_count=17, english_reference_count=8))
     lines = references.splitlines()
 
     assert len(lines) == 25
@@ -68,7 +68,7 @@ def test_wfapi_returns_chinese_only_when_english_disabled(monkeypatch: pytest.Mo
     monkeypatch.setattr(reference_service_wfapi, "_extract_keyword_queries", fake_extract_keyword_queries)
     monkeypatch.setattr(reference_service_wfapi, "_search_wfdata", fake_search_wfdata)
 
-    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", wxnum=5, include_english=False))
+    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", chinese_reference_count=5, english_reference_count=0))
     lines = references.splitlines()
 
     assert len(lines) == 5
@@ -91,7 +91,7 @@ def test_wfapi_fills_total_count_with_chinese_when_english_empty(monkeypatch: py
     monkeypatch.setattr(reference_service_wfapi, "_extract_keyword_queries", fake_extract_keyword_queries)
     monkeypatch.setattr(reference_service_wfapi, "_search_wfdata_batches", fake_search_wfdata_batches)
 
-    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", wxnum=25, include_english=True))
+    references = asyncio.run(reference_service_wfapi.generate_references("题目", "大纲", chinese_reference_count=17, english_reference_count=8))
     lines = references.splitlines()
 
     assert len(lines) == 25

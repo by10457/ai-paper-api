@@ -169,8 +169,8 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
     async def fake_generate_outline(
         title: str,
         target_word_count: int,
-        codetype: str,
-        language: str,
+        chinese_reference_count: int,
+        english_reference_count: int,
         three_level: bool,
         aboutmsg: str,
     ) -> dict:
@@ -193,7 +193,7 @@ def test_paper_outline_record_success(client: TestClient, monkeypatch: pytest.Mo
     response = client.post(
         "/api/v1/thesis/outlines",
         headers={"Authorization": "Bearer test-token"},
-        json={"title": "基于大模型的论文生成系统", "form_params": {"lengthnum": "8000"}},
+        json={"title": "基于大模型的论文生成系统", "target_word_count": 8000},
     )
 
     assert response.status_code == 200
@@ -325,7 +325,7 @@ def test_order_list_item_does_not_expose_download_url() -> None:
     assert item.download_url is None
 
 
-def test_normalize_generate_input_preserves_direct_cover_fields() -> None:
+def test_normalize_generate_input_excludes_personal_fields() -> None:
     order = cast(
         PaperOrder,
         SimpleNamespace(
@@ -340,10 +340,8 @@ def test_normalize_generate_input_preserves_direct_cover_fields() -> None:
             ],
             config_form={
                 "target_word_count": 12_000,
-                "codetype": "Python",
-                "wxquote": "标注",
-                "language": "是",
-                "wxnum": 35,
+                "chinese_reference_count": 30,
+                "english_reference_count": 5,
                 "author": "张三",
                 "advisor": "李四 教授",
                 "degree_type": "硕士",
@@ -359,17 +357,9 @@ def test_normalize_generate_input_preserves_direct_cover_fields() -> None:
     normalized = PaperOrderService.normalize_generate_input(order)
 
     assert normalized.target_word_count == 12_000
-    assert normalized.codetype == "Python"
-    assert normalized.language == "是"
-    assert normalized.wxnum == 35
-    assert normalized.author == "张三"
-    assert normalized.advisor == "李四 教授"
-    assert normalized.degree_type == "硕士"
-    assert normalized.major == "软件工程"
-    assert normalized.school == "计算机学院"
-    assert normalized.year_month == "2026年06月"
-    assert normalized.student_id == "20260001"
-    assert normalized.student_class == "软件工程1班"
+    assert normalized.chinese_reference_count == 30
+    assert normalized.english_reference_count == 5
+    assert not {"author", "advisor", "degree_type", "major", "school", "year_month", "student_id", "student_class"} & normalized.model_dump().keys()
 
 
 def test_run_paid_paper_order_delegates_to_generation_task(

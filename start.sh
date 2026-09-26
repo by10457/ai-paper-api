@@ -297,6 +297,24 @@ build_images() {
   esac
 }
 
+# 使用待部署镜像和同一环境/网络，在替换应用容器之前执行一次迁移。
+run_database_migrations() {
+  set -- docker run --rm --no-healthcheck --env-file "$SANITIZED_ENV_FILE"
+  if [ -n "$NETWORK_NAME" ]; then
+    set -- "$@" --network "$NETWORK_NAME"
+  fi
+  if is_truthy "$ADD_HOST_GATEWAY"; then
+    set -- "$@" --add-host host.docker.internal:host-gateway
+  fi
+  set -- "$@" "$IMAGE_NAME" python -m migrations.runner
+  log "Checking migration files"
+  "$@" --check || fail "Migration file check failed; existing container was not replaced."
+  log "Checking database connection"
+  "$@" --preflight || fail "Database preflight failed; existing container was not replaced."
+  log "Applying database migrations"
+  "$@" || fail "Database migration failed; inspect partial DDL state before retrying."
+}
+
 deploy_frontend_assets() {
   command -v unzip >/dev/null 2>&1 || fail "unzip is required to deploy public/dist.zip."
   [ -s "$FRONTEND_ARCHIVE_PATH" ] || fail "Frontend archive not found: $FRONTEND_ARCHIVE_PATH"
@@ -465,6 +483,7 @@ mkdir -p "$HOST_LOG_PATH"
 mkdir -p "$HOST_PUBLIC_PATH/output/thesis"
 
 build_images
+run_database_migrations
 deploy_frontend_assets
 
 RUN_ARGS="

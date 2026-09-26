@@ -32,7 +32,24 @@ class TitleRecommendationPayload(BaseModel):
     titles: list[RecommendedTitle] = Field(min_length=20, max_length=20)
 
 
-class OutlineRequest(BaseModel):
+class ReferenceConfig(BaseModel):
+    """中英文参考文献目标；正文默认标注已核验文献。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chinese_reference_count: int = Field(default=25, ge=0, le=100, description="中文参考文献篇数")
+    english_reference_count: int = Field(default=0, ge=0, le=100, description="英文参考文献篇数")
+
+    # 限制总检索规模，允许单一语言，但至少请求一篇文献
+    @model_validator(mode="after")
+    def validate_reference_total(self) -> "ReferenceConfig":
+        """验证两种语言的总数量，返回有效配置。"""
+        if not 1 <= self.chinese_reference_count + self.english_reference_count <= 100:
+            raise ValueError("中英文参考文献总数需在1-100之间")
+        return self
+
+
+class OutlineRequest(ReferenceConfig):
     """生成论文大纲请求。"""
 
     title: str = Field(..., min_length=2, max_length=200, description="论文标题")
@@ -40,8 +57,6 @@ class OutlineRequest(BaseModel):
         default=8000,
         description="目标正文字数",
     )
-    codetype: str = Field(default="否", description="代码语言类型，否=不生成代码")
-    language: str = Field(default="否", description="是否引用外文文献：是/否")
     three_level: bool = Field(default=False, description="是否使用三级目录结构")
     aboutmsg: str = Field(default="", max_length=1000, description="写作方向补充说明")
 
@@ -85,6 +100,7 @@ class OutlineChapter(BaseModel):
     def normalize_chapter(self) -> "OutlineChapter":
         self.chapter = re.sub(r"^\s*第[一二三四五六七八九十百零\d]+章[\s、:：.-]*", "", self.chapter).strip()
         self.chapter = re.sub(r"^\s*\d+[\.\s、-]*", "", self.chapter).strip()
+        self.chapter = re.sub(r"^\s*[一二三四五六七八九十百零]+[、:：.\-]\s*", "", self.chapter).strip()
         if not self.chapter:
             raise ValueError("章节标题不能为空")
         return self
@@ -104,7 +120,7 @@ class OutlineResponse(OutlinePayload):
     title: str
 
 
-class GenerateRequest(BaseModel):
+class GenerateRequest(ReferenceConfig):
     """提交论文生成任务请求。"""
 
     title: str = Field(..., min_length=2, max_length=200, description="论文标题")
@@ -116,42 +132,9 @@ class GenerateRequest(BaseModel):
         default=8000,
         description="目标正文字数",
     )
-    codetype: str = Field(default="否")
-    wxquote: str = Field(default="标注", description="标注/不标注")
-    language: str = Field(default="否")
-    wxnum: int = Field(default=25, description="参考文献条数")
-    reference_count: int | None = Field(
-        default=None,
-        ge=1,
-        le=100,
-        description="参考文献目标数量；提供时优先于兼容字段 wxnum",
-    )
-    include_foreign: bool | None = Field(
-        default=None,
-        description="是否包含外文文献；提供时优先于兼容字段 language",
-    )
     aboutmsg: str = Field(default="", max_length=1000, description="写作方向补充说明或用户提供的事实材料")
-    author: str = Field(default="作者姓名", description="作者姓名")
-    advisor: str = Field(default="指导教师（姓名、职称、单位）", description="指导教师")
-    degree_type: str = Field(default="学士", description="学位类别")
-    major: str = Field(default="专业名称", description="专业")
-    school: str = Field(default="XX大学XX学院", description="学院（系）")
-    year_month: str = Field(default="", description="留空则自动填当前年月")
-    student_id: str = Field(default="", description="学号")
-    student_class: str = Field(default="", description="班级")
     callback_url: str = Field(default="", max_length=1024, description="生成完成后的业务回调地址")
     callback_secret: str = Field(default="", max_length=255, description="生成回调密钥，不填则使用服务默认配置")
-
-    @model_validator(mode="after")
-    def normalize_reference_config(self) -> "GenerateRequest":
-        """让语义明确的新字段覆盖历史兼容字段，避免请求配置被静默忽略。"""
-
-        if self.reference_count is not None:
-            self.wxnum = self.reference_count
-        if self.include_foreign is not None:
-            self.language = "是" if self.include_foreign else "否"
-        return self
-
 
 class GenerateSubmitResponse(BaseModel):
     """提交任务后立即返回。"""
@@ -186,15 +169,12 @@ class TaskStatusResponse(BaseModel):
     result_data: dict[str, Any] = Field(default_factory=dict, description="生成质量、缺失资料与实际生效配置")
 
 
-class PaperOutlineCreateRequest(BaseModel):
+class PaperOutlineCreateRequest(ReferenceConfig):
     """创建可下单的大纲记录。"""
 
     title: str = Field(..., min_length=2, max_length=200)
-    form_params: dict[str, Any] = Field(default_factory=dict)
     about_msg: str = ""
     target_word_count: int | None = Field(default=None, ge=1000, le=50000)
-    reference_count: int | None = Field(default=None, ge=1, le=100)
-    include_foreign: bool | None = None
     three_level: bool = False
     literatures: list[str] = Field(default_factory=list)
     gallery_resources: list[str] = Field(default_factory=list)
@@ -345,19 +325,9 @@ class NormalizedPaperOrder(BaseModel):
     title: str
     outline_json: list[OutlineChapter]
     target_word_count: int
-    codetype: str
-    wxquote: str
-    language: str
-    wxnum: int
+    chinese_reference_count: int
+    english_reference_count: int
     writing_requirements: str = ""
-    author: str = "作者姓名"
-    advisor: str = "指导教师"
-    degree_type: str = "学士"
-    major: str = "专业名称"
-    school: str = "XX大学XX学院"
-    year_month: str = ""
-    student_id: str = ""
-    student_class: str = ""
 
 
 class MermaidFigure(BaseModel):

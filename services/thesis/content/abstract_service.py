@@ -8,7 +8,6 @@ from langchain_core.output_parsers import StrOutputParser
 from llm.client import create_configured_llm
 from llm.prompts.thesis_abstract_prompt import (
     ABSTRACT_COMBINED_PROMPT,
-    ACKNOWLEDGMENT_PROMPT,
 )
 from services.thesis.generation.concurrency import text_short_slot
 
@@ -105,16 +104,3 @@ async def generate_abstracts(
         len(result["abstract_en"]),
     )
     return result
-
-
-async def generate_acknowledgment(title: str, advisor: str) -> str:
-    """生成致谢正文。"""
-    llm = await create_configured_llm(
-        "outline",
-        temperature=0.7,
-        max_tokens=1024,
-    )
-    chain = ACKNOWLEDGMENT_PROMPT | llm | StrOutputParser()
-    async with text_short_slot():
-        result = await chain.ainvoke({"title": title, "advisor": advisor})
-    return result.strip()

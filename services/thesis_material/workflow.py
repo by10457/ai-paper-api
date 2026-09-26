@@ -86,7 +86,7 @@ async def submit_request(
         order_sn=order.order_sn,
         document_type=document_type,
         charged_points=order.paid_points,
-        missing_profile_fields=missing_profile_fields(document_type, request_payload),
+        missing_profile_fields=missing_profile_fields(document_type),
     )
 
 

@@ -744,14 +744,12 @@ async def _search_wfdata_batches(queries: list[str], target_count: int, *, langu
     return documents
 
 
-def _build_wf_reference_targets(wxnum: int, *, include_english: bool) -> WfReferenceTargets:
-    """按是否需要外文文献拆分万方参考文献目标数量。"""
-
-    target_total = max(1, wxnum)
-    if include_english:
-        target_en = max(3, round(target_total / 3))
-        return WfReferenceTargets(total=target_total, zh=target_total - target_en, en=target_en)
-    return WfReferenceTargets(total=target_total, zh=target_total, en=0)
+def _build_wf_reference_targets(chinese_reference_count: int, english_reference_count: int) -> WfReferenceTargets:
+    """按请求的中英文篇数生成万方检索配额。"""
+    return WfReferenceTargets(
+        total=chinese_reference_count + english_reference_count,
+        zh=chinese_reference_count, en=english_reference_count,
+    )
 
 
 async def _search_wf_references(
@@ -876,12 +874,15 @@ async def _record_wf_format_result(
 async def generate_references(
     title: str,
     outline: str,
-    wxnum: int = 25,
-    include_english: bool = True,
+    chinese_reference_count: int = 25,
+    english_reference_count: int = 0,
 ) -> str:
     """使用万方开放平台生成参考文献列表。"""
 
-    targets = _build_wf_reference_targets(wxnum, include_english=include_english)
+    targets = _build_wf_reference_targets(chinese_reference_count, english_reference_count)
+    if targets.total == 0:
+        return ""
+    include_english = english_reference_count > 0
     zh_queries, en_queries = await _extract_keyword_queries(title, outline)
     await _record_wf_keywords(zh_queries, en_queries, targets, include_english=include_english)
 

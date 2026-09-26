@@ -5,6 +5,18 @@
 
 SET NAMES utf8mb4;
 
+-- 部署执行器管理的版本账本，不属于业务 ORM 模型。
+CREATE TABLE IF NOT EXISTS schema_migration (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '迁移记录主键',
+    migration_name VARCHAR(255) NOT NULL COMMENT '迁移文件名',
+    checksum CHAR(64) NOT NULL COMMENT '迁移文件SHA-256校验值',
+    execution_ms INT UNSIGNED NOT NULL COMMENT '执行耗时毫秒',
+    applied_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '执行完成时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_schema_migration_name (migration_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='数据库版本迁移执行记录';
+
+
 CREATE TABLE IF NOT EXISTS `users` (
   `id` int NOT NULL AUTO_INCREMENT,
   `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),

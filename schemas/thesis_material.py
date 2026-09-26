@@ -5,29 +5,18 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from schemas.thesis import OutlineChapter, ReferenceConfig
 
 ThesisMaterialDocumentType = Literal["proposal_report", "literature_review", "task_book"]
 ThesisMaterialTaskStatus = Literal["queued", "generating", "completed", "failed"]
 
 
-class StudentProfile(BaseModel):
-    """文档封面和任务书中的可选学生信息；缺失项会在提交响应中显式返回。"""
-
-    school: str | None = Field(default=None, max_length=200)
-    college: str | None = Field(default=None, max_length=200)
-    name: str | None = Field(default=None, max_length=100)
-    student_no: str | None = Field(default=None, max_length=100)
-    class_name: str | None = Field(default=None, max_length=100)
-    major: str | None = Field(default=None, max_length=200)
-    internal_advisor: str | None = Field(default=None, max_length=100)
-    advisor_title: str | None = Field(default=None, max_length=100)
-    enterprise_advisor: str | None = Field(default=None, max_length=100)
-    year_month: str | None = Field(default=None, max_length=20)
-
-
 class ResearchContext(BaseModel):
     """生成内容所需的研究和技术补充信息。"""
+
+    model_config = ConfigDict(extra="forbid")
 
     direction: str | None = Field(default=None, max_length=1000)
     topic_category: str | None = Field(default=None, max_length=50)
@@ -40,6 +29,8 @@ class ResearchContext(BaseModel):
 class ScheduleOptions(BaseModel):
     """实际日期或相对周次生成配置。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     start_date: date | None = None
     end_date: date | None = None
     total_weeks: int | None = Field(default=None, ge=5, le=52)
@@ -51,19 +42,36 @@ class ScheduleOptions(BaseModel):
         return self
 
 
-class ReferenceOptions(BaseModel):
+class ReferenceOptions(ReferenceConfig):
     """真实参考文献检索配置。"""
 
-    target_count: int
-    # 开题报告/文献综述默认包含外文；任务书可按学校模板仅使用中文资料。
-    include_foreign: bool = True
+
+class ThesisSourceConfig(BaseModel):
+    """下游公共论文表单的快照；材料正文篇幅仍以顶层目标为准。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_word_count: int | None = Field(default=None, ge=1)
+    three_level: bool = False
+    aboutmsg: str = Field(default="", max_length=1000)
 
 
 class BaseThesisMaterialRequest(BaseModel):
     """三类论文材料通用请求。"""
 
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(min_length=2, max_length=200)
-    student_profile: StudentProfile = Field(default_factory=StudentProfile)
+    source_outline: list[OutlineChapter] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=20,
+        description="用户确认的论文大纲；旧版调用方可省略",
+    )
+    thesis_config: ThesisSourceConfig | None = Field(
+        default=None,
+        description="公共论文配置快照；不覆盖材料专用的目标字数和文献配置",
+    )
     research_context: ResearchContext = Field(default_factory=ResearchContext)
     schedule_options: ScheduleOptions = Field(default_factory=ScheduleOptions)
     callback_url: str = Field(default="", max_length=1024)
@@ -75,12 +83,12 @@ class ProposalReportRequest(BaseThesisMaterialRequest):
 
     target_word_count: int = Field(default=4000, ge=2500, le=12000)
     reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(target_count=15, include_foreign=True)
+        default_factory=lambda: ReferenceOptions(chinese_reference_count=10, english_reference_count=5)
     )
 
     @model_validator(mode="after")
     def validate_reference_count(self) -> ProposalReportRequest:
-        if not 8 <= self.reference_options.target_count <= 40:
+        if not 8 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 40:
             raise ValueError("开题报告参考文献数量需在8-40之间")
         return self
 
@@ -90,12 +98,12 @@ class LiteratureReviewRequest(BaseThesisMaterialRequest):
 
     target_word_count: int = Field(default=6000, ge=3500, le=20000)
     reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(target_count=20, include_foreign=True)
+        default_factory=lambda: ReferenceOptions(chinese_reference_count=15, english_reference_count=5)
     )
 
     @model_validator(mode="after")
     def validate_reference_count(self) -> LiteratureReviewRequest:
-        if not 12 <= self.reference_options.target_count <= 60:
+        if not 12 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 60:
             raise ValueError("文献综述参考文献数量需在12-60之间")
         return self
 
@@ -108,12 +116,12 @@ class TaskBookRequest(BaseThesisMaterialRequest):
 
     topic_type: TopicType = "其他"
     reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(target_count=10, include_foreign=False)
+        default_factory=lambda: ReferenceOptions(chinese_reference_count=10, english_reference_count=0)
     )
 
     @model_validator(mode="after")
     def validate_reference_count(self) -> TaskBookRequest:
-        if not 5 <= self.reference_options.target_count <= 30:
+        if not 5 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 30:
             raise ValueError("任务书参考资料数量需在5-30之间")
         return self
 

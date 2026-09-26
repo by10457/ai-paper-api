@@ -1,8 +1,6 @@
-"""论文材料个人信息缺失规则。"""
+"""论文材料封面占位规则。"""
 
 from __future__ import annotations
-
-from typing import Any
 
 _PROFILE_LABELS = {
     "school": "学校",
@@ -38,22 +36,29 @@ _REQUIRED_PROFILE_FIELDS = {
 }
 
 
-def missing_profile_fields(document_type: str, request: dict[str, Any]) -> list[str]:
-    """返回当前材料会显示占位提示的个人信息字段。"""
+# 返回当前材料固定使用占位的封面字段
+def missing_profile_fields(document_type: str) -> list[str]:
+    """返回当前材料会显示占位提示的个人信息字段。
 
-    raw_profile = request.get("student_profile")
-    profile = raw_profile if isinstance(raw_profile, dict) else {}
-    return [
-        field for field in _REQUIRED_PROFILE_FIELDS.get(document_type, ()) if not str(profile.get(field) or "").strip()
-    ]
+    Args:
+        document_type: 材料类型。
+
+    Returns:
+        需要用户下载后自行填写的字段名。
+    """
+
+    return list(_REQUIRED_PROFILE_FIELDS.get(document_type, ()))
 
 
-def profile_with_placeholders(request: dict[str, Any]) -> dict[str, str]:
-    """生成明确可识别的待补充值，避免伪装成已填写的个人信息。"""
+# 始终在文档中写入明显占位，不再处理传入的学生资料
+def profile_with_placeholders() -> dict[str, str]:
+    """生成固定封面占位，避免展示未经确认的个人信息。
 
-    raw_profile = request.get("student_profile")
-    profile = raw_profile if isinstance(raw_profile, dict) else {}
-    return {field: str(profile.get(field) or f"【待补充：{label}】") for field, label in _PROFILE_LABELS.items()}
+    Returns:
+        封面字段及其明确的待补充值。
+    """
+
+    return {field: f"【待补充：{label}】" for field, label in _PROFILE_LABELS.items()}
 
 
 __all__ = ["missing_profile_fields", "profile_with_placeholders"]

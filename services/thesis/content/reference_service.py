@@ -27,37 +27,27 @@ def _renumber_reference_lines(lines: list[str]) -> str:
     return "\n".join(renumbered)
 
 
-async def _generate_mixed_references(title: str, outline: str, wxnum: int, include_english: bool) -> str:
-    if not include_english:
-        return await reference_service_wfapi.generate_references(title, outline, wxnum=wxnum, include_english=False)
-
-    target_total = max(1, wxnum)
-    target_en = max(3, round(target_total / 3))
-    target_zh = max(1, target_total - target_en)
-
-    zh_references = await reference_service_wfapi.generate_references(
-        title,
-        outline,
-        wxnum=target_zh,
-        include_english=False,
-    )
-    en_references = await reference_service_serpapi.generate_references(
-        title,
-        outline,
-        wxnum=target_en,
-        include_english=True,
-        include_chinese=False,
-    )
+async def _generate_mixed_references(title: str, outline: str, chinese_reference_count: int, english_reference_count: int) -> str:
+    zh_references = ""
+    en_references = ""
+    if chinese_reference_count:
+        zh_references = await reference_service_wfapi.generate_references(
+            title, outline, chinese_reference_count=chinese_reference_count, english_reference_count=0,
+        )
+    if english_reference_count:
+        en_references = await reference_service_serpapi.generate_references(
+            title, outline, chinese_reference_count=0, english_reference_count=english_reference_count,
+        )
 
     lines = _split_reference_lines(zh_references) + _split_reference_lines(en_references)
-    return _renumber_reference_lines(lines[:target_total])
+    return _renumber_reference_lines(lines[:chinese_reference_count + english_reference_count])
 
 
 async def generate_references(
     title: str,
     outline: str,
-    wxnum: int = 25,
-    include_english: bool = True,
+    chinese_reference_count: int = 25,
+    english_reference_count: int = 0,
 ) -> str:
     """按配置选择参考文献来源并生成编号列表。"""
 
@@ -66,23 +56,23 @@ async def generate_references(
         return await reference_service_wfapi.generate_references(
             title,
             outline,
-            wxnum=wxnum,
-            include_english=include_english,
+            chinese_reference_count=chinese_reference_count,
+            english_reference_count=english_reference_count,
         )
     if mode == REFERENCE_MODE_SERPAPI:
         return await reference_service_serpapi.generate_references(
             title,
             outline,
-            wxnum=wxnum,
-            include_english=include_english,
+            chinese_reference_count=chinese_reference_count,
+            english_reference_count=english_reference_count,
         )
     if mode == REFERENCE_MODE_MIXED:
-        return await _generate_mixed_references(title, outline, wxnum, include_english)
+        return await _generate_mixed_references(title, outline, chinese_reference_count, english_reference_count)
 
     logger.warning("未知参考文献生成模式 %r，已使用默认万方模式", mode)
     return await reference_service_wfapi.generate_references(
         title,
         outline,
-        wxnum=wxnum,
-        include_english=include_english,
+        chinese_reference_count=chinese_reference_count,
+        english_reference_count=english_reference_count,
     )

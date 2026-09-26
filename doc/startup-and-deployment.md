@@ -74,6 +74,22 @@ ENV_FILE=.env.docker sh start.sh
 
 `Dockerfile` 不直接执行 `uv sync --frozen` 安装依赖，而是先从 `uv.lock` 导出锁定版本的 requirements，再通过国内镜像源安装，避免服务器访问 `files.pythonhosted.org` 卡住。
 
+## 数据库自动增量升级
+
+`start.sh` 在构建后、发布前端和替换应用容器前，用待部署镜像执行迁移文件预检、数据库只读连接检查，再自动应用未执行版本。与应用使用相同的环境文件、Docker 网络和 host-gateway；`fast/full/none` 部署均执行，`deps` 只构建依赖，不运行迁移。API worker 和 scheduler 不重复执行迁移。
+
+迁移放在 `migrations/models/`，规范见 [迁移说明](../migrations/README.md)。数据库 `schema_migration` 保存版本、校验和、完成时间。失败返回非零退出码并停止部署，旧容器尚未替换；数据库 DDL 可能已部分生效，不能认为停止部署等于回滚数据库。先备份、确认兼容基线和维护窗口。多副本部署需自行协调旧 worker 停止写入，迁移锁只保护迁移器。
+
+全新数据库仍先执行 `sql/init.sql`，迁移器不会自动导入演示用户。已初始化到最新结构的库会跳过已存在对象并登记版本。既有同名对象不会自动修正结构漂移，上线前需对照初始化结构检查。部署账号需要执行对应 CREATE/ALTER/INDEX/外键及账本读写权限。
+
+本地可执行：
+
+```bash
+uv run python -m migrations.runner --check     # 不连接数据库
+uv run python -m migrations.runner --preflight # 只读连通性检查
+uv run python -m migrations.runner             # 实际升级本地目标库
+```
+
 ## 进程角色
 
 `APP_ROLE` 支持：

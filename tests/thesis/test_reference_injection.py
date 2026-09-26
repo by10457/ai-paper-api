@@ -56,9 +56,6 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
             "keywords_en": "keyword",
         }
 
-    async def fake_generate_acknowledgment(title: str, advisor: str) -> str:
-        calls.append("ack")
-        return "感谢。"
 
     async def fake_render_all_figures(**kwargs):
         calls.append("render")
@@ -75,7 +72,6 @@ def test_generate_thesis_document_injects_references_before_fulltext(monkeypatch
     monkeypatch.setattr(thesis, "_retrieve_verified_references", fake_retrieve_verified_references)
     monkeypatch.setattr(thesis, "generate_fulltext", fake_generate_fulltext)
     monkeypatch.setattr(thesis, "generate_abstracts", fake_generate_abstracts)
-    monkeypatch.setattr(thesis, "generate_acknowledgment", fake_generate_acknowledgment)
     monkeypatch.setattr(thesis, "extract_figure_placeholders", lambda full_text: [])
     monkeypatch.setattr(thesis, "split_by_render_method", lambda placeholders: ([], [], [], []))
     monkeypatch.setattr(thesis, "render_all_figures", fake_render_all_figures)
@@ -127,8 +123,6 @@ def test_generate_thesis_document_does_not_hide_internal_reference_errors(monkey
             "keywords_en": "",
         }
 
-    async def fake_generate_acknowledgment(title: str, advisor: str) -> str:
-        return ""
 
     async def fake_render_all_figures(**kwargs):
         return {}
@@ -136,7 +130,6 @@ def test_generate_thesis_document_does_not_hide_internal_reference_errors(monkey
     monkeypatch.setattr(thesis, "_retrieve_verified_references", fake_retrieve_verified_references)
     monkeypatch.setattr(thesis, "generate_fulltext", fake_generate_fulltext)
     monkeypatch.setattr(thesis, "generate_abstracts", fake_generate_abstracts)
-    monkeypatch.setattr(thesis, "generate_acknowledgment", fake_generate_acknowledgment)
     monkeypatch.setattr(thesis, "extract_figure_placeholders", lambda full_text: [])
     monkeypatch.setattr(thesis, "split_by_render_method", lambda placeholders: ([], [], [], []))
     monkeypatch.setattr(thesis, "render_all_figures", fake_render_all_figures)
@@ -180,20 +173,19 @@ async def test_shortage_pipeline_builds_docx_with_actual_citations(
     monkeypatch.setattr(thesis, "_retrieve_verified_references", retrieve)
     monkeypatch.setattr(thesis, "generate_fulltext", fulltext)
     monkeypatch.setattr(thesis, "generate_abstracts", AsyncMock(return_value={"abstract_zh": "摘要[99]。"}))
-    monkeypatch.setattr(thesis, "generate_acknowledgment", AsyncMock(return_value="感谢。"))
     monkeypatch.setattr(thesis, "render_all_figures", AsyncMock(return_value={}))
     monkeypatch.setattr("core.config.get_settings", lambda: SimpleNamespace(thesis_output_root=str(tmp_path)))
 
     result = await thesis.generate_thesis_document(
         task_id="isolated-shortage", title="测试课题", outline="# 1 绪论",
-        target_word_count=1000, wxnum=25, language="是", allow_ai_images=False,
+        target_word_count=1000, chinese_reference_count=17, english_reference_count=8, allow_ai_images=False,
     )
 
     assert Path(result.docx_path).is_file()
     assert result.result_data["reference_count"] == available_count
     assert result.result_data["quality_warnings"]
     assert result.result_data["citation_integrity"] == ("closed" if records else "no_references")
-    retrieve.assert_awaited_once_with("测试课题", "# 1 绪论", target_count=25, include_foreign=True)
+    retrieve.assert_awaited_once_with("测试课题", "# 1 绪论", chinese_reference_count=17, english_reference_count=8)
     with zipfile.ZipFile(result.docx_path) as archive:
         xml = archive.read("word/document.xml").decode()
     assert "[99]" not in xml
@@ -216,12 +208,6 @@ def test_docx_builder_renders_citations_as_superscript() -> None:
             title="测试论文",
             full_text="# 第一章 绪论\n相关研究已经较为成熟[1][2]。\n",
             output_path=str(out),
-            author="测试用户",
-            advisor="导师",
-            degree_type="学士",
-            major="软件工程",
-            school="计算机学院",
-            year_month="2026年5月",
             abstract_zh="中文摘要",
             keywords_zh="关键词",
             abstract_en="English abstract",

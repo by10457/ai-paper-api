@@ -15,9 +15,9 @@ description: ai-paper-api 的 MySQL/Tortoise 数据库结构变更规范。新�
 ## 当前项目事实
 
 - 数据库是 MySQL，运行时 ORM 是 Tortoise-ORM；模型注册位于 `core/config.py`。
-- 当前初始化来源只有 `sql/init.sql`，其中同时包含表结构和本地默认用户数据。
-- 项目仍处于统一维护初始化 SQL 的阶段：当前没有 `migrations/`，不要自行创建补丁式 SQL 目录或把一次性 ALTER 文件提交进仓库。
-- `pyproject.toml` 已配置 Aerich，但在项目明确切换到版本化迁移前，不要擅自初始化或混用 Aerich 与手工迁移。
+- 全新安装使用 `sql/init.sql`，其中同时包含表结构和本地默认用户数据。
+- 已有数据库使用版本化 Python 迁移，放在 `migrations/models/`；按递增序号执行 `async upgrade(db)`。部署脚本自动预检并迁移，版本账本记录 SHA-256；迁移需幂等且明确适用基线。
+- `pyproject.toml` 已配置 Aerich，但当前采用自有版本化 Python 迁移，不擅自初始化或混用 Aerich。
 - 本地库由 WSL 中的 Docker MySQL 提供，连接参数来自根目录 `.env` 的 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_USER`、`MYSQL_PASSWORD`、`MYSQL_DB`。
 - `.env` 只用于连接。不得输出、记录、提交或复制密码及其他密钥；文档和测试只能使用占位值。
 - 当前库存在既有排序规则差异。变更前读取相关表和外键列的实际 charset/collation，不借普通结构变更顺手全库归一化。
@@ -28,7 +28,7 @@ description: ai-paper-api 的 MySQL/Tortoise 数据库结构变更规范。新�
 
 1. **ORM 契约**：更新 `models/*.py` 中的字段、关系、索引/唯一约束、`description` 和 `table_description`；新增模型时同步 `models/__init__.py` 与 `core/config.py` 注册。
 2. **全新安装**：更新 `sql/init.sql`，使空数据库一次执行后直接得到最新结构。保持外键依赖顺序；只有业务确实要求时才修改初始化数据。
-3. **本地实际库**：用一份经过审查的临时 SQL 执行精确的 ALTER/CREATE，并通过 `SHOW CREATE TABLE` 与 `information_schema` 验证。不要对已有数据的库重新执行完整 `sql/init.sql` 来代替迁移。
+3. **已有数据库**：将精确的 ALTER/CREATE 放入 async upgrade(db) 返回的 SQL，版本文件写入 `migrations/models/`，执行前审查目标与脚本，再通过 `SHOW CREATE TABLE` 与 `information_schema` 验证。不要对已有数据的库重新执行完整 `sql/init.sql` 来代替迁移。
 
 若字段影响请求、响应或业务规则，继续同步 schema、service、API、测试和专题文档。仅改实际数据库、不改仓库，或只改 model/初始化 SQL、不更新本地库，都不算完成。
 
@@ -37,11 +37,11 @@ description: ai-paper-api 的 MySQL/Tortoise 数据库结构变更规范。新�
 1. 用只读查询记录受影响表的字段、默认值、索引、外键、注释、行数和排序规则。
 2. 明确数据兼容方案：新增非空字段的历史值、字段收窄/改名、唯一索引冲突、外键孤儿、JSON/时间语义和应用发布顺序。
 3. 先修改 ORM 和 `sql/init.sql`，逐项对齐类型、null、default、长度、精度、索引、外键动作和注释。
-4. 将本地库所需 DDL 写入仓库外的临时 SQL 文件；文件包含 `SET NAMES utf8mb4;`，并且只包含本次变更。
-5. 在用户已授权修改本地开发库后，执行 `.agents/skills/mysql-schema-changes/scripts/local-mysql.sh apply <临时 SQL>`。MySQL DDL 可能隐式提交，不假设事务可以完整回滚。
+4. 将本次增量 DDL 写入新的 Python 版本文件，SQL 包含 `SET NAMES utf8mb4;`，并注明适用基线和顺序。运行 `rtk uv run python -m migrations.runner --check` 做无数据库预检。禁止修改已执行版本，不导入当前 init.sql 作为历史版本内容。
+5. 在用户已授权修改本地开发库后，执行 `rtk uv run python -m migrations.runner`。MySQL DDL 可能隐式提交，不假设事务可以完整回滚。
 6. 运行 `schema`、`query` 和 `verify-comments` 验证实际结构，再运行受影响的 Ruff、Mypy、pytest 和 OpenAPI 检查。
 
-当前项目进入生产或需要多人共享增量升级时，先明确迁移策略，再启用 Aerich 或正式迁移目录；不得事后把开发库手工操作伪装成可复现迁移。
+生产部署由 `start.sh` 调用 `python -m migrations.runner` 自动执行；不在 API 多 worker 或 scheduler 生命周期中运行。迁移锁与 SQL 使用同一物理连接；MySQL DDL 失败后可能部分生效，迁移自身必须支持重试。
 
 ## SQL 与 Tortoise 规则
 
@@ -78,7 +78,7 @@ rtk .agents/skills/mysql-schema-changes/scripts/local-mysql.sh verify-comments <
 - `status` 显示数据库、MySQL 版本和连接字符集，不显示密码。
 - `query` 只允许 `SELECT`、`SHOW`、`DESCRIBE/DESC`、`EXPLAIN`。
 - `schema` 输出指定表的 `SHOW CREATE TABLE`。
-- `apply` 只用于已审查的临时增量 SQL，不用于执行完整 `sql/init.sql`。
+- `apply` 只用于已审查的增量 SQL，不用于执行完整 `sql/init.sql`。
 - `verify-comments` 要求表注释及业务字段注释非空，并忽略基类公共技术字段。
 
 ## 完成验证
@@ -86,5 +86,5 @@ rtk .agents/skills/mysql-schema-changes/scripts/local-mysql.sh verify-comments <
 - 用 `schema` 或 `information_schema` 对比 ORM、`sql/init.sql` 与实际库的类型、默认值、索引、外键、注释和排序规则。
 - 对新增/修改的 model 运行 `rtk uv run ruff check <paths>` 和 `rtk uv run mypy <paths>`。
 - 运行直接覆盖受影响业务的 pytest；API/schema 变化时加跑 OpenAPI 生成检查。
-- 运行 `rtk git diff --check`，确认未提交临时 SQL、数据库 dump、`.env` 或凭据。
+- 运行 `rtk git diff --check`，确认未提交数据库 dump、`.env` 或凭据。
 - 最终报告仓库改动、本地库是否实际执行、验证结果、数据兼容处理和未执行的生产操作；不得报告密码或密钥。

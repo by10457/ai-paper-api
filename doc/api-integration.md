@@ -2,6 +2,12 @@
 
 本文说明业务系统、Web 前端和管理后台如何对接 AI Paper API。
 
+## 个人信息与文档占位
+
+大纲、完整论文及三类材料请求均不接收姓名、学号、班级、学院、专业、指导教师、学位类别和个人年月等封面信息，也不接收 `student_profile`。提交未声明字段会返回 422；大纲接口不再接受任意 `form_params` 字典，请使用顶层 `target_word_count` 等明确字段。不提供旧字段兼容转换。
+
+文档封面与声明页保留 `【待补充：…】` 占位，用户下载后离线填写；`missing_profile_fields` 是文档待填写项提示，不是要求通过接口提交的信息。完整论文致谢直接输出离线填写提示，不再调用模型生成个人经历；DOCX 作者元数据使用通用产品名。请勿在题目或补充说明等自由文本中填写个人信息。
+
 ## 认证
 
 所有论文业务接口都需要：
@@ -61,8 +67,8 @@ POST /api/v1/thesis/outline
 {
   "title": "基于协同过滤算法的电影推荐系统设计与实现",
   "target_word_count": 8000,
-  "codetype": "否",
-  "language": "否",
+  "chinese_reference_count": 20,
+  "english_reference_count": 5,
   "three_level": true,
   "aboutmsg": ""
 }
@@ -82,15 +88,16 @@ Idempotency-Key: <业务订单号>
 ```json
 {
   "target_word_count": 5000,
-  "reference_count": 12,
-  "include_foreign": true,
+  "chinese_reference_count": 8,
+  "english_reference_count": 4,
   "aboutmsg": "仅写入已确认的项目事实；未提供测试数据时不得生成实测结论"
 }
 ```
 
-- `reference_count`、`include_foreign` 是推荐使用的语义字段；后端仍兼容历史字段 `wxnum`、`language`，两组同时出现时推荐字段优先。
-- 文献总数和中英文比例为尽力目标，不保证第三方一定返回足量。有限补检后不足仍继续生成，完成结果的 `result_data.reference_quality` 返回目标/实际数量与 `complete/limited/unavailable/disabled` 状态，`result_data.quality_warnings` 提供非阻断提示。调用方应提醒用户补充资料，不应把提示转换为失败、退款或自动重试。
-- 零文献时返回 `reference_count=0`、`citation_integrity=no_references`，文档明确标记“待补充参考文献”；正文不保留无来源编号。不标注模式仍为 `citation_integrity=not_applicable`。本策略不改变提交参数、收费及任务终态协议。
+- 大纲、直连论文生成和管理端 `/thesis/outlines` 统一使用 `chinese_reference_count`、`english_reference_count`：分别为非负整数，合计 1–100 篇，默认 25/0。管理端创建大纲时把这两个字段和 `target_word_count` 放在请求顶层；后续订单自动沿用记录快照。
+- 已移除 `codetype`、`wxquote`、`language`、`wxnum`、`reference_count`、`include_foreign` 请求字段，不提供旧字段转换；调用方需同步升级。正文默认标注真实文献，代码及语言由模型按课题和已确认技术栈判断；未确认实现必须标为示例或建议。`three_level` 和 `target_word_count` 保持原义。
+- 两种语言按指定数量分别检索、筛选，某种语言不足时不会用另一种语言补齐；设为 0 的语言不检索。有限补检后不足仍继续生成，`result_data.reference_quality` 返回目标/实际数量与 `complete/limited/unavailable` 状态，`result_data.quality_warnings` 提供非阻断提示。调用方应提醒用户补充资料，不应把提示转换为失败、退款或自动重试。
+- 零文献时返回 `reference_count=0`、`citation_integrity=no_references`，文档明确标记“待补充参考文献”；正文不保留无来源编号。
 - 任务完成后从状态接口的 `result_data.effective_config` 核对实际生效值，不要只依赖前端表单回显。
 - `result_data.missing_profile_fields` 非空时，成品会显示 `【待补充：字段】`；调用方应在下载前明确提醒用户。
 - `result_data.generated_suggestion_fields` 表示未由用户材料确认的生成建议，不应被业务系统展示为实测事实。

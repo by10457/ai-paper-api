@@ -524,41 +524,6 @@ class PaperOrderService:
         """把订单快照转换成论文生成服务参数。"""
 
         config = order.config_form if isinstance(order.config_form, dict) else {}
-        form_params = config.get("form_params")
-        if isinstance(form_params, dict):
-            generation_params = form_params
-        else:
-            generation_params = config
-        reference_count = PaperOrderService._first_value(
-            generation_params,
-            "wxnum",
-            "reference_count",
-            "referenceCount",
-            "literature_count",
-            "literatureCount",
-        )
-        if reference_count is None:
-            reference_count = PaperOrderService._first_value(
-                config,
-                "wxnum",
-                "reference_count",
-                "referenceCount",
-                "literature_count",
-                "literatureCount",
-            )
-        include_foreign = PaperOrderService._first_value(
-            generation_params,
-            "language",
-            "include_foreign",
-            "includeForeign",
-        )
-        if include_foreign is None:
-            include_foreign = PaperOrderService._first_value(
-                config,
-                "language",
-                "include_foreign",
-                "includeForeign",
-            )
         writing_requirements = PaperOrderService._first_value(
             config,
             "about_msg",
@@ -566,44 +531,14 @@ class PaperOrderService:
             "writing_requirements",
             "writingRequirements",
         )
-        if writing_requirements is None:
-            writing_requirements = PaperOrderService._first_value(
-                generation_params,
-                "about_msg",
-                "aboutmsg",
-                "writing_requirements",
-                "writingRequirements",
-            )
-        target_word_count = PaperOrderService._first_value(
-            generation_params,
-            "lengthnum",
-            "target_word_count",
-            "targetWordCount",
-        )
-        if target_word_count is None:
-            target_word_count = PaperOrderService._first_value(
-                config,
-                "lengthnum",
-                "target_word_count",
-                "targetWordCount",
-            )
+        target_word_count = config.get("target_word_count")
         return NormalizedPaperOrder(
             title=order.title,
             outline_json=PaperOrderService._normalize_outline(order.outline_json),
             target_word_count=PaperOrderService._to_int(target_word_count, 8000),
-            codetype=PaperOrderService._to_text(generation_params.get("codetype"), "否"),
-            wxquote=PaperOrderService._to_text(generation_params.get("wxquote"), "标注"),
-            language=PaperOrderService._to_yes_no(include_foreign, "否"),
-            wxnum=PaperOrderService._to_int(reference_count, 25),
+            chinese_reference_count=int(config.get("chinese_reference_count", 25)),
+            english_reference_count=int(config.get("english_reference_count", 0)),
             writing_requirements=PaperOrderService._to_text(writing_requirements, ""),
-            author=PaperOrderService._to_text(config.get("author"), "作者姓名"),
-            advisor=PaperOrderService._to_text(config.get("advisor"), "指导教师"),
-            degree_type=PaperOrderService._to_text(config.get("degree_type"), "学士"),
-            major=PaperOrderService._to_text(config.get("major"), "专业名称"),
-            school=PaperOrderService._to_text(config.get("school"), "XX大学XX学院"),
-            year_month=PaperOrderService._to_text(config.get("year_month"), ""),
-            student_id=PaperOrderService._to_text(config.get("student_id"), ""),
-            student_class=PaperOrderService._to_text(config.get("student_class"), ""),
         )
 
     @staticmethod
@@ -673,19 +608,6 @@ class PaperOrderService:
             if value is not None and value != "":
                 return value
         return None
-
-    @staticmethod
-    def _to_yes_no(value: Any, default: str) -> str:
-        """兼容布尔值与常见文本形式并归一化为“是/否”。"""
-
-        if isinstance(value, bool):
-            return "是" if value else "否"
-        normalized = str(value).strip().casefold() if value is not None else ""
-        if normalized in {"是", "yes", "true", "1", "y"}:
-            return "是"
-        if normalized in {"否", "no", "false", "0", "n"}:
-            return "否"
-        return default
 
     @staticmethod
     def _to_int(value: Any, default: int) -> int:

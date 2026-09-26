@@ -55,10 +55,24 @@ async def _generate_and_store(task: ThesisMaterialGenerationTask, order: ThesisM
     """生成、存储文档并同步最终状态。"""
 
     request_payload = order.request_payload if isinstance(order.request_payload, dict) else {}
+
+    async def persist_plan(planned_request: dict[str, object]) -> None:
+        """生成后立即保存材料大纲，失败重试沿用同一结构。"""
+
+        order.request_payload = planned_request
+        await order.save(update_fields=["request_payload", "updated_at"])
+        task.result_data = {
+            "source_outline": planned_request["source_outline"],
+            "source_outline_origin": planned_request["source_outline_origin"],
+            "material_outline": planned_request["material_outline"],
+        }
+        await task.save(update_fields=["result_data", "updated_at"])
+
     result = await generate_thesis_material_document(
         task_id=task.task_id,
         document_type=task.document_type,
         request_payload=request_payload,
+        persist_plan=persist_plan,
     )
     docx_path = str(result.get("docx_path") or "")
     await publish_progress(task.task_id, "uploading", f"正在保存{_label(task)}文件", progress=96)
