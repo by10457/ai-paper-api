@@ -7,9 +7,25 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
 
 from llm.client import create_configured_llm
+from llm.prompts.thesis_material_common import FIELD_REQUIREMENTS, NO_REFERENCE_CONTEXT
+from llm.prompts.thesis_material_proposal_prompt import (
+    CONFIRMED_OUTLINE_RULE,
+    GENERATED_OUTLINE_RULE,
+    PROPOSAL_ANALYSIS_PROMPT,
+    PROPOSAL_PURPOSE_PROMPT,
+    PROPOSAL_STATUS_PROMPT,
+)
+from llm.prompts.thesis_material_repair_prompt import (
+    LENGTH_REPAIR_PROMPT,
+    MISSING_FIELDS_PROMPT,
+    PROPOSAL_COVERAGE_PROMPT,
+    REVIEW_COVERAGE_PROMPT,
+)
+from llm.prompts.thesis_material_review_prompt import REVIEW_ANALYSIS_PROMPT, REVIEW_OVERVIEW_PROMPT
+from llm.prompts.thesis_material_task_prompt import CONFIRMED_METRIC_RULE, SUGGESTED_METRIC_RULE, TASK_BOOK_PROMPT
 from schemas.thesis_material import ReferenceRecord
 
 
@@ -137,26 +153,6 @@ LITERATURE_BODY_FIELDS = (
     "conclusion",
 )
 
-_FIELD_REQUIREMENTS = {
-    "research_purpose": "涵盖行业背景、现实问题、技术背景、研究必要性、应用价值和研究目标。",
-    "research_status_and_trends": "涵盖传统方案、国内外研究、主流技术、应用场景、架构演进、现有不足和未来趋势，并形成比较评价。",
-    "research_content": "说明研究对象、主要内容、预期解决的问题以及各部分之间的逻辑关系。",
-    "key_points": "说明系统架构、核心功能、数据设计和关键业务。",
-    "difficulties": "说明性能、并发、数据一致性、安全、交互或算法难点。",
-    "research_methods": "说明技术路线、框架、数据库、接口、测试和问题解决手段。",
-    "feasibility_and_innovation": "从资料、技术、数据、时间和实施条件论证可行性，并提出审慎且可验证的创新点。",
-    "abstract": "概括研究背景、综述范围、主要研究脉络、不足和本文切入点。",
-    "introduction": "说明研究背景、综述目的、检索范围和组织思路。",
-    "domestic_research": "综合比较国内代表性研究、主要方法、成果和局限，不得逐篇堆砌摘要。",
-    "foreign_research": "综合比较国外代表性研究、主要方法、成果和适用条件，不得逐篇堆砌摘要。",
-    "theme_content": "围绕单一主题比较多篇文献，必须包含已有做法、不同观点、优缺点和主题小结。",
-    "method_comparison": "比较不同研究方法、数据、系统架构和适用条件。",
-    "research_gaps": "归纳已有研究的不足、争议和未解决问题。",
-    "future_trends": "依据已有研究推导可解释的发展方向。",
-    "conclusion": "总结研究脉络以及本课题可以切入的位置。",
-    "design_background": "说明课题目的、业务背景和预期价值。",
-}
-
 _FIELD_KEYWORD_GROUPS = {
     "research_purpose": (("背景",), ("问题",), ("技术",), ("必要",), ("价值",), ("目标",)),
     "research_status_and_trends": (
@@ -214,25 +210,19 @@ async def generate_proposal_content(
     plan = build_length_plan("proposal_report", request)
     context = _request_context(request)
     reference_text = _reference_text(references)
-    citation_instruction = _citation_instruction(request)
     purpose_range = plan.fields["research_purpose"]
     status_range = plan.fields["research_status_and_trends"]
     purpose = await _ask_text(
-        "你是本科毕业设计开题报告写作专家。只输出连续正文，不要标题。",
-        f"课题：{request['title']}\n补充信息：{context}\n"
-        f"写{purpose_range.minimum}-{purpose_range.maximum}字研究目的，必须包括行业背景、现实问题、"
-        f"技术背景、必要性、应用价值和研究目标。{citation_instruction}\n真实文献：\n{reference_text}",
+        PROPOSAL_PURPOSE_PROMPT,
+        {"title": request["title"], "context": context, "references": reference_text,
+         "minimum": purpose_range.minimum, "maximum": purpose_range.maximum},
         max_tokens=max(600, round(purpose_range.maximum * 1.2)),
     )
     status = await _ask_text(
-        "你是严谨的学术文献综述作者。不得虚构文献，只能依据给定的真实来源。"
-        "只能依据题名、作者、年份和来源作审慎归纳，不得把题名未支持的内容写成文献结论。"
-        "只输出连续正文。",
-        f"课题：{request['title']}\n补充信息：{context}\n围绕传统方案、国内外研究、主流技术、应用场景、"
-        f"架构演进、现有不足和未来趋势写{status_range.minimum}-{status_range.maximum}字。"
-        f"引用至少{min(len(references), 8)}篇给定文献。"
-        f"{citation_instruction}"
-        f"\n真实文献：\n{reference_text}",
+        PROPOSAL_STATUS_PROMPT,
+        {"title": request["title"], "context": context, "references": reference_text,
+         "minimum": status_range.minimum, "maximum": status_range.maximum,
+         "citation_count": min(len(references), 8)},
         max_tokens=max(800, round(status_range.maximum * 1.2)),
     )
     analysis_constraints = "；".join(
@@ -241,18 +231,11 @@ async def generate_proposal_content(
         if field not in {"research_purpose", "research_status_and_trends"}
     )
     source_outline = request.get("source_outline") or []
-    outline_requirement = (
-        "已有用户确认的论文大纲，无需生成writing_outline；研究内容与方法应围绕该大纲展开。"
-        if source_outline
-        else "writing_outline数组，包含1-20个与课题相符的一级章节，每项严格为"
-        "{title,sections}，sections为2-5项数组，每项严格为{title,subsections}，subsections为0-4个三级标题字符串；"
-        "至少一个二级标题必须包含三级标题。title与subsections中禁止自带数字、中文序号或章节编号。"
-    )
     analysis = await _ask_json(
-        "你是毕业设计技术方案专家。严格输出JSON对象，不要Markdown。",
-        f"课题：{request['title']}\n补充信息：{context}\n生成以下字段：{analysis_constraints}；"
-        f"{outline_requirement}"
-        f"内容必须具体且互不重复。{citation_instruction}",
+        PROPOSAL_ANALYSIS_PROMPT,
+        {"title": request["title"], "context": context, "references": reference_text,
+         "constraints": analysis_constraints,
+         "outline_requirement": CONFIRMED_OUTLINE_RULE if source_outline else GENERATED_OUTLINE_RULE},
         max_tokens=max(
             2200,
             round(
@@ -338,17 +321,14 @@ async def generate_literature_review_content(
         raise RuntimeError("文献综述字数预算缺少主题配置")
     context = _request_context(request)
     reference_text = _reference_text(references)
-    citation_instruction = _citation_instruction(request)
     overview_fields = ("abstract", "introduction", "domestic_research", "foreign_research")
     overview_constraints = "、".join(
         f"{field}({plan.fields[field].minimum}-{plan.fields[field].maximum}字)" for field in overview_fields
     )
     overview = await _ask_json(
-        "你是学术文献综述作者。严格输出JSON对象，不得虚构文献编号。"
-        "只能依据题名、作者、年份和来源作审慎归纳，不得把题名未支持的内容写成文献结论。",
-        f"课题：{request['title']}\n补充信息：{context}\n真实文献：\n{reference_text}\n"
-        f"生成{overview_constraints}、keywords(3-6个字符串)。国内外研究必须综合比较给定资料；"
-        f"{citation_instruction}",
+        REVIEW_OVERVIEW_PROMPT,
+        {"title": request["title"], "context": context, "references": reference_text,
+         "constraints": overview_constraints},
         max_tokens=max(2200, round(sum(plan.fields[field].maximum for field in overview_fields) * 1.4)),
     )
     analysis_fields = ("method_comparison", "research_gaps", "future_trends", "conclusion")
@@ -356,12 +336,10 @@ async def generate_literature_review_content(
         f"{field}为{plan.fields[field].minimum}-{plan.fields[field].maximum}字" for field in analysis_fields
     )
     analysis = await _ask_json(
-        "你是学术综述评审专家。严格输出JSON对象，不要Markdown，不得虚构文献。"
-        "引用语句只能陈述题名和元数据能够支持的内容。",
-        f"课题：{request['title']}\n补充信息：{context}\n真实文献：\n{reference_text}\n"
-        f"生成themes数组{plan.theme_count}项，每项含title和content，content为"
-        f"{plan.theme.minimum}-{plan.theme.maximum}字，必须比较多篇文献并包含已有做法、不同观点、"
-        f"优缺点和小结；{analysis_constraints}。{citation_instruction}",
+        REVIEW_ANALYSIS_PROMPT,
+        {"title": request["title"], "context": context, "references": reference_text,
+         "constraints": analysis_constraints, "theme_count": plan.theme_count,
+         "minimum": plan.theme.minimum, "maximum": plan.theme.maximum},
         max_tokens=max(
             2600,
             round(
@@ -406,18 +384,11 @@ async def generate_task_book_content(request: dict[str, Any]) -> dict[str, Any]:
     """生成任务书目标、模块任务和成果要求。"""
 
     numeric_requirements = _has_user_numeric_requirements(request)
-    metric_instruction = (
-        "用户已明确提供数值要求，只能复述这些数值，不得自行增加阈值。"
-        if numeric_requirements
-        else "用户未提供数值要求，禁止自行编造响应时间、并发量、覆盖率、准确率、占比或运行天数等确定性阈值；"
-        "指标应写成可检查的质量要求，确需举例的数值必须明确标注为‘建议值，待导师确认’。"
-    )
     result = await _ask_json(
-        "你是高职和本科毕业设计任务书编制专家。严格输出JSON对象，不要填写姓名、学校、导师、签名、审核意见或日期。",
-        f"课题：{request['title']}\n补充信息：{_request_context(request)}\n选题类型：{request.get('topic_type', '其他')}\n"
-        "生成design_background(100-200字)、technology_stack(字符串数组)、design_goals(5-10个可验收目标)、"
-        "main_indicators(4-8个可测量或可核验的主要技术/质量指标)、module_tasks(4-8项，每项含name、role、responsibilities、boundary)、"
-        f"deliverable_forms(2-5项)、deliverable_requirements(2-5项)。设计目标、主要指标与模块任务不得重复。{metric_instruction}",
+        TASK_BOOK_PROMPT,
+        {"title": request["title"], "context": _request_context(request),
+         "topic_type": request.get("topic_type", "其他"),
+         "metric_instruction": CONFIRMED_METRIC_RULE if numeric_requirements else SUGGESTED_METRIC_RULE},
     )
     goals = result.get("design_goals")
     tasks = result.get("module_tasks")
@@ -542,7 +513,6 @@ def _required_outline(value: Any) -> list[dict[str, Any]]:
     normalized = [item for item in value if isinstance(item, dict) and str(item.get("title") or "").strip()]
     if len(normalized) != len(value):
         raise RuntimeError("开题报告写作提纲章节不完整")
-    has_third_level = False
     for chapter in normalized:
         sections = chapter.get("sections")
         if not isinstance(sections, list) or not 2 <= len(sections) <= 5:
@@ -553,9 +523,6 @@ def _required_outline(value: Any) -> list[dict[str, Any]]:
             subsections = section.get("subsections")
             if not isinstance(subsections, list):
                 raise RuntimeError("开题报告写作提纲三级标题结构不合法")
-            has_third_level = has_third_level or bool(subsections)
-    if not has_third_level:
-        raise RuntimeError("开题报告写作提纲缺少三级标题")
     return normalized
 
 
@@ -650,42 +617,27 @@ async def _repair_length_value(
         if minimum <= length <= maximum:
             break
         citations = sorted({int(item) for item in re.findall(r"\[(\d+)\]", value)})
-        citation_requirement = (
-            f"必须保留并使用这些引用编号：{', '.join(f'[{item}]' for item in citations)}。"
-            if citations
-            else "不得增加原文不存在的引用编号。"
-        )
         span = maximum - minimum
         target = minimum + (span // 3 if length > maximum else span * 2 // 3)
         paragraph_count = max(1, min(8, round(target / 250)))
+        cited_reference_text = ""
         if length > maximum:
             references = result.get("references")
-            cited_reference_text = ""
             if isinstance(references, list) and citations:
                 cited_reference_text = "\n".join(
                     str(item.get("formatted") or "")
                     for item in references
                     if isinstance(item, dict) and item.get("index") in citations
                 )
-            source_instruction = (
-                f"内容要求：{_FIELD_REQUIREMENTS.get(field, '保留该字段的核心事实和论证。')}\n"
-                f"补充信息：{_request_context(request)}\n"
-                f"可用参考文献：\n{cited_reference_text}"
-            )
-        else:
-            source_instruction = f"原文：\n{value}"
         value = await _ask_text(
-            "你是严格执行篇幅要求的学术编辑。只输出修订后的连续正文，不要标题、说明或字数统计。"
-            "参考文献只提供题名与来源元数据时，只能审慎说明题名涉及的主题，不得据此编造研究发现、"
-            "效果、提升幅度或作者结论。",
-            f"课题：{request['title']}\n字段：{label}\n当前字符数：{length}\n"
-            f"统一规划：{_request_context(request)}\n{source_instruction}\n"
-            f"内容要求：{_FIELD_REQUIREMENTS.get(field, '保留该字段的核心事实和论证。')}"
-            f"请修订到约{target}字，硬性范围为{minimum}-{maximum}字。"
-            f"写成{paragraph_count}个自然段，每段约{max(80, target // paragraph_count)}字。"
-            "字数按非空白字符统计，汉字、标点、英文字母和数字均逐字符计数；不得超出硬性范围；"
-            "超长时必须重新组织语言，不得照抄原文。"
-            f"{citation_requirement}",
+            LENGTH_REPAIR_PROMPT,
+            {"title": request["title"], "field": label, "length": length,
+             "context": _request_context(request), "original": "" if length > maximum else value,
+             "references": cited_reference_text,
+             "requirements": FIELD_REQUIREMENTS.get(field, ""),
+             "target": target, "minimum": minimum, "maximum": maximum,
+             "paragraph_count": paragraph_count, "paragraph_length": max(80, target // paragraph_count),
+             "citations": ", ".join(f"[{item}]" for item in citations)},
             max_tokens=max(500, round(maximum * 1.2)),
         )
     final_length = text_length(value)
@@ -731,15 +683,10 @@ async def repair_reference_coverage(
     if document_type == "proposal_report":
         status_range = build_length_plan(document_type, request).fields["research_status_and_trends"]
         result["research_status_and_trends"] = await _ask_text(
-            "你是严谨的开题报告文献综述作者。只输出修订后的连续正文，不要标题。",
-            f"课题：{request['title']}\n统一规划：{_request_context(request)}\n"
-            f"原文：\n{result.get('research_status_and_trends', '')}\n"
-            f"下列真实文献尚未在正文引用：\n{reference_text}\n"
-            "在保留原文主要论证和已有引用的前提下完成修订。逐篇结合标题和元数据说明与课题的关系，"
-            "形成比较、评价或趋势判断，并准确使用每个给定编号；不得增加不存在的文献。"
-            "只能说明题名和来源可直接支持的主题关系，不得把推测写成作者研究发现或确定性结论。"
-            "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。"
-            f"修订后的全文必须保持在{status_range.minimum}-{status_range.maximum}字。",
+            PROPOSAL_COVERAGE_PROMPT,
+            {"title": request["title"], "context": _request_context(request),
+             "original": result.get("research_status_and_trends", ""), "references": reference_text,
+             "minimum": status_range.minimum, "maximum": status_range.maximum},
             max_tokens=max(800, round(status_range.maximum * 1.2)),
         )
         return
@@ -748,13 +695,8 @@ async def repair_reference_coverage(
         if not isinstance(themes, list) or not themes:
             raise RuntimeError("文献综述主题结构不合法，无法修复引用")
         supplemental = await _ask_text(
-            "你是学术综述评审专家。只输出一个主题的连续正文，不要标题。",
-            f"课题：{request['title']}\n统一规划：{_request_context(request)}\n"
-            f"尚未引用的真实文献：\n{reference_text}\n"
-            "写一个综合比较主题，必须逐篇使用给定编号，说明已有做法、不同观点、优缺点和小结。"
-            "只能依据题名、作者、年份和来源做审慎归纳，不得虚构论文结论。"
-            "每个给定编号都必须原样、独立出现在正文中，例如分别写[1]和[2]；禁止合并写成[1-2]、[1,2]或其他形式。"
-            "每个编号必须紧跟其支撑的具体论述，每句最多2篇，禁止在段末集中罗列连续编号。",
+            REVIEW_COVERAGE_PROMPT,
+            {"title": request["title"], "context": _request_context(request), "references": reference_text},
         )
         new_theme = {"title": "补充文献的综合比较", "content": supplemental}
         planned_theme_count = build_length_plan(document_type, request).theme_count
@@ -769,17 +711,21 @@ async def repair_reference_coverage(
             }
 
 
-async def _ask_text(system: str, prompt: str, *, max_tokens: int = 5000) -> str:
+# 将集中维护的模板与动态业务数据绑定后调用模型
+async def _ask_text(prompt: ChatPromptTemplate, values: dict[str, Any], *, max_tokens: int = 5000) -> str:
+    """绑定 prompt 与 values 并生成正文；max_tokens 沿用业务预算，不改变空响应处理。"""
     llm = await create_configured_llm("fulltext", temperature=0.3, max_tokens=max_tokens)
-    message = await llm.ainvoke([SystemMessage(content=system), HumanMessage(content=prompt)])
+    message = await llm.ainvoke(prompt.format_messages(**values))
     text = _message_text(message.content)
     if not text:
         raise RuntimeError("模型未返回有效正文")
     return text
 
 
-async def _ask_json(system: str, prompt: str, *, max_tokens: int = 5000) -> dict[str, Any]:
-    text = await _ask_text(system, prompt, max_tokens=max_tokens)
+# JSON 模板复用统一模型调用与既有容错解析
+async def _ask_json(prompt: ChatPromptTemplate, values: dict[str, Any], *, max_tokens: int = 5000) -> dict[str, Any]:
+    """绑定 prompt/values，按 max_tokens 生成并解析 JSON 对象。"""
+    text = await _ask_text(prompt, values, max_tokens=max_tokens)
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
     start = cleaned.find("{")
     end = cleaned.rfind("}")
@@ -813,12 +759,9 @@ async def _repair_missing_text_fields(
         for field in missing_fields
     )
     repaired = await _ask_json(
-        "你是学术综述评审专家。只补全指定的JSON文本字段，不要输出其他字段或Markdown。"
-        "只能依据题名、作者、年份和来源作审慎归纳，不得虚构文献内容。",
-        f"课题：{title}\n统一规划：{_request_context(request or {})}\n"
-        f"真实文献：\n{reference_text}\n"
-        f"上一轮缺少字段：{json.dumps(missing_fields, ensure_ascii=False)}。"
-        f"请严格输出这些字段，其中{constraints}。{_citation_instruction(request or {})}",
+        MISSING_FIELDS_PROMPT,
+        {"title": title, "context": _request_context(request or {}), "references": reference_text,
+         "missing_fields": json.dumps(missing_fields, ensure_ascii=False), "constraints": constraints},
         max_tokens=max(800, round(sum(length_plan.fields[field].maximum for field in missing_fields) * 1.8)),
     )
     merged = dict(data)
@@ -852,15 +795,8 @@ def _request_context(request: dict[str, Any]) -> str:
     )
 
 
-def _citation_instruction(request: dict[str, Any]) -> str:
-    return "引用必须紧跟具体观点，每句最多2篇，禁止在段末集中罗列连续编号；只使用给定文献编号。"
-
-
 def _reference_text(references: list[ReferenceRecord]) -> str:
-    return "\n".join(item.formatted for item in references) or (
-        "本次未检索到可用的真实文献。不得编造作者、题名、DOI或引用编号，也不得声称已有文献支持；"
-        "研究现状与主题比较只能写成待核实的研究方向、检索计划和评价框架，不能写成已完成的文献综述。"
-    )
+    return "\n".join(item.formatted for item in references) or NO_REFERENCE_CONTEXT
 
 
 def _message_text(content: Any) -> str:
