@@ -306,10 +306,10 @@ def _resolve_volume_issue(volume: str, issue: str, fallback_volume_issue: str, *
 def _resolve_doc_marker(journal: str, crossref_type: str, university: str) -> str:
     """推断 GB/T 7714 文献类型标识。"""
 
+    if crossref_type in _TYPE_MAP:
+        return _TYPE_MAP[crossref_type]
     if journal:
         return "J"
-    if crossref_type:
-        return _TYPE_MAP.get(crossref_type, "J")
     if university:
         return "D"
     return "J"
@@ -517,7 +517,8 @@ def _build_reference_targets(chinese_reference_count: int, english_reference_cou
     """按请求的中英文篇数生成 Scholar 检索配额。"""
     return ReferenceTargets(
         total=chinese_reference_count + english_reference_count,
-        zh=chinese_reference_count, en=english_reference_count,
+        zh=chinese_reference_count,
+        en=english_reference_count,
     )
 
 

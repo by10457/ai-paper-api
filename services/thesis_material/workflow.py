@@ -29,9 +29,9 @@ from services.thesis_material.order_service import ThesisMaterialOrderService
 from services.thesis_material.profile_policy import missing_profile_fields
 
 PRODUCTS: dict[str, tuple[str, int, int | None, int | None, int | None]] = {
-    "proposal_report": ("开题报告", settings.PROPOSAL_REPORT_POINTS, 4000, 15, 8),
-    "literature_review": ("文献综述", settings.LITERATURE_REVIEW_POINTS, 6000, 20, 12),
-    "task_book": ("任务书", settings.TASK_BOOK_POINTS, None, 10, 5),
+    "proposal_report": ("开题报告", settings.PROPOSAL_REPORT_POINTS, 4000, None, None),
+    "literature_review": ("文献综述", settings.LITERATURE_REVIEW_POINTS, 6000, None, None),
+    "task_book": ("任务书", settings.TASK_BOOK_POINTS, 2000, None, None),
 }
 
 

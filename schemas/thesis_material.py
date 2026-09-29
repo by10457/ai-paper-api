@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import date
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from schemas.thesis import OutlineChapter, ReferenceConfig
 
@@ -26,27 +25,7 @@ class ResearchContext(BaseModel):
     additional_requirements: str | None = Field(default=None, max_length=3000)
 
 
-class ScheduleOptions(BaseModel):
-    """实际日期或相对周次生成配置。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    start_date: date | None = None
-    end_date: date | None = None
-    total_weeks: int | None = Field(default=None, ge=5, le=52)
-
-    @model_validator(mode="after")
-    def validate_date_range(self) -> ScheduleOptions:
-        if self.start_date and self.end_date and self.start_date > self.end_date:
-            raise ValueError("开始日期不能晚于结束日期")
-        return self
-
-
-class ReferenceOptions(ReferenceConfig):
-    """真实参考文献检索配置。"""
-
-
-class ThesisSourceConfig(BaseModel):
+class ThesisSourceConfig(ReferenceConfig):
     """下游公共论文表单的快照；材料正文篇幅仍以顶层目标为准。"""
 
     model_config = ConfigDict(extra="forbid")
@@ -61,18 +40,9 @@ class BaseThesisMaterialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str = Field(min_length=2, max_length=200)
-    source_outline: list[OutlineChapter] | None = Field(
-        default=None,
-        min_length=1,
-        max_length=20,
-        description="用户确认的论文大纲；旧版调用方可省略",
-    )
-    thesis_config: ThesisSourceConfig | None = Field(
-        default=None,
-        description="公共论文配置快照；不覆盖材料专用的目标字数和文献配置",
-    )
+    source_outline: list[OutlineChapter] = Field(min_length=1, max_length=20, description="用户确认的论文大纲")
+    thesis_config: ThesisSourceConfig = Field(description="大纲阶段的公共配置，文献数量统一继承")
     research_context: ResearchContext = Field(default_factory=ResearchContext)
-    schedule_options: ScheduleOptions = Field(default_factory=ScheduleOptions)
     callback_url: str = Field(default="", max_length=1024)
     callback_secret: str = Field(default="", max_length=255)
 
@@ -81,30 +51,12 @@ class ProposalReportRequest(BaseThesisMaterialRequest):
     """开题报告生成请求。"""
 
     target_word_count: int = Field(default=4000, ge=2500, le=12000)
-    reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(chinese_reference_count=10, english_reference_count=5)
-    )
-
-    @model_validator(mode="after")
-    def validate_reference_count(self) -> ProposalReportRequest:
-        if not 8 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 40:
-            raise ValueError("开题报告参考文献数量需在8-40之间")
-        return self
 
 
 class LiteratureReviewRequest(BaseThesisMaterialRequest):
     """文献综述生成请求。"""
 
     target_word_count: int = Field(default=6000, ge=3500, le=20000)
-    reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(chinese_reference_count=15, english_reference_count=5)
-    )
-
-    @model_validator(mode="after")
-    def validate_reference_count(self) -> LiteratureReviewRequest:
-        if not 12 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 60:
-            raise ValueError("文献综述参考文献数量需在12-60之间")
-        return self
 
 
 TopicType = Literal["产品设计类", "工艺设计类", "方案设计类", "作品设计类", "作品展示类", "其他"]
@@ -113,16 +65,8 @@ TopicType = Literal["产品设计类", "工艺设计类", "方案设计类", "�
 class TaskBookRequest(BaseThesisMaterialRequest):
     """毕业设计任务书生成请求。"""
 
+    target_word_count: int = Field(default=2000, ge=1000, le=6000)
     topic_type: TopicType = "其他"
-    reference_options: ReferenceOptions = Field(
-        default_factory=lambda: ReferenceOptions(chinese_reference_count=10, english_reference_count=0)
-    )
-
-    @model_validator(mode="after")
-    def validate_reference_count(self) -> TaskBookRequest:
-        if not 5 <= self.reference_options.chinese_reference_count + self.reference_options.english_reference_count <= 30:
-            raise ValueError("任务书参考资料数量需在5-30之间")
-        return self
 
 
 class ThesisMaterialSubmitResponse(BaseModel):

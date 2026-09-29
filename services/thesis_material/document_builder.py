@@ -58,6 +58,11 @@ def _new_document() -> DocumentObject:
     section.bottom_margin = Cm(2.5)
     section.left_margin = Cm(2.5)
     section.right_margin = Cm(2.5)
+    footer = section.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    page = OxmlElement("w:fldSimple")
+    page.set(qn("w:instr"), "PAGE")
+    footer._p.append(page)
     normal = doc.styles["Normal"]
     normal.font.name = FONT_LATIN
     normal.font.size = Pt(12)
@@ -192,14 +197,26 @@ def _build_task_book(
     task_lines = []
     for item in result.get("module_tasks", []):
         task_lines.append(
-            f"{item.get('name', '模块')}：面向{item.get('role', '相关用户')}，{item.get('responsibilities', '')}；边界：{item.get('boundary', '')}"
+            f"{item.get('name', '任务')}\n任务目标：{str(item.get('role') or '').rstrip('。；，')}。"
+            f"\n主要工作：{str(item.get('responsibilities') or '').rstrip('。；，')}。"
+            f"\n研究范围：{str(item.get('boundary') or '').rstrip('。；，')}。"
         )
     _merge_labeled_row(info, 5, "设计任务", "\n".join(task_lines))
+    module_names = {str(item.get("name") or "任务") for item in result.get("module_tasks", [])}
+    for paragraph in info.cell(5, 1).paragraphs:
+        if paragraph.text.strip() in module_names:
+            paragraph.paragraph_format.keep_with_next = True
 
     schedule_items = result.get("schedule_items", [])
+    # 独立段落阻止 Word/LibreOffice 合并相邻表格，否则计划表表头不能重复。
+    separator = doc.add_paragraph()
+    separator.paragraph_format.space_after = Pt(0)
+    separator.paragraph_format.line_spacing = Pt(1)
     schedule = doc.add_table(rows=1, cols=5)
     schedule.style = "Table Grid"
     schedule.alignment = WD_TABLE_ALIGNMENT.CENTER
+    repeat_header = OxmlElement("w:tblHeader")
+    schedule.rows[0]._tr.get_or_add_trPr().append(repeat_header)
     for index, heading in enumerate(("序号", "设计任务", "起始时间", "结束时间", "阶段成果")):
         _replace_cell_text(schedule.cell(0, index), heading, bold=True)
     for index, item in enumerate(schedule_items, start=1):
@@ -218,9 +235,18 @@ def _build_task_book(
         f"（{index}）{value}" for index, value in enumerate(result.get("main_indicators", []), start=1)
     )
     references_text = "\n".join(item.formatted for item in references) or NO_REFERENCE_NOTICE
+    separator = doc.add_paragraph()
+    separator.paragraph_format.space_after = Pt(0)
+    separator.paragraph_format.line_spacing = Pt(1)
     outcome = doc.add_table(rows=6, cols=2)
     outcome.style = "Table Grid"
     outcome.alignment = WD_TABLE_ALIGNMENT.CENTER
+    outcome.autofit = False
+    for column_index, width in enumerate((Cm(3), Cm(13))):
+        outcome.columns[column_index].width = width
+    for row in outcome.rows:
+        row.cells[0].width = Cm(3)
+        row.cells[1].width = Cm(13)
     _replace_cell_text(outcome.cell(0, 0), "预期成果", bold=True)
     forms = "\n".join(f"（{index}）{value}" for index, value in enumerate(result.get("deliverable_forms", []), start=1))
     requirements = "\n".join(
@@ -290,7 +316,9 @@ def _proposal_methods(result: dict[str, Any]) -> str:
 
 def _schedule_text(items: list[dict[str, Any]]) -> str:
     return "\n".join(
-        f"{item.get('start', '')}-{item.get('end', '')}：{item.get('task', '')}；阶段成果：{item.get('deliverable', '')}"
+        f"{item.get('start', '')}"
+        f"{('-' + str(item.get('end', ''))) if item.get('end') != item.get('start') else ''}"
+        f"：{item.get('task', '')}；阶段成果：{item.get('deliverable', '')}"
         for item in items
     )
 

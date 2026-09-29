@@ -28,20 +28,30 @@ POST /api/v1/thesis-materials/literature-reviews
 POST /api/v1/thesis-materials/task-books
 ```
 
-标题是唯一必填字段，长度为 2-200 个字符。接口不接收学生、学校和导师等封面资料；开题报告、任务书的 DOCX 固定使用“【待补充：学号】”等明显占位，由用户下载后自行填写。提交响应和最终结构化结果仍返回固定的 `missing_profile_fields`，调用方应在下载前提醒用户。开题报告和文献综述支持 `target_word_count` 与 `reference_options`；任务书支持 `topic_type`，三类材料都会检索真实参考资料。
+必填字段为 `title`、`source_outline` 和 `thesis_config`。三类材料均以用户确认的论文大纲为研究范围，不再支持仅传标题后重新生成大纲。开题报告打印同一份写作提纲；综述、任务书只把大纲作为生成参考，保留各自文档结构。
 
-三类接口还可接收 `source_outline`（与论文 `outline_json` 相同的 `OutlineChapter[]` 结构）和 `thesis_config`（公共论文表单快照：`target_word_count`、`aboutmsg`）。传入用户确认的大纲时直接复用；省略时先生成论文大纲，再建立材料自己的 `material_outline`。两份大纲均保存到请求快照与结构化结果，重试复用。开题报告的论文写作提纲严格沿用源大纲的章节顺序；综述和任务书保留各自文档结构。材料篇幅由顶层 `target_word_count` 控制。
+`thesis_config` 是大纲阶段的公共配置快照：`target_word_count`、`aboutmsg`、`chinese_reference_count`、`english_reference_count`。文献数量只从此处读取，单项允许 0、合计 1–100 篇，不再受材料类型独立限额约束。前端自动传递已确认配置，不重复要求用户填写。已移除 `reference_options`、`schedule_options`，旧字段会被拒绝，调用方须同步升级。
 
-`reference_options` 改为分别指定 `chinese_reference_count`、`english_reference_count`，单项允许 0；合计范围分别为开题报告 8–40、文献综述 12–60、任务书 5–30。默认中英文数量分别为 10/5、15/5、10/0。正文默认执行文献标注与引用校验，缺少的语言文献明确提示，不跨语言补齐。已移除 `target_count`、`include_foreign` 和 `thesis_config` 中的 `codetype`、`wxquote`，调用方需同步升级。
+材料自身的 `target_word_count` 独立设置：开题报告默认 4000（2500–12000），综述默认 6000（3500–20000），任务书默认 2000（1000–6000）。可选的 `research_context` 用于补充材料特有要求；不填写时沿用大纲阶段的研究要求。
 
-```json
-{"reference_options": {"chinese_reference_count": 10, "english_reference_count": 5}}
-```
+进度计划使用相对周次，不接收具体日期；开题报告按 16 周、任务书按 20 周分配阶段。接口不收集学生、学校、导师信息；DOCX 使用明显的“【待补充】”占位，响应的 `missing_profile_fields` 提醒下载后补全。
 
-最小请求：
+请求示例（开题报告）：
 
 ```json
-{"title":"基于人工智能的校园服务平台设计与实现"}
+{
+  "title": "校园服务平台设计与实现",
+  "source_outline": [
+    {"chapter": "绪论", "sections": [{"name": "研究背景", "abstract": "说明研究背景与意义"}]}
+  ],
+  "thesis_config": {
+    "target_word_count": 8000,
+    "aboutmsg": "围绕校园服务流程",
+    "chinese_reference_count": 20,
+    "english_reference_count": 5
+  },
+  "target_word_count": 4000
+}
 ```
 
 提交响应示例：
@@ -67,7 +77,7 @@ GET /api/v1/thesis-materials/tasks/{task_id}/download
 
 任务阶段依次使用：`queued`、`retrieving_references`、`planning`、`generating_sections`、`validating`、`rendering_docx`、`uploading`、`completed`、`failed`。事件接口为 Server-Sent Events；客户端无法保持 SSE 时可按 2-5 秒轮询任务详情。
 
-完成任务的 `result` 为产品对应的结构化 JSON，同时提供 DOCX 下载。开题报告和文献综述的 `word_count` 明确给出目标、容差、实际值、计入字段和排除区块。统一按正文非空白字符统计，汉字、标点、英文字母和数字均逐字符计数；标题、关键词、提纲、计划、参考文献、个人信息和签字审核区不计入。目标总正文允许正负 10% 的验收容差，并为引用规范化保留最多 20 个非空白字符的后处理缓冲；实际上下限随 `word_count` 返回。失败任务返回 `message`/`error_message` 和已退款积分；普通生成错误会自动重试，耗尽重试后幂等退款。
+完成任务的 `result` 为产品对应的结构化 JSON，同时提供 DOCX 下载。三类材料的 `word_count` 明确给出目标、容差、实际值、计入字段和排除区块。统一按正文非空白字符统计，汉字、标点、英文字母和数字均逐字符计数；标题、关键词、提纲、计划、参考文献、个人信息和签字审核区不计入。目标总正文允许正负 10% 的验收容差，并为引用规范化保留最多 20 个非空白字符的后处理缓冲；实际上下限随 `word_count` 返回。失败任务返回 `message`/`error_message` 和已退款积分；普通生成错误会自动重试，耗尽重试后幂等退款。
 
 ## 订单
 
@@ -89,15 +99,24 @@ GET /api/v1/admin/thesis-material-orders/{order_id}
 
 开题报告包含研究目的、文献综述、主要内容、重点难点、研究方法、可行性与创新点、与源大纲同层级的写作提纲、进度计划、参考文献和审核区。文献综述包含摘要、关键词、国内外研究、3-6 个主题比较、方法比较、研究不足、趋势、结论和参考文献。任务书包含设计背景、技术栈建议、设计目标、模块任务、进度计划、成果形式、成果要求、主要指标、参考资料和审核区。
 
-参考文献只来自已配置的万方、SerpAPI/Google Scholar、CrossRef 等真实来源。系统以业务主题匹配作为准入门槛，再使用技术主题重合度排序，并过滤撤稿、著录信息不完整和仅技术栈相似但业务无关的记录。目标总量与中外文比例均尽力满足，有限补检仍不足时按实际数量继续生成，不用弱相关文献凑数；任务书优先使用相关中文资料。共享检索预算与降级规则见 [论文生成流程](thesis-generation.md#参考文献)。请求中参考文献数量的范围仍是目标配置范围，不代表实际结果的交付下限。
+参考文献只来自已配置的万方、SerpAPI/Google Scholar、CrossRef 等真实来源。系统以业务主题匹配作为准入门槛，再使用技术主题重合度排序，并过滤撤稿、著录信息不完整和仅技术栈相似但业务无关的记录。目标总量与中外文比例均尽力满足，有限补检仍不足时按实际数量继续生成，不用弱相关文献凑数；三类材料均继承大纲的中英文数量目标。共享检索预算与降级规则见 [论文生成流程](thesis-generation.md#参考文献)。请求中参考文献数量的范围仍是目标配置范围，不代表实际结果的交付下限。
 
 结构化结果包含 `reference_quality` 和 `quality_warnings`，明确目标数量、实际总数及语言构成。零文献返回空列表，DOCX 明示“待补充参考文献”，综述内容仅作待核实研究方向/检索计划，不声称已有来源支持。引用覆盖校验按实际文献执行，零文献不要求引用；已完成状态不因这些提示而转换为失败。
 
 任务书仅在用户通过 `research_context.additional_requirements` 或 `thesis_config.aboutmsg` 明确给出对应数值指标时，才将其视为已确认要求；单独出现的 Spring Boot 3 等技术版本号不算。模型额外提出的响应时间、并发量、覆盖率、成果字数或演示时长等阈值会在正文中标记“建议值（待导师确认）”，结构化结果通过 `generated_suggestion_fields` 标识 `design_goals`、`deliverable_requirements` 或 `main_indicators` 等对应字段。
 
+## 材料正文与版式质量约束
+
+- 源论文大纲限定研究范围，不替代综述自身的章节结构；摘要和引言须描述当前材料。
+- 仅有题名元数据时，不得断言原文方法、效果或研究局限。引用规范化在原句位置保留枚举结构，不删除枚举项后集中追加编号；重复规范化不得累积重复句。
+- 单字段篇幅是软预算，重写后允许在最终字段下限内波动，正文总字数仍按产品范围验收。机械压缩须保留关联的枚举句，不能输出断号分类。
+- 任务书的 `role` 表示任务目的或研究对象，`boundary` 表示研究范围，不是提示词约束。隐私占位、JSON 输出等内部规则不属于任务成果。
+- 材料使用页脚页码；任务书成果区采用窄标签列和宽内容列，计划表跨页重复表头；单周计划不重复显示相同起止周。
+- 共享文献格式化优先使用明确来源类型，不能因会议或图书容器名称非空就标为期刊。
+
 ## 错误码
 
-常见 HTTP 状态包括：`400` 请求字段或日期范围错误，`401` 未鉴权，`403` 无权访问任务，`404` 任务/订单/文件不存在，`402` 余额不足，`409` 任务尚未完成无法下载，`422` 请求 Schema 校验失败，`500` 生成服务内部错误。错误响应沿用项目现有 `Response`/FastAPI 错误格式。
+常见 HTTP 状态包括：`400` 请求字段错误，`401` 未鉴权，`403` 无权访问任务，`404` 任务/订单/文件不存在，`402` 余额不足，`409` 任务尚未完成无法下载，`422` 请求 Schema 校验失败，`500` 生成服务内部错误。错误响应沿用项目现有 `Response`/FastAPI 错误格式。
 
 ## 数据隔离与发布
 

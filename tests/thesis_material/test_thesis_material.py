@@ -101,7 +101,7 @@ def test_literature_missing_text_field_is_repaired(monkeypatch: pytest.MonkeyPat
     assert repaired["method_comparison"] == "已有方法比较。"
     assert repaired["research_gaps"] == "现有研究仍缺少跨场景的数据验证。"
     assert len(calls) == 1
-    assert "research_gaps" in calls[0]
+    assert "research_gaps" in str(calls[0])
 
 
 def test_final_reference_coverage_uses_verifiable_title_statements() -> None:
@@ -223,15 +223,21 @@ def test_generated_text_normalizes_chinese_punctuation() -> None:
     assert _normalize_generated_text("模块 A ；边界： 不处理。 ；完成") == "模块 A；边界： 不处理；完成"
 
 
-def test_title_is_only_required_request_field() -> None:
-    proposal = ProposalReportRequest(title="智慧校园管理平台的设计与实现")
-    review = LiteratureReviewRequest(title="生成式人工智能教育应用研究综述")
-    task_book = TaskBookRequest(title="校园饭卡管理系统的设计与实现")
-    assert proposal.reference_options.model_dump() == {"chinese_reference_count": 10, "english_reference_count": 5}
-    assert review.reference_options.model_dump() == {"chinese_reference_count": 15, "english_reference_count": 5}
-    assert task_book.reference_options.chinese_reference_count == 10
-    assert task_book.reference_options.english_reference_count == 0
-    assert "student_profile" not in task_book.model_dump()
+def test_material_requires_outline_and_inherits_reference_config() -> None:
+    payload = {
+        "title": "通用课题研究",
+        "source_outline": [{"chapter": "绪论", "sections": [{"name": "研究背景", "abstract": "背景"}]}],
+        "thesis_config": {"chinese_reference_count": 2, "english_reference_count": 1},
+    }
+    for request_type in (ProposalReportRequest, LiteratureReviewRequest, TaskBookRequest):
+        request = request_type.model_validate(payload)
+        assert request.thesis_config.chinese_reference_count == 2
+        assert request.thesis_config.english_reference_count == 1
+        assert "reference_options" not in request.model_dump()
+        assert "schedule_options" not in request.model_dump()
+        with pytest.raises(ValidationError):
+            request_type.model_validate({"title": "通用课题"})
+    assert TaskBookRequest.model_validate(payload).target_word_count == 2000
 
 
 def test_material_requests_accept_confirmed_outline_and_common_config() -> None:
@@ -272,34 +278,9 @@ def test_task_book_recognizes_user_supplied_numeric_requirements_in_common_confi
 
 
 @pytest.mark.asyncio
-async def test_legacy_material_request_generates_and_reuses_source_outline(monkeypatch: pytest.MonkeyPatch) -> None:
-    outline = {
-        "title": "通用课题",
-        "outline": [
-            {
-                "chapter": "研究背景",
-                "sections": [{"name": "研究意义", "abstract": "研究意义", "subsections": []}],
-            }
-        ],
-    }
-    generator = AsyncMock(
-        return_value=SimpleNamespace(
-            outline=[SimpleNamespace(model_dump=lambda mode: outline["outline"][0])],
-        )
-    )
-    monkeypatch.setattr(material_generation, "generate_outline_for_request", generator)
-    request: dict[str, Any] = {"title": "通用课题", "target_word_count": 2500}
-
-    await prepare_material_plan("proposal_report", request)
-    first_plan = request["material_outline"]
-    await prepare_material_plan("proposal_report", request)
-
-    generator.assert_awaited_once()
-    assert request["source_outline_origin"] == "generated"
-    assert request["source_outline"][0]["chapter"] == "研究背景"
-    assert first_plan is request["material_outline"]
-    assert first_plan["sections"][0]["key"] == "research_purpose"
-    assert first_plan["sections"][0]["focus_chapters"] == ["研究背景"]
+async def test_material_requires_confirmed_outline() -> None:
+    with pytest.raises(ValueError, match="确认论文大纲"):
+        await prepare_material_plan("proposal_report", {"title": "通用课题"})
 
 
 def test_invalid_source_outline_is_rejected_before_paid_submission() -> None:
@@ -372,10 +353,10 @@ async def test_proposal_uses_confirmed_outline_without_regenerating_it(monkeypat
             "sections": [{"title": "研究背景", "subsections": ["业务需求"]}],
         }
     ]
-    assert "已有用户确认的论文大纲" in prompts[-1]
-    assert "聚焦校园场景" in prompts[-1]
-    assert "codetype" not in prompts[-1]
-    assert "用户指定材料结构" in prompts[-1]
+    assert "已有用户确认的论文大纲" in str(prompts[-1])
+    assert "聚焦校园场景" in str(prompts[-1])
+    assert "codetype" not in str(prompts[-1])
+    assert "用户指定材料结构" in str(prompts[-1])
 
 
 def test_submit_response_exposes_missing_profile_fields() -> None:
@@ -405,7 +386,7 @@ def test_schedule_rejects_reversed_dates() -> None:
             }
         )
     except ValidationError as exc:
-        assert "开始日期不能晚于结束日期" in str(exc)
+        assert "schedule_options" in str(exc)
     else:
         raise AssertionError("倒序日期应校验失败")
 
@@ -599,7 +580,7 @@ async def test_material_generation_without_references_is_explicit_draft(
     request = {
         "title": "测试材料",
         "target_word_count": 3500,
-        "reference_options": {"chinese_reference_count": 12, "english_reference_count": 0},
+        "thesis_config": {"chinese_reference_count": 12, "english_reference_count": 0},
         "source_outline": [
             {"chapter": f"章节{index}", "sections": [{"name": "背景", "abstract": "背景", "subsections": []}]}
             for index in range(5)
@@ -654,7 +635,7 @@ async def test_default_inline_citations_keeps_verified_reference_list(
                     "sections": [{"name": "研究背景", "abstract": "背景", "subsections": []}],
                 }
             ],
-            "reference_options": {"chinese_reference_count": 8, "english_reference_count": 0},
+            "thesis_config": {"chinese_reference_count": 8, "english_reference_count": 0},
         }
     ).model_dump(mode="json")
     plan = build_length_plan("proposal_report", request)
@@ -931,8 +912,8 @@ def test_repeated_unsupported_citation_claims_are_collapsed() -> None:
         ],
     }
     normalize_citation_claims(result)
-    assert result["foreign_research"].count("本文仅据题名与来源") == 1
-    assert "[1][2]" in result["foreign_research"]
+    assert result["foreign_research"].count("文献[1]") == 1
+    assert result["foreign_research"].count("文献[2]") == 1
     assert "采用问卷" not in result["foreign_research"]
 
 
@@ -966,8 +947,8 @@ def test_character_limit_is_deterministic_for_uncited_short_section() -> None:
 
 
 def test_relative_schedule_has_required_number_of_stages() -> None:
-    proposal = _build_schedule({}, PROPOSAL_SCHEDULE, default_weeks=16)
-    task_book = _build_schedule({}, TASK_BOOK_SCHEDULE, default_weeks=20)
+    proposal = _build_schedule(PROPOSAL_SCHEDULE, default_weeks=16)
+    task_book = _build_schedule(TASK_BOOK_SCHEDULE, default_weeks=20)
     assert len(proposal) == 9
     assert proposal[0]["start"] == "第1周"
     assert proposal[-1]["end"] == "第16周"
@@ -991,7 +972,7 @@ def test_build_three_document_types(tmp_path: Path) -> None:
         "key_points": "研究重点。",
         "difficulties": "研究难点。",
         "research_methods": "研究方法。",
-        "schedule": _build_schedule({}, PROPOSAL_SCHEDULE, default_weeks=16),
+        "schedule": _build_schedule(PROPOSAL_SCHEDULE, default_weeks=16),
     }
     review_result = {
         "abstract": "摘要。",
@@ -1013,7 +994,7 @@ def test_build_three_document_types(tmp_path: Path) -> None:
             {"name": f"模块{i}", "role": "用户", "responsibilities": "完成业务", "boundary": "仅处理本模块"}
             for i in range(1, 5)
         ],
-        "schedule_items": _build_schedule({}, TASK_BOOK_SCHEDULE, default_weeks=20),
+        "schedule_items": _build_schedule(TASK_BOOK_SCHEDULE, default_weeks=20),
         "deliverable_forms": ["成果文档", "项目源文件"],
         "deliverable_requirements": ["项目可运行", "测试通过"],
     }

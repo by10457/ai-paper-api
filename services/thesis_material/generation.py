@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
-from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 from core.config import get_settings
-from schemas.thesis import OutlineRequest
 from services.thesis.generation.progress import publish_progress, stage_context
-from services.thesis.generation.task_service import generate_outline_for_request
 from services.thesis_material.document_builder import build_thesis_material_document
 from services.thesis_material.llm_service import (
     LITERATURE_BODY_FIELDS,
+    TASK_BODY_FIELDS,
     _trim_to_character_limit,
     build_length_plan,
     generate_literature_review_content,
@@ -23,6 +21,7 @@ from services.thesis_material.llm_service import (
     normalize_citation_claims,
     repair_length_constraints,
     repair_reference_coverage,
+    task_body_length,
     text_length,
 )
 from services.thesis_material.profile_policy import missing_profile_fields
@@ -124,9 +123,9 @@ async def generate_thesis_material_document(
         source_outline=request_payload["source_outline"],
         material_outline=request_payload["material_outline"],
     )
-    options = request_payload.get("reference_options") or {}
-    chinese_count = int(options.get("chinese_reference_count", 10))
-    english_count = int(options.get("english_reference_count", 0))
+    options = request_payload["thesis_config"]
+    chinese_count = int(options["chinese_reference_count"])
+    english_count = int(options["english_reference_count"])
     references = []
     if document_type in {"proposal_report", "literature_review", "task_book"}:
         await publish_progress(task_id, "retrieving_references", "正在检索和整理真实参考文献", progress=22)
@@ -142,13 +141,13 @@ async def generate_thesis_material_document(
     with stage_context("generating_sections"):
         if document_type == "proposal_report":
             result = await generate_proposal_content(request_payload, references)
-            result["schedule"] = _build_schedule(request_payload, PROPOSAL_SCHEDULE, default_weeks=16)
+            result["schedule"] = _build_schedule(PROPOSAL_SCHEDULE, default_weeks=16)
             result["approval"] = _empty_approval("指导教师意见", "教研室（学术小组）意见")
         elif document_type == "literature_review":
             result = await generate_literature_review_content(request_payload, references)
         elif document_type == "task_book":
             result = await generate_task_book_content(request_payload)
-            result["schedule_items"] = _build_schedule(request_payload, TASK_BOOK_SCHEDULE, default_weeks=20)
+            result["schedule_items"] = _build_schedule(TASK_BOOK_SCHEDULE, default_weeks=20)
             result["approval"] = _empty_approval("指导教师", "教研室审核意见", "二级学院审核意见")
         else:
             raise RuntimeError(f"不支持的文档类型: {document_type}")
@@ -226,30 +225,14 @@ async def generate_thesis_material_document(
 
 
 async def prepare_material_plan(document_type: str, request_payload: dict[str, Any]) -> None:
-    """旧请求先生成论文大纲，再形成可在任务重试中复用的材料结构。"""
+    """基于已确认大纲形成可在任务重试中复用的材料结构。"""
 
     if document_type not in _MATERIAL_SECTIONS:
         raise RuntimeError(f"不支持的文档类型: {document_type}")
     source_outline = request_payload.get("source_outline")
     if not source_outline:
-        config = request_payload.get("thesis_config") or {}
-        references = request_payload.get("reference_options") or {}
-        outline_response = await generate_outline_for_request(
-            OutlineRequest(
-                title=str(request_payload["title"]),
-                target_word_count=int(
-                    config.get("target_word_count") or request_payload.get("target_word_count") or 8000
-                ),
-                chinese_reference_count=int(references.get("chinese_reference_count", 10)),
-                english_reference_count=int(references.get("english_reference_count", 0)),
-                aboutmsg=str(config.get("aboutmsg") or ""),
-            )
-        )
-        source_outline = [chapter.model_dump(mode="json") for chapter in outline_response.outline]
-        request_payload["source_outline"] = source_outline
-        request_payload["source_outline_origin"] = "generated"
-    else:
-        request_payload.setdefault("source_outline_origin", "user_confirmed")
+        raise ValueError("请先生成并确认论文大纲")
+    request_payload.setdefault("source_outline_origin", "user_confirmed")
     if request_payload.get("material_outline"):
         return
     chapter_titles = [str(chapter["chapter"]) for chapter in source_outline]
@@ -280,33 +263,12 @@ def _material_section_focus(key: str, chapter_titles: list[str]) -> list[str]:
 
 
 def _build_schedule(
-    request: dict[str, Any],
     templates: tuple[tuple[str, str], ...],
     *,
     default_weeks: int,
 ) -> list[dict[str, str]]:
-    options = request.get("schedule_options") or {}
-    start_date = _parse_date(options.get("start_date"))
-    end_date = _parse_date(options.get("end_date"))
-    total_weeks = int(options.get("total_weeks") or default_weeks)
+    total_weeks = default_weeks
     items: list[dict[str, str]] = []
-    if start_date and end_date:
-        total_days = max((end_date - start_date).days + 1, len(templates))
-        for index, (task, deliverable) in enumerate(templates):
-            item_start = start_date + timedelta(days=round(total_days * index / len(templates)))
-            item_end = start_date + timedelta(days=round(total_days * (index + 1) / len(templates)) - 1)
-            if index == len(templates) - 1:
-                item_end = end_date
-            items.append(
-                {
-                    "start": item_start.isoformat(),
-                    "end": item_end.isoformat(),
-                    "task": task,
-                    "deliverable": deliverable,
-                }
-            )
-        return items
-
     for index, (task, deliverable) in enumerate(templates):
         start_week = round(total_weeks * index / len(templates)) + 1
         end_week = max(start_week, round(total_weeks * (index + 1) / len(templates)))
@@ -357,7 +319,7 @@ def _validate_result(
             validation_maximum = round(plan.theme.target * 2)
             if not validation_minimum <= length <= validation_maximum:
                 raise RuntimeError(f"字段themes[{index}].content字数不合法")
-    if document_type in {"proposal_report", "literature_review"}:
+    if document_type in {"proposal_report", "literature_review", "task_book"}:
         body_length = _material_body_char_count(document_type, result)
         if not plan.body_minimum <= body_length <= plan.body_maximum:
             raise RuntimeError(f"正文总字数{body_length}不在{plan.body_minimum}-{plan.body_maximum}范围内")
@@ -520,17 +482,6 @@ def _research_context_text(request: dict[str, Any]) -> str:
     return "；".join(str(value).strip() for value in values if str(value).strip())
 
 
-def _parse_date(value: Any) -> date | None:
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str) and value:
-        try:
-            return date.fromisoformat(value)
-        except ValueError:
-            return None
-    return None
-
-
 def _safe_filename(title: str) -> str:
     value = re.sub(r"[\\/:*?\"<>|]", "_", title).strip(" .")
     return value[:80] or "thesis-material"
@@ -538,6 +489,8 @@ def _safe_filename(title: str) -> str:
 
 def _material_body_char_count(document_type: str, result: dict[str, Any]) -> int:
     """按产品约定统计正文非空白字符，不计结构、计划、参考文献和个人信息。"""
+    if document_type == "task_book":
+        return task_body_length(result)
 
     if document_type == "proposal_report":
         fields = tuple(build_length_plan(document_type, {}).fields)
@@ -613,7 +566,7 @@ def _word_count_metadata(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     plan = build_length_plan(document_type, request)
-    included_fields = list(plan.fields)
+    included_fields = list(TASK_BODY_FIELDS) if document_type == "task_book" else list(plan.fields)
     if document_type == "literature_review":
         included_fields.append("themes[].content")
     return {
@@ -624,6 +577,8 @@ def _word_count_metadata(
         "actual": _material_body_char_count(document_type, result),
         "included_fields": included_fields,
         "excluded_sections": [
+            "schedule_items",
+            "technology_stack",
             "title",
             "keywords",
             "writing_outline",
