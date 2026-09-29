@@ -897,7 +897,8 @@ def test_unsupported_citation_conclusion_is_rewritten_from_reference_title() -> 
     }
     normalize_citation_claims(result)
     assert "显著提高" not in result["foreign_research"]
-    assert "Second-hand clothing shopping among college students" in result["foreign_research"]
+    assert "文献[1]" in result["foreign_research"]
+    assert "原文核验" in result["foreign_research"]
     assert "另一研究[2]围绕平台架构展开" in result["foreign_research"]
 
 

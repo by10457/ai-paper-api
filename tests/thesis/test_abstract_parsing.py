@@ -1,4 +1,4 @@
-from services.thesis.content.abstract_service import _limit_abstract_lengths, _parse_combined_abstract
+from services.thesis.content.abstract_service import _parse_combined_abstract
 
 
 def test_parse_combined_abstract_accepts_bracket_keywords() -> None:
@@ -33,17 +33,9 @@ Keywords: school route; thesis"""
     assert result["keywords_en"] == "school route; thesis"
 
 
-def test_limit_abstract_lengths_keeps_english_abstract_on_one_page() -> None:
-    """英文摘要应限制在单页友好的长度范围。"""
-
-    result = _limit_abstract_lengths(
-        {
-            "abstract_zh": "中文摘要。",
-            "abstract_en": " ".join(["word"] * 210 + ["final."] + ["overflow"] * 80),
-            "keywords_zh": "关键词",
-            "keywords_en": "keyword",
-        }
-    )
-
-    assert len(result["abstract_en"].split()) <= 220
-    assert result["abstract_en"].endswith(".")
+# 版式不得通过截断译文来适配单页。
+def test_english_abstract_keeps_conclusion_after_220_words() -> None:
+    """超过旧版截断位置的结论仍应保留。"""
+    english = " ".join(["word"] * 230) + " No empirical validation has been performed."
+    result = _parse_combined_abstract("===中文摘要===\n尚未实测。\n===英文摘要===\n" + english)
+    assert result["abstract_en"] == english

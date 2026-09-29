@@ -71,12 +71,24 @@ def build_word_document(
         profile["year_month"],
     )
     _add_integrity_page(
-        document, title, profile["author"], profile["advisor"], profile["major"],
-        profile["school"], profile["student_id"], profile["student_class"],
+        document,
+        title,
+        profile["author"],
+        profile["advisor"],
+        profile["major"],
+        profile["school"],
+        profile["student_id"],
+        profile["student_class"],
     )
     _add_copyright_page(
-        document, title, profile["author"], profile["advisor"], profile["major"],
-        profile["school"], profile["student_id"], profile["student_class"],
+        document,
+        title,
+        profile["author"],
+        profile["advisor"],
+        profile["major"],
+        profile["school"],
+        profile["student_id"],
+        profile["student_class"],
     )
 
     # Section 2：中文摘要，从罗马页码 I 开始。
@@ -153,6 +165,8 @@ def build_word_document(
 
             if re.match(r"^表\s?\d+(?:[-.]\d+)?\s", line):
                 paragraph = document.add_paragraph()
+                paragraph.paragraph_format.keep_with_next = True
+                paragraph.paragraph_format.keep_together = True
                 paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 paragraph.paragraph_format.first_line_indent = Pt(0)
                 _add_markdown_text_to_paragraph(paragraph, line)

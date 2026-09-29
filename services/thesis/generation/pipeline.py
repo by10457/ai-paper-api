@@ -2,11 +2,13 @@
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from llm.client import get_enabled_model_config
+from llm.client import create_configured_llm, get_enabled_model_config
+from llm.prompts.thesis_fulltext_repair_prompt import SECTION_EXPANSION_PROMPT
 from schemas.thesis_material import ReferenceRecord
 from services.thesis.content.abstract_service import (
     generate_abstracts,
@@ -29,6 +31,7 @@ from services.thesis.document.placeholder import (
     split_by_render_method,
 )
 from services.thesis.document.utils import sanitize_filename
+from services.thesis.generation.concurrency import text_long_slot
 from services.thesis.generation.progress import publish_progress, stage_context
 from services.thesis.image import (
     GenerateContentImageGenerator,
@@ -46,6 +49,73 @@ from services.thesis_material.reference_service import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# 正文安全清理后短缺时只补写现有小节，不重做文献检索和已完成章节。
+async def _repair_short_fulltext(
+    full_text: str,
+    *,
+    title: str,
+    target_word_count: int,
+    writing_requirements: str,
+    confirmed_technologies: set[str],
+    evidence_instruction: str,
+) -> str:
+    """最多三轮向短小节追加经过事实清理的内容。
+
+    Args:
+        full_text: 已完成真实性清理的正文。
+        title: 论文题目。
+        target_word_count: 目标正文篇幅。
+        writing_requirements: 用户写作要求。
+        confirmed_technologies: 用户已确认技术集合。
+        evidence_instruction: 测试数据事实边界。
+
+    Returns:
+        保留所有原有章节的正文；仍不足时由最终校验决定失败或告警。
+    """
+    for _ in range(3):
+        current = count_visible_words(full_text)
+        if current >= round(target_word_count * 0.9):
+            break
+        headings = list(re.finditer(r"^#{1,3}\s+.+$", full_text, re.MULTILINE))
+        blocks = [
+            (heading.start(), headings[index + 1].start() if index + 1 < len(headings) else len(full_text))
+            for index, heading in enumerate(headings)
+            if index + 1 == len(headings)
+            or len(heading.group().split()[0]) >= len(headings[index + 1].group().split()[0])
+        ]
+        if not blocks:
+            break
+        start, end = min(blocks, key=lambda block: count_visible_words(full_text[block[0] : block[1]]))
+        target = min(1200, max(200, target_word_count - current))
+        llm = await create_configured_llm("fulltext", temperature=0.3, max_tokens=target * 3)
+        async with text_long_slot():
+            response = await llm.ainvoke(
+                SECTION_EXPANSION_PROMPT.format_messages(
+                    title=title,
+                    requirements=writing_requirements,
+                    technologies="、".join(sorted(confirmed_technologies)),
+                    evidence=evidence_instruction,
+                    section=full_text[start:end],
+                    target=target,
+                )
+            )
+        if not isinstance(response.content, str):
+            continue
+        addition = response.content.strip()
+        # 新段落不得改变结构或插入图表；不信任模型对输出格式的自觉遵守。
+        if re.search(r"(?m)^\s*(?:#|\||```)|<<FIGURE>>", addition):
+            continue
+        addition = re.sub(r"\[\d+\]", "", addition)
+        addition, _ = sanitize_generated_claims(
+            addition,
+            writing_requirements=writing_requirements,
+            confirmed_technologies=confirmed_technologies,
+        )
+        if addition and addition not in full_text:
+            full_text = full_text[:end].rstrip() + "\n\n" + addition + "\n\n" + full_text[end:]
+    return full_text
 
 
 async def _best_effort[T](coro: Awaitable[T], default: T, label: str) -> T:
@@ -176,6 +246,14 @@ async def generate_thesis_document(
         full_text = normalize_chapter_count_statement(full_text)
         # 零文献也必须清理模型擅自生成的引用，不能因为列表为空跳过校验。
         full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
+        full_text = await _repair_short_fulltext(
+            full_text,
+            title=title,
+            target_word_count=target_word_count,
+            writing_requirements=writing_requirements,
+            confirmed_technologies=confirmed_technologies,
+            evidence_instruction=evidence_instruction,
+        )
         full_text = constrain_fulltext_length(full_text, target_word_count=target_word_count)
         full_text, reference_records = normalize_citation_integrity(full_text, reference_records)
         validate_fulltext_chapters(outline, full_text)
@@ -289,9 +367,7 @@ async def generate_thesis_document(
             }
             for item in reference_records
         ],
-        "citation_integrity": (
-            "closed" if reference_records else "no_references"
-        ),
+        "citation_integrity": ("closed" if reference_records else "no_references"),
         "missing_profile_fields": missing_profile_fields,
         "generated_suggestion_fields": sorted(set(suggestion_fields)),
         "effective_config": {

@@ -446,6 +446,9 @@ def _clean_task_instructions(value: Any) -> Any:
         return [cleaned for item in value if (cleaned := _clean_task_instructions(item))]
     if not isinstance(value, str):
         return value
+    value = re.sub(r"不编造(?:测试通过率[、，])?性能指标(?:或实际测试结果)?", "性能指标在测试后据实填写", value)
+    value = re.sub(r"不编造(?:测试|运行)结果", "实施后记录方法、环境与结果", value)
+    value = value.replace("避免与论文目录简单重复", "各章节应有具体论证")
     internal_rule = re.compile(
         r"文档层|提示词|JSON|生成器|(?:不要|不得|不|禁止|勿)(?:填写|推断|复制).{0,30}(?:姓名|学号|学院|专业|导师|目录)|"
         r"个人信息.{0,15}占位"
@@ -534,7 +537,17 @@ def _mark_unconfirmed_generated_metrics(request: dict[str, Any], result: dict[st
             value = str(item).strip()
             if re.search(r"\d|%|％|毫秒|秒内|分钟|万字", value):
                 compact_value = re.sub(r"\s+", "", value)
-                if not any(requirement in compact_value for requirement in confirmed_requirements):
+                config = request.get("thesis_config") or {}
+                reference_counts = re.search(r"中文文献[^\d]*(\d+)篇.*英文文献[^\d]*(\d+)篇", compact_value)
+                confirmed_references = (
+                    reference_counts is not None
+                    and list(reference_counts.groups()) == re.findall(r"\d+", compact_value)
+                    and int(reference_counts.group(1)) == config.get("chinese_reference_count")
+                    and int(reference_counts.group(2)) == config.get("english_reference_count")
+                )
+                if not confirmed_references and not any(
+                    requirement in compact_value for requirement in confirmed_requirements
+                ):
                     generated_suggestion = True
                     if "待导师确认" not in value:
                         value = f"建议值（待导师确认）：{value}"
@@ -594,10 +607,10 @@ def _normalize_citation_text(value: str, references: dict[int, dict[str, Any]]) 
                     sentence,
                 )
                 prefix = ordinal.group(1) if ordinal else ""
-                clues = [f"文献[{index}]题名《{references[index].get('title', '')}》" for index in valid_indexes]
+                clues = [f"文献[{index}]" for index in valid_indexes]
                 # 每句最多两篇，避免一次补齐变成连续编号堆砌。
                 sentence = prefix + "".join(
-                    "、".join(clues[offset : offset + 2]) + "涉及相关主题，具体方法与结论需核对原文。"
+                    "、".join(clues[offset : offset + 2]) + "的具体论证尚待原文核验。"
                     for offset in range(0, len(clues), 2)
                 )
             if sentence not in normalized:
@@ -663,30 +676,53 @@ def _literature_body_length(result: dict[str, Any]) -> int:
     return total
 
 
+# 按最终统计口径定点修复区块，不重新检索文献或生成整篇材料。
 async def repair_length_constraints(
     document_type: str,
     request: dict[str, Any],
     result: dict[str, Any],
 ) -> None:
-    """只修复超出产品字数约束的字段。"""
+    """先校正明显失衡区块，再修复总篇幅差额。
+
+    Args:
+        document_type: 材料类型。
+        request: 已确认的大纲和目标篇幅。
+        result: 原地更新的结构化内容；计划和文献保持不变。
+    """
 
     plan = build_length_plan(document_type, request)
     if document_type == "task_book":
-        for _ in range(2):
-            if plan.body_minimum <= task_body_length(result) <= plan.body_maximum:
+        # 任务书的数组结构已验收，仅修订文字区块，避免丢失任务和指标。
+        for _ in range(3):
+            current = task_body_length(result)
+            if plan.body_minimum <= current <= plan.body_maximum:
                 return
-            revised = await generate_task_book_content(
-                {
-                    **request,
-                    "_length_feedback": f"上次正文为{task_body_length(result)}字，不在目标范围内，请调整各区块篇幅。",
-                }
+            containers: list[tuple[dict[str, Any], str]] = [(result, "design_background")]
+            containers.extend(
+                (item, "responsibilities") for item in result.get("module_tasks", []) if isinstance(item, dict)
             )
-            for field in (*TASK_BODY_FIELDS, "technology_stack", "generated_suggestion_fields"):
-                if field in revised:
-                    result[field] = revised[field]
+            container, key = max(containers, key=lambda item: text_length(str(item[0].get(item[1]) or "")))
+            value = str(container.get(key) or "")
+            target = max(80, text_length(value) + plan.target_word_count - current)
+            container[key] = _clean_task_instructions(
+                await _repair_length_value(
+                    key,
+                    value,
+                    max(80, round(target * 0.95)),
+                    round(target * 1.05),
+                    request,
+                    {},
+                )
+            )
         return
     for field, length_range in plan.fields.items():
         if field not in result:
+            continue
+        if (
+            max(80, round(length_range.target * 0.35))
+            <= text_length(str(result[field]))
+            <= round(length_range.target * 2)
+        ):
             continue
         result[field] = await _repair_length_value(
             field,
@@ -705,6 +741,12 @@ async def repair_length_constraints(
         for index, theme in enumerate(themes):
             if not isinstance(theme, dict):
                 raise RuntimeError("文献综述主题结构不合法")
+            if (
+                max(80, round(plan.theme.target * 0.35))
+                <= text_length(str(theme.get("content") or ""))
+                <= round(plan.theme.target * 2)
+            ):
+                continue
             theme["content"] = await _repair_length_value(
                 "theme_content",
                 str(theme.get("content") or "").strip(),
@@ -714,6 +756,32 @@ async def repair_length_constraints(
                 result,
                 field_label=f"themes[{index}].content",
             )
+
+    # 字段预算是软分配；总字数超界时只调整一个有容量的区块。
+    blocks = [(result, key, length) for key, length in plan.fields.items() if key in result]
+    if plan.theme is not None:
+        blocks.extend((theme, "content", plan.theme) for theme in result.get("themes", []) if isinstance(theme, dict))
+    for _ in range(4):
+        current = sum(text_length(str(container.get(key) or "")) for container, key, _ in blocks)
+        if plan.body_minimum <= current <= plan.body_maximum or not blocks:
+            return
+        deficit = plan.target_word_count - current
+        container, key, budget = max(
+            blocks,
+            key=lambda item: (
+                (item[2].target - text_length(str(item[0].get(item[1]) or ""))) * (1 if deficit > 0 else -1)
+            ),
+        )
+        value = str(container.get(key) or "")
+        target = max(80, min(round(budget.target * 1.8), text_length(value) + deficit))
+        container[key] = await _repair_length_value(
+            key if key != "content" else "theme_content",
+            value,
+            max(80, round(target * 0.95)),
+            round(target * 1.05),
+            request,
+            result,
+        )
 
 
 async def _repair_length_value(
@@ -751,7 +819,7 @@ async def _repair_length_value(
                 "field": label,
                 "length": length,
                 "context": _request_context(request),
-                "original": "" if length > maximum else value,
+                "original": value,
                 "references": cited_reference_text,
                 "requirements": FIELD_REQUIREMENTS.get(field, ""),
                 "target": target,
@@ -777,7 +845,7 @@ async def _repair_length_value(
         final_length = text_length(value)
     # 与最终字段验收保持一致；章节预算是软分配，总正文范围仍由生成器严格校验。
     validation_minimum = max(80, round((minimum + maximum) / 2 * 0.35))
-    if validation_minimum <= final_length < minimum:
+    if validation_minimum <= final_length <= round((minimum + maximum) / 2 * 2):
         return value
     if not minimum <= final_length <= maximum:
         raise RuntimeError(f"字段{label}字数{final_length}不在{minimum}-{maximum}范围内")

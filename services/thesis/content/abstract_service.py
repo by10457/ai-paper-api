@@ -1,7 +1,6 @@
 """负责根据论文正文生成中英文摘要、关键词和致谢内容。"""
 
 import logging
-import re
 
 from langchain_core.output_parsers import StrOutputParser
 
@@ -12,24 +11,6 @@ from llm.prompts.thesis_abstract_prompt import (
 from services.thesis.generation.concurrency import text_short_slot
 
 logger = logging.getLogger(__name__)
-
-
-def _limit_abstract_lengths(result: dict[str, str]) -> dict[str, str]:
-    """限制摘要篇幅，避免关键词被挤到近乎空白的续页。"""
-
-    english = result.get("abstract_en", "").strip()
-    words = english.split()
-    if len(words) > 220:
-        limited_words = words[:220]
-        while limited_words and not re.search(r"[.!?]$", limited_words[-1]):
-            limited_words.pop()
-        result["abstract_en"] = " ".join(limited_words or words[:220]).strip()
-    chinese = result.get("abstract_zh", "").strip()
-    if len(chinese) > 500:
-        limited = chinese[:500]
-        sentence_end = max(limited.rfind("。"), limited.rfind("！"), limited.rfind("？"))
-        result["abstract_zh"] = limited[: sentence_end + 1] if sentence_end >= 300 else limited
-    return result
 
 
 def _parse_body_and_keywords(raw: str, kw_prefixes: tuple[str, ...]) -> tuple[str, str]:
@@ -97,7 +78,8 @@ async def generate_abstracts(
             }
         )
 
-    result = _limit_abstract_lengths(_parse_combined_abstract(raw))
+    # 篇幅由联合提示约束，禁止独立截断译文而丢失结论；长摘要由文档自然分页。
+    result = _parse_combined_abstract(raw)
     logger.info(
         "摘要生成完成: zh=%d字 en=%d字",
         len(result["abstract_zh"]),

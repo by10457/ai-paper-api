@@ -147,7 +147,7 @@ async def generate_thesis_material_document(
             result = await generate_literature_review_content(request_payload, references)
         elif document_type == "task_book":
             result = await generate_task_book_content(request_payload)
-            result["schedule_items"] = _build_schedule(TASK_BOOK_SCHEDULE, default_weeks=20)
+            result["schedule_items"] = _build_schedule(TASK_BOOK_SCHEDULE, default_weeks=16)
             result["approval"] = _empty_approval("指导教师", "教研室审核意见", "二级学院审核意见")
         else:
             raise RuntimeError(f"不支持的文档类型: {document_type}")
@@ -197,6 +197,10 @@ async def generate_thesis_material_document(
         english_reference_count=english_count,
     )
     result["quality_warnings"] = result["reference_quality"]["warnings"]
+    # 当前文献记录是题录，不具有摘要/全文证据；不能把引用闭环当作内容已核验。
+    if references and document_type in {"proposal_report", "literature_review"}:
+        result["quality_warnings"] = [*result["quality_warnings"], "reference_evidence_limited"]
+        result["reference_evidence_notice"] = "当前仅核验文献题录，方法、结果及比较结论仍需结合原文审阅。"
     result["word_count"] = _word_count_metadata(document_type, request_payload, result)
     await publish_progress(task_id, "rendering_docx", "正在生成Word文档", progress=84)
     output_root = Path(get_settings().THESIS_MATERIAL_OUTPUT_ROOT) / task_id

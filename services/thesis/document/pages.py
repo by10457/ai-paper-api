@@ -1,6 +1,8 @@
 """论文前后置页面构建工具，包括封面、摘要、承诺书、致谢和参考文献页。"""
 
 import datetime
+import math
+import re
 from typing import Any
 
 from docx.document import Document as DocxDocument
@@ -12,6 +14,39 @@ from docx.shared import Cm, Pt
 
 from services.thesis.document.formatting import _apply_fixed_line_spacing, _set_run_font, _toc_int
 from services.thesis.document.toc import _add_bookmark
+
+
+# 按中英文近似字宽均衡长标题，避免最后一两个字单独换行。
+def _balanced_cover_title(title: str, width_pt: float) -> str:
+    """在单词边界分配封面标题行。
+
+    Args:
+        title: 原始论文标题。
+        width_pt: 封面可用文本宽度，单位磅。
+
+    Returns:
+        内容不变、必要时带显式换行的标题。
+    """
+    tokens = re.findall(r"[A-Za-z0-9]+|.", title)
+    widths = [sum(9 if ord(char) < 128 else 18 for char in token) for token in tokens]
+    total = sum(widths)
+    count = max(1, math.ceil(total / width_pt))
+    if count == 1:
+        return title
+    lines: list[str] = []
+    current: list[str] = []
+    used = 0
+    remaining = total
+    for token, width in zip(tokens, widths, strict=True):
+        target = remaining / max(1, count - len(lines))
+        if current and len(lines) < count - 1 and abs(used - target) < abs(used + width - target):
+            lines.append("".join(current).strip())
+            remaining -= used
+            current, used = [], 0
+        current.append(token)
+        used += width
+    lines.append("".join(current).strip())
+    return "\n".join(lines)
 
 
 def _add_cover_page(
@@ -49,7 +84,11 @@ def _add_cover_page(
     p_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p_title.paragraph_format.first_line_indent = Pt(0)
     p_title.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
-    run_title = p_title.add_run(title)
+    section = document.sections[0]
+    available_width = (
+        (section.page_width or Cm(21)) - (section.left_margin or Cm(2.5)) - (section.right_margin or Cm(2.5))
+    ) / 12700
+    run_title = p_title.add_run(_balanced_cover_title(title, available_width))
     _set_run_font(run_title, size_pt=18, underline=True)
     p_title.paragraph_format.space_after = Pt(36)
 

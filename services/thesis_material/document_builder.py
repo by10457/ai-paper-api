@@ -171,7 +171,7 @@ def _build_task_book(
     doc = _new_document()
     profile = profile_with_placeholders()
     _cover_title(doc, profile["school"], "毕业设计任务书", "")
-    info = doc.add_table(rows=6, cols=6)
+    info = doc.add_table(rows=5, cols=6)
     info.style = "Table Grid"
     info.alignment = WD_TABLE_ALIGNMENT.CENTER
     info_rows = [
@@ -201,11 +201,13 @@ def _build_task_book(
             f"\n主要工作：{str(item.get('responsibilities') or '').rstrip('。；，')}。"
             f"\n研究范围：{str(item.get('boundary') or '').rstrip('。；，')}。"
         )
-    _merge_labeled_row(info, 5, "设计任务", "\n".join(task_lines))
-    module_names = {str(item.get("name") or "任务") for item in result.get("module_tasks", [])}
-    for paragraph in info.cell(5, 1).paragraphs:
-        if paragraph.text.strip() in module_names:
-            paragraph.paragraph_format.keep_with_next = True
+    task_blocks = [
+        block for text in task_lines for block in ([text] if len(text) <= 420 else _split_proposal_blocks(text))
+    ] or [""]
+    for row, block in enumerate(task_blocks, start=5):
+        info.add_row()
+        _merge_labeled_row(info, row, "设计任务" if row == 5 else "", block)
+        _prevent_row_split(info.rows[row])
 
     schedule_items = result.get("schedule_items", [])
     # 独立段落阻止 Word/LibreOffice 合并相邻表格，否则计划表表头不能重复。
@@ -234,19 +236,19 @@ def _build_task_book(
     indicators = "\n".join(
         f"（{index}）{value}" for index, value in enumerate(result.get("main_indicators", []), start=1)
     )
-    references_text = "\n".join(item.formatted for item in references) or NO_REFERENCE_NOTICE
+    reference_lines = [item.formatted for item in references] or [NO_REFERENCE_NOTICE]
     separator = doc.add_paragraph()
     separator.paragraph_format.space_after = Pt(0)
     separator.paragraph_format.line_spacing = Pt(1)
-    outcome = doc.add_table(rows=6, cols=2)
+    outcome = doc.add_table(rows=5 + len(reference_lines), cols=2)
     outcome.style = "Table Grid"
     outcome.alignment = WD_TABLE_ALIGNMENT.CENTER
     outcome.autofit = False
     for column_index, width in enumerate((Cm(3), Cm(13))):
         outcome.columns[column_index].width = width
-    for row in outcome.rows:
-        row.cells[0].width = Cm(3)
-        row.cells[1].width = Cm(13)
+    for row_index in range(len(outcome.rows)):
+        outcome.cell(row_index, 0).width = Cm(3)
+        outcome.cell(row_index, 1).width = Cm(13)
     _replace_cell_text(outcome.cell(0, 0), "预期成果", bold=True)
     forms = "\n".join(f"（{index}）{value}" for index, value in enumerate(result.get("deliverable_forms", []), start=1))
     requirements = "\n".join(
@@ -255,11 +257,14 @@ def _build_task_book(
     _replace_cell_text(outcome.cell(0, 1), f"成果表现形式\n{forms}\n成果要求\n{requirements}")
     _replace_cell_text(outcome.cell(1, 0), "主要指标", bold=True)
     _replace_cell_text(outcome.cell(1, 1), indicators)
-    _replace_cell_text(outcome.cell(2, 0), "主要参考资料", bold=True)
-    _replace_cell_text(outcome.cell(2, 1), references_text)
-    for row, label in ((3, "指导教师"), (4, "教研室审核意见"), (5, "二级学院审核意见")):
+    for row, reference in enumerate(reference_lines, start=2):
+        _replace_cell_text(outcome.cell(row, 0), "主要参考资料" if row == 2 else "", bold=True)
+        _replace_cell_text(outcome.cell(row, 1), reference)
+        _prevent_row_split(outcome.rows[row])
+    for row, label in enumerate(("指导教师", "教研室审核意见", "二级学院审核意见"), start=2 + len(reference_lines)):
         _replace_cell_text(outcome.cell(row, 0), label, bold=True)
         _replace_cell_text(outcome.cell(row, 1), "\n（签名）________________    年____月____日")
+        _prevent_row_split(outcome.rows[row])
     _compact_table(outcome)
     return doc
 
@@ -504,6 +509,8 @@ def _replace_cell_text(cell: Any, text: str, *, bold: bool = False) -> None:
         paragraph = cell.paragraphs[0] if index == 0 else cell.add_paragraph()
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER if len(line) < 20 else WD_ALIGN_PARAGRAPH.LEFT
         paragraph.paragraph_format.line_spacing = 1.25
+        paragraph.paragraph_format.keep_together = True
+        paragraph.paragraph_format.widow_control = True
         run = paragraph.add_run(line)
         _format_run(run, 10.5, bold=bold)
     _set_cell_margin(cell, 100)

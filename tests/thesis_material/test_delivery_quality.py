@@ -8,6 +8,7 @@ import pytest
 from docx import Document
 from docx.oxml.ns import qn
 
+from schemas.thesis_material import ReferenceRecord
 from services.thesis.content.reference_service_serpapi import _resolve_doc_marker
 from services.thesis_material import llm_service
 from services.thesis_material.document_builder import _schedule_text, build_thesis_material_document
@@ -20,6 +21,34 @@ async def test_short_field_uses_final_validation_floor(monkeypatch: pytest.Monke
     monkeypatch.setattr(llm_service, "_ask_text", AsyncMock(return_value="甲" * 116 + "。"))
     text = await llm_service._repair_length_value("feasibility_and_innovation", "甲" * 117, 155, 195, {"title": "测试"}, {})
     assert len(text) == 117
+
+
+# 局部预算略超不能让已合格的整篇材料失败。
+async def test_soft_field_budget_preserves_valid_total(monkeypatch: pytest.MonkeyPatch) -> None:
+    """覆盖真实综述 210 字趋势区块，不应触发额外模型调用。"""
+    request = {"title": "测试课题", "target_word_count": 3500}
+    plan = llm_service.build_length_plan("literature_review", request)
+    assert plan.theme is not None
+    result: dict[str, Any] = {key: "文" * value.target for key, value in plan.fields.items()}
+    result["future_trends"] = "文" * 210
+    result["themes"] = [{"content": "文" * plan.theme.target} for _ in range(plan.theme_count)]
+    model = AsyncMock(side_effect=AssertionError("合格总篇幅不应整篇重写"))
+    monkeypatch.setattr(llm_service, "_ask_text", model)
+    await llm_service.repair_length_constraints("literature_review", request, result)
+    model.assert_not_awaited()
+
+
+# 任务书差额只修复正文区块，保留结构、进度及参考文献。
+async def test_task_shortfall_repairs_only_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1710 字样本通过补写背景达到目标，不重新生成全部字段。"""
+    result: dict[str, Any] = {"design_background": "文" * 300, "design_goals": ["文" * 1410], "references": ["来源"]}
+    model = AsyncMock(return_value="文" * 590)
+    monkeypatch.setattr(llm_service, "_ask_text", model)
+    monkeypatch.setattr(llm_service, "generate_task_book_content", AsyncMock(side_effect=AssertionError("禁止整篇重写")))
+    await llm_service.repair_length_constraints("task_book", {"title": "测试课题"}, result)
+    assert llm_service.task_body_length(result) == 2000
+    assert result["design_goals"] == ["文" * 1410]
+    assert result["references"] == ["来源"]
 
 
 # 引用安全处理是字数计算的一部分。
@@ -42,6 +71,27 @@ def test_task_internal_instructions_are_removed_without_losing_business_privacy(
         "保护交易用户个人信息。",
         {"boundary": "限于校园交易；不复制论文目录作为任务书内容。"},
     ]) == ["保护交易用户个人信息。", {"boundary": "限于校园交易；"}]
+
+
+# 用户已确认的文献数量不是模型擅自建议的性能指标。
+def test_confirmed_reference_counts_are_not_generated_metrics() -> None:
+    """只豁免完全匹配配置的数量，不豁免同句新增性能阈值。"""
+    result: dict[str, Any] = {"deliverable_requirements": ["中文文献不少于8篇，英文文献不少于2篇。", "响应低于100毫秒。"]}
+    llm_service._mark_unconfirmed_generated_metrics(
+        {"thesis_config": {"chinese_reference_count": 8, "english_reference_count": 2}}, result,
+    )
+    assert not result["deliverable_requirements"][0].startswith("建议值")
+    assert result["deliverable_requirements"][1].startswith("建议值")
+
+
+# 引用降级不能复制任意长题名而破坏正文预算。
+def test_unsupported_claim_repair_does_not_expand_titles() -> None:
+    """保留可定位编号，显式提示证据不足，长度不受题名长度影响。"""
+    result: dict[str, Any] = {"conclusion": "文献[1]证明效果改善。", "references": [{"index": 1, "title": "长题名" * 100}]}
+    normalize_citation_claims(result)
+    assert "[1]" in result["conclusion"]
+    assert "改善" not in result["conclusion"]
+    assert len(result["conclusion"]) < 60
 
 
 # 来源类型不能被非空会议/图书容器名称覆盖。
@@ -94,3 +144,19 @@ def test_task_book_layout_and_task_labels(tmp_path: Path) -> None:
     assert "PAGE" in doc.sections[0].footer._element.xml
     body = "".join(cell.text for table in doc.tables for row in table.rows for cell in row.cells)
     assert "面向确定" not in body and "。，" not in body
+
+
+# 参考文献使用独立不可拆行，避免一条来源被分页截断。
+def test_task_book_references_are_independent_unsplit_rows(tmp_path: Path) -> None:
+    """两条参考文献分别占一行，后续审核区仍完整保留。"""
+    path = tmp_path / "references.docx"
+    references = [ReferenceRecord(index=n, title=f"来源{n}", formatted=f"[{n}] 来源{n}") for n in (1, 2)]
+    build_thesis_material_document(
+        document_type="task_book", title="课题", request={}, result={}, references=references, output_path=path,
+    )
+    table = Document(str(path)).tables[-1]
+    for index, reference in enumerate(references, start=2):
+        assert table.cell(index, 1).text == reference.formatted
+        assert table.rows[index]._tr.find(".//" + qn("w:cantSplit")) is not None
+    assert table.cell(4, 0).text == "指导教师"
+    assert table.cell(6, 0).text == "二级学院审核意见"

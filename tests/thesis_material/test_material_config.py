@@ -55,13 +55,12 @@ async def test_task_prompt_receives_full_outline_and_budget(monkeypatch: pytest.
 @pytest.mark.asyncio
 async def test_task_budget_repairs_body_and_keeps_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     result: dict[str, Any] = {"design_background": "短文", "schedule_items": [{"start": "第1周"}]}
-    repaired = {"design_background": "文" * 2000}
-    model = AsyncMock(return_value=repaired)
-    monkeypatch.setattr(llm_service, "generate_task_book_content", model)
+    model = AsyncMock(return_value="文" * 2000)
+    monkeypatch.setattr(llm_service, "_ask_text", model)
     await llm_service.repair_length_constraints("task_book", {"title": "通用课题"}, result)
     assert llm_service.task_body_length(result) == 2000
     assert result["schedule_items"] == [{"start": "第1周"}]
-    assert "_length_feedback" in model.call_args.args[0]
+    assert model.call_args.args[1]["field"] == "design_background"
     metadata = generation._word_count_metadata("task_book", {}, result)
     assert metadata["target"] == metadata["actual"] == 2000
     assert "module_tasks" in metadata["included_fields"]

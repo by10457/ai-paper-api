@@ -74,6 +74,8 @@ def _add_table(document: DocxDocument, rows: list[list[str]]) -> None:
     num_cols = max(len(r) for r in rows)
     table = document.add_table(rows=len(rows), cols=num_cols)
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # 跨页重复表头，且表头不能独自留在上一页。
+    table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
 
     for i, row_data in enumerate(rows):
         for j, cell_text in enumerate(row_data):
@@ -82,6 +84,8 @@ def _add_table(document: DocxDocument, rows: list[list[str]]) -> None:
             cell = table.rows[i].cells[j]
             paragraph = cell.paragraphs[0] if cell.paragraphs else cell.add_paragraph()
             paragraph.paragraph_format.first_line_indent = Pt(0)
+            paragraph.paragraph_format.keep_together = True
+            paragraph.paragraph_format.keep_with_next = i == 0
             paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
             _add_markdown_text_to_paragraph(
                 paragraph,
