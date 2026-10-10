@@ -39,7 +39,7 @@
 - 本地文件是必然兜底：论文文件先生成到 `public/output/thesis/{task_id}`，再按配置上传远端。
 - 远端上传失败不阻断论文完成：`document_storage.py` 会记录 warning，并返回本地存储结果。
 - 下载链接按需生成：订单下载接口会根据 `storage_provider` 和 `file_key` 重新生成下载地址，避免长期使用过期的私有签名 URL。
-- 远端 object key 使用 `STORAGE_OBJECT_PREFIX/{task_id}/{filename}`，文件名来自生成流程中的 `论文标题-task_id.docx`。
+- 远端 object key 使用 `STORAGE_OBJECT_PREFIX/{task_id}/{filename}`，新任务文件名统一为 `标题-中文文档类型-task_id.docx`（类型为论文、开题报告、文献综述或任务书）。下载接口的 `Content-Disposition` 使用实际文件名；历史任务仍按原有文件路径和存储 key 下载，不重命名已有文件。
 
 ## 配置项
 
