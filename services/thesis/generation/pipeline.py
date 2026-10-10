@@ -30,7 +30,7 @@ from services.thesis.document.placeholder import (
     extract_figure_placeholders,
     split_by_render_method,
 )
-from services.thesis.document.utils import sanitize_filename
+from services.thesis.document.utils import build_document_filename
 from services.thesis.generation.concurrency import text_long_slot
 from services.thesis.generation.progress import publish_progress, stage_context
 from services.thesis.image import (
@@ -181,8 +181,7 @@ async def generate_thesis_document(
 
     settings = get_settings()
     output_dir = Path(getattr(settings, "thesis_output_root", "public/output/thesis")) / task_id
-    safe_title = sanitize_filename(title)
-    docx_filename = f"{safe_title}-{task_id}.docx"
+    docx_filename = build_document_filename(title, "thesis", task_id)
 
     await publish_progress(task_id, "started", "论文生成任务已启动")
 

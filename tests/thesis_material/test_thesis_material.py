@@ -609,6 +609,8 @@ async def test_material_generation_without_references_is_explicit_draft(
         request_payload=request,
     )
     assert result["result_data"]["references"] == []
+    label = {"proposal_report": "开题报告", "literature_review": "文献综述"}[document_type]
+    assert Path(result["docx_path"]).name == f"测试材料-{label}-isolated-material.docx"
     assert result["result_data"]["reference_quality"]["status"] == "unavailable"
     assert result["result_data"]["quality_warnings"][0]["code"] == "references_unavailable"
     assert reference_lookup.await_args is not None

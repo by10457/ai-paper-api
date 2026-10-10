@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import get_settings
+from services.thesis.document.utils import build_document_filename
 from services.thesis.generation.progress import publish_progress, stage_context
 from services.thesis_material.document_builder import build_thesis_material_document
 from services.thesis_material.llm_service import (
@@ -204,7 +205,7 @@ async def generate_thesis_material_document(
     result["word_count"] = _word_count_metadata(document_type, request_payload, result)
     await publish_progress(task_id, "rendering_docx", "正在生成Word文档", progress=84)
     output_root = Path(get_settings().THESIS_MATERIAL_OUTPUT_ROOT) / task_id
-    output_path = output_root / f"{_safe_filename(title)}-{document_type}.docx"
+    output_path = output_root / build_document_filename(title, document_type, task_id)
     with stage_context("rendering_docx"):
         build_thesis_material_document(
             document_type=document_type,
@@ -484,11 +485,6 @@ def _research_context_text(request: dict[str, Any]) -> str:
     values.extend(context.get("technology_stack") or [])
     values.extend(context.get("core_features") or [])
     return "；".join(str(value).strip() for value in values if str(value).strip())
-
-
-def _safe_filename(title: str) -> str:
-    value = re.sub(r"[\\/:*?\"<>|]", "_", title).strip(" .")
-    return value[:80] or "thesis-material"
 
 
 def _material_body_char_count(document_type: str, result: dict[str, Any]) -> int:

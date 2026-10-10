@@ -182,6 +182,7 @@ async def test_shortage_pipeline_builds_docx_with_actual_citations(
     )
 
     assert Path(result.docx_path).is_file()
+    assert Path(result.docx_path).name == "测试课题-论文-isolated-shortage.docx"
     assert result.result_data["reference_count"] == available_count
     assert result.result_data["quality_warnings"]
     assert result.result_data["citation_integrity"] == ("closed" if records else "no_references")
